@@ -498,6 +498,10 @@ function icon(name) {
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
     "send-back": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 13 5 5 5-5"/><path d="m7 6 5 5 5-5"/></svg>',
     crop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
+    text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5h14"/><path d="M12 5v14"/><path d="M8 19h8"/></svg>',
+    image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4 3.5 3 3-2.5 5 4.5"/></svg>',
+    adjust: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h7"/><path d="M15 7h5"/><circle cx="13" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>',
+    preview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M10 6h4"/><path d="M10 17.5h4"/></svg>',
   };
   return icons[name] || "";
 }
@@ -589,10 +593,6 @@ function renderEditor() {
       ${renderSlideRail(project)}
       ${renderAssetRail(project)}
       <section class="workspace" aria-label="Image editor">
-        <div class="workspace-tools">
-          <button class="tool-chip ${state.photoAdjustMode ? "is-active" : ""}" type="button" data-action="adjust-photo" aria-pressed="${state.photoAdjustMode}" ${activeSlide() ? "" : "disabled"}>Adjust photo</button>
-          <button class="tool-chip ${state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${state.showTikTokOverlay}" ${activeSlide() ? "" : "disabled"}>TikTok UI preview</button>
-        </div>
         <div class="workspace-inner">
           ${activeSlide() ? renderStage(activeSlide()) : renderEmptyStage()}
         </div>
@@ -660,17 +660,31 @@ function renderEmptyStage() {
 
 function renderStage(slide) {
   return `
-    <div class="stage-wrap">
-      <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""}">
-        <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
-          <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
-          ${renderTikTokOverlay()}
+    <div class="canvas-composition">
+      <div class="stage-wrap">
+        <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""}">
+          <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
+            <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
+            ${renderTikTokOverlay()}
+          </div>
+          <div class="layer-stack">
+            ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
+          </div>
         </div>
-        <div class="layer-stack">
-          ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
-        </div>
+        <span class="stage-dimensions">${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
       </div>
-      <span class="stage-dimensions">${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
+      ${renderCanvasActions()}
+    </div>
+  `;
+}
+
+function renderCanvasActions() {
+  return `
+    <div class="canvas-actions" aria-label="Canvas actions">
+      <button class="canvas-action canvas-action--primary" type="button" data-action="add-text" title="Add text">${icon("text")}<span>Add text</span></button>
+      <button class="canvas-action" type="button" data-action="upload-assets" title="Add image">${icon("image")}<span>Add image</span></button>
+      <button class="canvas-action ${state.photoAdjustMode ? "is-active" : ""}" type="button" data-action="adjust-photo" aria-pressed="${state.photoAdjustMode}" title="Adjust photo">${icon("adjust")}<span>Adjust photo</span></button>
+      <button class="canvas-action ${state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${state.showTikTokOverlay}" title="TikTok UI preview">${icon("preview")}<span>TikTok preview</span></button>
     </div>
   `;
 }
@@ -815,7 +829,6 @@ function renderInspector() {
               <input id="overlay-rotation-number" class="number-input" type="number" min="0" max="359" step="1" value="${Math.round(overlay.rotation || 0)}" aria-label="Rotation in degrees" />
             </div>
           </div>
-          <div class="tip"><strong>Place it</strong><span>Drag to move. Corner handles resize and keep the photo’s shape. The top handle rotates it.</span></div>
         </div>
       ` : text ? `
         <div class="inspector-body">
@@ -865,10 +878,6 @@ function renderInspector() {
       ` : `
         <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>
       `}
-      <div class="bottom-actions">
-        <button class="button button--primary" type="button" data-action="add-text" ${activeSlide() ? "" : "disabled"}>+ Add text</button>
-        ${activeSlide() ? `<button class="button button--quiet" type="button" data-action="delete-slide">Remove photo</button>` : ""}
-      </div>
     </aside>
   `;
 }
@@ -956,7 +965,6 @@ function bindEditorEvents() {
   app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
   app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
   app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
-  app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
   app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
   app.querySelector('[data-action="share"]')?.addEventListener("click", shareActiveSlide);
   app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
@@ -985,7 +993,7 @@ function bindEditorEvents() {
 
   const workspace = app.querySelector(".workspace");
   workspace?.addEventListener("pointerdown", (event) => {
-    if (state.photoAdjustMode || event.target.closest(".text-box, .overlay-box, .workspace-tools")) return;
+    if (state.photoAdjustMode || event.target.closest(".text-box, .overlay-box, .canvas-actions")) return;
     if (!event.target.closest(".workspace-inner")) return;
     if (state.croppingOverlayId) {
       finishCrop();
@@ -1132,12 +1140,10 @@ function refreshSelection() {
   const currentInspector = app.querySelector(".inspector");
   if (currentInspector) {
     currentInspector.outerHTML = renderInspector();
-    app.querySelector('[data-action="add-text"]')?.addEventListener("click", () => addText());
     app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
     app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
     app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
     app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
-    app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
     bindInspectorControls();
   }
 }
@@ -1221,8 +1227,12 @@ function sizeStage() {
   if (!inner || !stage || !slide) return;
   const availableWidth = inner.clientWidth;
   const availableHeight = inner.clientHeight;
+  const actions = inner.querySelector(".canvas-actions");
+  const composition = inner.querySelector(".canvas-composition");
+  const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;
+  const canvasWidth = Math.max(1, availableWidth - (actions?.offsetWidth || 0) - toolbarGap);
   const ratio = OUTPUT_WIDTH / OUTPUT_HEIGHT;
-  let width = availableWidth;
+  let width = canvasWidth;
   let height = width / ratio;
   if (height > availableHeight) {
     height = availableHeight;
