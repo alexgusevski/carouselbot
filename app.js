@@ -1110,27 +1110,41 @@ function measureFont(text) {
 function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
   const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - fontSize * 0.32);
-  return { lines: wrapText(context, text.text, maxWidth), fontSize };
+  return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
+}
+
+function lineCornerRadii(widths, index, radius) {
+  const width = widths[index] || 0;
+  const above = widths[index - 1];
+  const below = widths[index + 1];
+  const slop = Math.max(2, radius * 0.2);
+  const top = above == null || width > above + slop;
+  const bottom = below == null || width > below + slop;
+  return [top ? radius : 0, top ? radius : 0, bottom ? radius : 0, bottom ? radius : 0];
 }
 
 function paintTextContent(text, content, box) {
-  if (text.style === "outline") {
-    const { lines, fontSize } = wrappedLinesForBox(text, box);
-    const stroke = fontSize * OUTLINE_RATIO;
-    const lineHeight = fontSize * TEXT_LINE_HEIGHT;
-    content.replaceChildren(...lines.map((line) => {
+  const { lines, fontSize, context } = wrappedLinesForBox(text, box);
+  const lineHeight = fontSize * TEXT_LINE_HEIGHT;
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const padX = fontSize * 0.28;
+  const radius = Math.min(fontSize * 0.22, lineHeight / 2);
+  const widths = lines.map((line) => context.measureText(line || " ").width + (perLineBox ? padX * 2 : 0));
+
+  content.replaceChildren(...lines.map((line, index) => {
+    if (text.style === "outline") {
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("class", "outline-line");
+      svg.setAttribute("class", "text-line outline-line");
       svg.setAttribute("height", String(lineHeight));
       svg.setAttribute("width", "100%");
       const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
       node.setAttribute("x", "50%");
-      node.setAttribute("y", "52%");
+      node.setAttribute("y", "50%");
       node.setAttribute("text-anchor", "middle");
       node.setAttribute("dominant-baseline", "middle");
       node.setAttribute("fill", "#ffffff");
       node.setAttribute("stroke", "#111111");
-      node.setAttribute("stroke-width", String(stroke));
+      node.setAttribute("stroke-width", String(fontSize * OUTLINE_RATIO));
       node.setAttribute("stroke-linejoin", "round");
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("paint-order", "stroke fill");
@@ -1140,19 +1154,14 @@ function paintTextContent(text, content, box) {
       node.textContent = line || " ";
       svg.appendChild(node);
       return svg;
-    }));
-    return;
-  }
-  const perLine = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
-  if (!perLine) {
-    content.textContent = text.text;
-    return;
-  }
-  const { lines } = wrappedLinesForBox(text, box);
-  content.replaceChildren(...lines.map((line) => {
+    }
     const span = document.createElement("span");
     span.className = "text-line";
     span.textContent = line || "\u00a0";
+    if (perLineBox) {
+      const [tl, tr, br, bl] = lineCornerRadii(widths, index, radius);
+      span.style.borderRadius = `${tl}px ${tr}px ${br}px ${bl}px`;
+    }
     return span;
   }));
 }
@@ -2160,7 +2169,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const exportScale = imageWidth / DESIGN_WIDTH;
   const fontSize = text.size * exportScale;
   const lineHeight = fontSize * TEXT_LINE_HEIGHT;
-  const horizontalPadding = text.style === "boxed" ? fontSize * 0.28 : fontSize * 0.16;
+  const horizontalPadding = fontSize * 0.28;
   const verticalPadding = fontSize * 0.1;
   context.save();
   context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
@@ -2173,6 +2182,8 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const visibleLines = lines.slice(0, visibleLineCount);
   const blockHeight = visibleLines.length * lineHeight;
   const startY = y + (height - blockHeight) / 2 + lineHeight / 2;
+  const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
+  const pillWidths = visibleLines.map((line) => Math.min(width, context.measureText(line || " ").width + horizontalPadding * 2));
 
   if (text.style === "boxed" && text.backgroundShape === "full") {
     context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
@@ -2182,9 +2193,10 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
 
   visibleLines.forEach((line, index) => {
     const lineY = startY + index * lineHeight;
-    if (text.style === "boxed" && text.backgroundShape !== "full" && line) {
-      const backgroundWidth = Math.min(width, context.measureText(line).width + horizontalPadding * 2);
+    if (perLineBox && line) {
+      const backgroundWidth = pillWidths[index];
       const backgroundHeight = lineHeight;
+      const radius = Math.min(fontSize * 0.22, backgroundHeight / 2);
       context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
       roundedRect(
         context,
@@ -2192,7 +2204,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
         lineY - backgroundHeight / 2,
         backgroundWidth,
         backgroundHeight,
-        Math.min(fontSize * 0.22, backgroundHeight / 2),
+        lineCornerRadii(pillWidths, index, radius),
       );
       context.fill();
     }

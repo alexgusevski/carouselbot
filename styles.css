@@ -1197,13 +1197,22 @@ button,
 }
 
 .text-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
   outline: 0;
   font: inherit;
   line-height: inherit;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+}
+
+.text-line {
+  display: block;
+  flex: 0 0 auto;
+  height: 1.12em;
+  line-height: 1.12;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .text-box.is-editing {
@@ -1216,19 +1225,17 @@ button,
   user-select: text;
 }
 
+.text-box.is-editing .text-content {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .text-box[data-style="outline"] .text-content-wrap {
   overflow: visible;
 }
 
-.text-box[data-style="outline"] .text-content {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  overflow: visible;
-}
-
 .text-box[data-style="outline"].is-editing .text-content {
-  display: inline;
   -webkit-text-stroke: 0.22em #111;
   paint-order: stroke fill;
 }
@@ -1245,20 +1252,10 @@ button,
   padding: 0;
 }
 
-.text-box[data-style="boxed"][data-box-shape="lines"] .text-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0;
-}
-
 .text-box[data-style="boxed"][data-box-shape="lines"] .text-line {
-  display: block;
-  padding: 0.08em 0.28em;
-  border-radius: 0.28em;
+  padding: 0 0.28em;
   color: #111;
   background: #fff;
-  line-height: 1.12;
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
