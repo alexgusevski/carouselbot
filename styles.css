@@ -718,11 +718,11 @@ button,
 
 .workspace {
   position: relative;
-  display: grid;
+  display: block;
   min-width: 0;
   min-height: 0;
-  overflow: visible;
-  place-items: center;
+  overflow: auto;
+  overscroll-behavior: contain;
   background:
     radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.88), rgba(238, 237, 231, 0.82) 45%, transparent 72%);
 }
@@ -752,8 +752,6 @@ button,
 
 .canvas-composition {
   display: flex;
-  max-width: 100%;
-  max-height: 100%;
   gap: 18px;
   align-items: center;
 }
@@ -822,11 +820,12 @@ button,
 }
 
 .workspace-inner {
-  position: absolute;
-  inset: 30px;
+  position: relative;
   display: grid;
-  min-width: 0;
-  min-height: 0;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 30px;
   overflow: visible;
   place-items: center;
 }
@@ -922,10 +921,21 @@ button,
   position: absolute;
   right: 0;
   bottom: -25px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
   color: var(--muted);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.08em;
+}
+
+.canvas-zoom-level {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .tiktok-overlay {
@@ -2360,7 +2370,7 @@ input[type="range"]::-webkit-slider-thumb {
   }
 
   .workspace-inner {
-    inset: 20px 14px 72px;
+    padding: 20px 14px 72px;
   }
 
   .canvas-composition {

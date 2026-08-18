@@ -6,7 +6,7 @@ const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 const INITIAL_OVERLAY_MAX_SIZE = 0.82;
 const DEFAULT_OUTLINE_WIDTH = 12;
-const OUTLINE_RATIO = 0.18;
+const OUTLINE_RATIO = 0.17;
 const TEXT_WEIGHT = 550;
 const TEXT_LINE_HEIGHT = 1.12;
 const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
@@ -19,6 +19,8 @@ const FONT_SIZE_MIN = 20;
 const FONT_SIZE_MAX = 180;
 const FONT_SIZE_SLIDER_MAX = 1000;
 const FONT_SIZE_SLIDER_STEP = 10;
+const CANVAS_ZOOM_MIN = 0.5;
+const CANVAS_ZOOM_MAX = 3;
 const FONT_SIZE_SLIDER_STOPS = [
   { position: 0, size: FONT_SIZE_MIN },
   { position: 220, size: 40 },
@@ -46,6 +48,7 @@ const state = {
   db: null,
   stageWidth: 0,
   stageHeight: 0,
+  canvasZoom: 1,
   saveTimer: null,
   toastTimer: null,
   mobileInspectorOpen: false,
@@ -798,7 +801,10 @@ function renderStage(slide) {
             ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
           </div>
         </div>
-        <span class="stage-dimensions">${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
+        <span class="stage-dimensions">
+          <span>${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
+          <span class="canvas-zoom-level" title="Canvas zoom · Cmd/Ctrl + scroll">${Math.round(state.canvasZoom * 100)}%</span>
+        </span>
       </div>
       ${renderCanvasActions()}
     </div>
@@ -1198,6 +1204,23 @@ function bindEditorEvents() {
   });
 
   const stage = app.querySelector(".stage");
+  const editorShell = app.querySelector(".editor-shell");
+  editorShell?.addEventListener("wheel", (event) => {
+    if (!(event.metaKey || event.ctrlKey) || !stage) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? stage.clientHeight
+        : 1;
+    const nextZoom = clamp(
+      state.canvasZoom * Math.exp(-event.deltaY * deltaScale * 0.0015),
+      CANVAS_ZOOM_MIN,
+      CANVAS_ZOOM_MAX,
+    );
+    setCanvasZoom(nextZoom, event.clientX, event.clientY);
+  }, { passive: false, capture: true });
   stage?.addEventListener("pointerdown", (event) => {
     if (state.photoAdjustMode) {
       if (event.target.closest(".text-box") || event.target.closest(".overlay-box")) return;
@@ -1207,7 +1230,7 @@ function bindEditorEvents() {
   });
   let photoZoomHistoryTimer = null;
   stage?.addEventListener("wheel", (event) => {
-    if (!state.photoAdjustMode) return;
+    if (!state.photoAdjustMode || event.metaKey || event.ctrlKey) return;
     event.preventDefault();
     event.stopPropagation();
     const slide = activeSlide();
@@ -1248,8 +1271,7 @@ function bindEditorEvents() {
   });
 
   const resizeObserver = new ResizeObserver(() => sizeStage());
-  const workspaceInner = app.querySelector(".workspace-inner");
-  if (workspaceInner) resizeObserver.observe(workspaceInner);
+  if (workspace) resizeObserver.observe(workspace);
 }
 
 function bindInspectorControls() {
@@ -1526,11 +1548,15 @@ function beginMarqueeSelection(event) {
 
 function sizeStage() {
   const inner = app.querySelector(".workspace-inner");
+  const workspace = app.querySelector(".workspace");
   const stage = app.querySelector(".stage");
   const slide = activeSlide();
-  if (!inner || !stage || !slide) return;
-  const availableWidth = inner.clientWidth;
-  const availableHeight = inner.clientHeight;
+  if (!inner || !workspace || !stage || !slide) return;
+  const innerStyle = getComputedStyle(inner);
+  const horizontalPadding = (parseFloat(innerStyle.paddingLeft) || 0) + (parseFloat(innerStyle.paddingRight) || 0);
+  const verticalPadding = (parseFloat(innerStyle.paddingTop) || 0) + (parseFloat(innerStyle.paddingBottom) || 0);
+  const availableWidth = Math.max(1, workspace.clientWidth - horizontalPadding);
+  const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding);
   const actions = inner.querySelector(".canvas-actions");
   const composition = inner.querySelector(".canvas-composition");
   const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;
@@ -1542,6 +1568,8 @@ function sizeStage() {
     height = availableHeight;
     width = height * ratio;
   }
+  width *= state.canvasZoom;
+  height *= state.canvasZoom;
   state.stageWidth = width;
   state.stageHeight = height;
   stage.style.width = `${width}px`;
@@ -1550,6 +1578,31 @@ function sizeStage() {
   updateStageImage(slide);
   activeSlide().texts.forEach(updateTextBox);
   (activeSlide().overlays || []).forEach(updateOverlayBox);
+}
+
+function setCanvasZoom(nextZoom, clientX, clientY) {
+  const workspace = app.querySelector(".workspace");
+  const stage = app.querySelector(".stage");
+  if (!workspace || !stage) return;
+  const zoom = clamp(nextZoom, CANVAS_ZOOM_MIN, CANVAS_ZOOM_MAX);
+  if (Math.abs(zoom - state.canvasZoom) < 0.0001) return;
+
+  const oldRect = stage.getBoundingClientRect();
+  const focalX = Number.isFinite(clientX) ? clamp(clientX, oldRect.left, oldRect.right) : oldRect.left + oldRect.width / 2;
+  const focalY = Number.isFinite(clientY) ? clamp(clientY, oldRect.top, oldRect.bottom) : oldRect.top + oldRect.height / 2;
+  const relativeX = oldRect.width ? (focalX - oldRect.left) / oldRect.width : 0.5;
+  const relativeY = oldRect.height ? (focalY - oldRect.top) / oldRect.height : 0.5;
+
+  state.canvasZoom = zoom;
+  sizeStage();
+
+  const newRect = stage.getBoundingClientRect();
+  const newFocalX = newRect.left + relativeX * newRect.width;
+  const newFocalY = newRect.top + relativeY * newRect.height;
+  workspace.scrollLeft += newFocalX - focalX;
+  workspace.scrollTop += newFocalY - focalY;
+  const output = app.querySelector(".canvas-zoom-level");
+  if (output) output.textContent = `${Math.round(state.canvasZoom * 100)}%`;
 }
 
 function getImageLayout(slide, canvasWidth, canvasHeight) {
