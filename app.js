@@ -322,6 +322,15 @@ function closeLayerMenu() {
   document.querySelector(".layer-menu")?.remove();
 }
 
+function positionLayerMenu(menu, clientX, clientY) {
+  const pad = 8;
+  const { width, height } = menu.getBoundingClientRect();
+  const left = clamp(clientX, pad, window.innerWidth - width - pad);
+  const top = clamp(clientY, pad, window.innerHeight - height - pad);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
 function showLayerMenu(event, kind, id) {
   event.preventDefault();
   event.stopPropagation();
@@ -362,12 +371,41 @@ function showLayerMenu(event, kind, id) {
     menu.appendChild(button);
   });
   document.body.appendChild(menu);
-  const pad = 8;
-  const { width, height } = menu.getBoundingClientRect();
-  const left = clamp(event.clientX, pad, window.innerWidth - width - pad);
-  const top = clamp(event.clientY, pad, window.innerHeight - height - pad);
-  menu.style.left = `${left}px`;
-  menu.style.top = `${top}px`;
+  positionLayerMenu(menu, event.clientX, event.clientY);
+}
+
+function showAssetDeleteMenu(event, assetId) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeLayerMenu();
+  hideAssetPreview();
+
+  const asset = projectAsset(assetId);
+  if (!asset) return;
+
+  const menu = document.createElement("div");
+  menu.className = "layer-menu layer-menu--confirm";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", `Delete ${asset.name}?`);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "layer-menu-item is-danger";
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", `Delete ${asset.name}`);
+  button.innerHTML = `${icon("trash")}<span>Delete?</span>`;
+  button.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    closeLayerMenu();
+    deleteProjectAsset(assetId);
+  });
+  menu.appendChild(button);
+  document.body.appendChild(menu);
+
+  const triggerRect = event.currentTarget.getBoundingClientRect();
+  const clientX = event.clientX || triggerRect.right;
+  const clientY = event.clientY || triggerRect.bottom;
+  positionLayerMenu(menu, clientX, clientY);
 }
 
 function beginCrop(overlayId) {
@@ -1444,10 +1482,7 @@ function bindAssetLibrary() {
   });
   app.querySelectorAll('[data-action="delete-asset"]').forEach((button) => {
     button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      hideAssetPreview();
-      deleteProjectAsset(button.dataset.assetId);
+      showAssetDeleteMenu(event, button.dataset.assetId);
     });
   });
   bindAssetTrash();
@@ -1703,11 +1738,6 @@ function deleteProjectAsset(assetId) {
   if (!project?.assets) return;
   const asset = project.assets.find((item) => item.id === assetId);
   if (!asset) return;
-  const usedSlides = project.slides.filter((slide) => (slide.overlays || []).some((overlay) => overlay.assetId === assetId)).length;
-  const confirmed = window.confirm(usedSlides
-    ? `Remove “${asset.name}” from this project? It will also disappear from ${usedSlides} ${usedSlides === 1 ? "photo" : "photos"}.`
-    : `Remove “${asset.name}” from uploaded assets?`);
-  if (!confirmed) return;
   recordHistory();
   project.assets = project.assets.filter((item) => item.id !== assetId);
   project.slides.forEach((slide) => {

@@ -1858,6 +1858,10 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: var(--shadow);
 }
 
+.layer-menu--confirm {
+  min-width: 132px;
+}
+
 .layer-menu-item {
   display: flex;
   gap: 10px;
