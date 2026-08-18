@@ -723,7 +723,8 @@ button,
 }
 
 .stage.is-adjusting .text-layer,
-.stage.is-adjusting .overlay-layer {
+.stage.is-adjusting .overlay-layer,
+.stage.is-adjusting .layer-stack {
   opacity: 0.7;
   pointer-events: none;
 }
@@ -980,7 +981,8 @@ button,
 }
 
 .text-layer,
-.overlay-layer {
+.overlay-layer,
+.layer-stack {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -1631,6 +1633,47 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 9px;
   margin-top: 20px;
   justify-content: flex-end;
+}
+
+.layer-menu {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  min-width: 214px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.layer-menu-item {
+  display: flex;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  align-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layer-menu-item:hover {
+  background: rgba(21, 21, 21, 0.06);
+}
+
+.layer-menu-item svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.layer-menu-item.is-danger {
+  color: #a7213a;
 }
 
 .toast {

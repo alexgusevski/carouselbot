@@ -120,6 +120,93 @@ function clearLayerSelection() {
   state.selectedOverlayId = null;
 }
 
+function slideItems(slide) {
+  const overlays = (slide.overlays || []).map((item) => ({ kind: "overlay", item }));
+  const texts = (slide.texts || []).map((item) => ({ kind: "text", item }));
+  return [...overlays, ...texts].sort((a, b) => (Number(a.item.z) || 0) - (Number(b.item.z) || 0));
+}
+
+function nextLayerZ(slide) {
+  const items = slideItems(slide);
+  if (!items.length) return 1;
+  return Math.max(...items.map(({ item }) => Number(item.z) || 0)) + 1;
+}
+
+function moveLayer(kind, id, action) {
+  const slide = activeSlide();
+  if (!slide) return;
+  const items = slideItems(slide);
+  const index = items.findIndex((entry) => entry.kind === kind && entry.item.id === id);
+  if (index < 0) return;
+  const [entry] = items.splice(index, 1);
+  if (action === "front") items.push(entry);
+  else if (action === "back") items.unshift(entry);
+  else if (action === "up") items.splice(Math.min(index + 1, items.length), 0, entry);
+  else if (action === "down") items.splice(Math.max(index - 1, 0), 0, entry);
+  else items.splice(index, 0, entry);
+  items.forEach((layer, order) => {
+    layer.item.z = order + 1;
+  });
+  scheduleSave();
+  renderEditor();
+}
+
+function closeLayerMenu() {
+  document.querySelector(".layer-menu")?.remove();
+}
+
+function showLayerMenu(event, kind, id) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeLayerMenu();
+  if (state.photoAdjustMode) return;
+  if (kind === "overlay") {
+    state.selectedOverlayId = id;
+    state.selectedTextId = null;
+  } else {
+    state.selectedTextId = id;
+    state.selectedOverlayId = null;
+  }
+  refreshSelection();
+
+  const menu = document.createElement("div");
+  menu.className = "layer-menu";
+  menu.setAttribute("role", "menu");
+  const actions = [
+    ["front", "front", "Bring to front"],
+    ["up", "up", "Bring up a level"],
+    ["down", "down", "Bring down a level"],
+    ["back", "send-back", "Bring to back"],
+    ["remove", "trash", "Remove"],
+  ];
+  actions.forEach(([action, iconName, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `layer-menu-item${action === "remove" ? " is-danger" : ""}`;
+    button.setAttribute("role", "menuitem");
+    button.innerHTML = `${icon(iconName)}<span></span>`;
+    button.querySelector("span").textContent = label;
+    button.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      closeLayerMenu();
+      if (action === "remove") {
+        if (kind === "overlay") deleteSelectedOverlay();
+        else deleteSelectedText();
+      } else {
+        moveLayer(kind, id, action);
+      }
+    });
+    menu.appendChild(button);
+  });
+  document.body.appendChild(menu);
+  const pad = 8;
+  const { width, height } = menu.getBoundingClientRect();
+  const left = clamp(event.clientX, pad, window.innerWidth - width - pad);
+  const top = clamp(event.clientY, pad, window.innerHeight - height - pad);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
 function scheduleSave() {
   const project = activeProject();
   if (!project) return;
@@ -161,6 +248,11 @@ function icon(name) {
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
+    front: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 11-5-5-5 5"/><path d="m17 18-5-5-5 5"/></svg>',
+    up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>',
+    down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
+    "send-back": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 13 5 5 5-5"/><path d="m7 6 5 5 5-5"/></svg>',
+    crop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
   };
   return icons[name] || "";
 }
@@ -313,11 +405,8 @@ function renderStage(slide) {
     <div class="stage-wrap">
       <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
         <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
-        <div class="overlay-layer">
-          ${(slide.overlays || []).map(renderOverlayBox).join("")}
-        </div>
-        <div class="text-layer">
-          ${slide.texts.map(renderTextBox).join("")}
+        <div class="layer-stack">
+          ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
         </div>
         ${renderTikTokOverlay()}
       </div>
@@ -611,7 +700,7 @@ function bindEditorEvents() {
 
   const workspace = app.querySelector(".workspace");
   workspace?.addEventListener("pointerdown", (event) => {
-    if (event.target === workspace || event.target.classList.contains("workspace-inner") || event.target.classList.contains("text-layer") || event.target.classList.contains("overlay-layer")) {
+    if (event.target === workspace || event.target.classList.contains("workspace-inner") || event.target.classList.contains("layer-stack")) {
       clearLayerSelection();
       refreshSelection();
     }
@@ -898,6 +987,7 @@ function addText() {
     outlineWidth: DEFAULT_OUTLINE_WIDTH,
     background: "white",
     backgroundShape: "lines",
+    z: nextLayerZ(slide),
   };
   state.photoAdjustMode = false;
   state.selectedOverlayId = null;
@@ -1002,6 +1092,7 @@ function addOverlayFromAsset(assetId, point, { render = true } = {}) {
     y: 0.36,
     width: 0.34,
     rotation: 0,
+    z: nextLayerZ(slide),
   }, asset);
   const metrics = getOverlayMetrics(overlay, asset);
   if (point) {
@@ -1103,9 +1194,13 @@ function bindOverlayBox(box) {
     state.selectedOverlayId = box.dataset.overlayId;
     state.selectedTextId = null;
     refreshSelection();
+    if (event.button === 2) return;
     if (rotate) beginOverlayRotate(event, box);
     else if (corner) beginOverlayResize(event, box, corner);
     else beginOverlayDrag(event, box);
+  });
+  box.addEventListener("contextmenu", (event) => {
+    showLayerMenu(event, "overlay", box.dataset.overlayId);
   });
   box.addEventListener("keydown", (event) => {
     if (event.key === "Backspace" || event.key === "Delete") {
@@ -1264,8 +1359,13 @@ function bindTextBox(box) {
     state.selectedTextId = box.dataset.textId;
     state.selectedOverlayId = null;
     refreshSelection();
+    if (event.button === 2) return;
     if (corner) beginResize(event, box, corner);
     else beginDrag(event, box);
+  });
+  box.addEventListener("contextmenu", (event) => {
+    if (box.classList.contains("is-editing")) return;
+    showLayerMenu(event, "text", box.dataset.textId);
   });
   box.addEventListener("dblclick", (event) => {
     event.stopPropagation();
@@ -1502,8 +1602,7 @@ async function exportActiveSlide() {
     const context = canvas.getContext("2d");
     const imageLayout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
     context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-    await drawOverlayLayers(context, slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
-    slide.texts.forEach((text) => drawTextLayer(context, text, OUTPUT_WIDTH, OUTPUT_HEIGHT));
+    await drawSlideLayers(context, slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
     if (!blob) throw new Error("Could not create PNG");
     const url = URL.createObjectURL(blob);
@@ -1524,23 +1623,27 @@ async function exportActiveSlide() {
   }
 }
 
-async function drawOverlayLayers(context, slide, canvasWidth, canvasHeight) {
-  const overlays = slide.overlays || [];
-  for (const overlay of overlays) {
-    const asset = projectAsset(overlay.assetId);
-    if (!asset) continue;
-    const image = await loadImage(asset.imageData);
-    const metrics = getOverlayMetrics(overlay, asset);
-    const width = metrics.width * canvasWidth;
-    const height = metrics.height * canvasHeight;
-    const x = overlay.x * canvasWidth;
-    const y = overlay.y * canvasHeight;
-    context.save();
-    context.translate(x + width / 2, y + height / 2);
-    context.rotate(((overlay.rotation || 0) * Math.PI) / 180);
-    context.drawImage(image, -width / 2, -height / 2, width, height);
-    context.restore();
+async function drawSlideLayers(context, slide, canvasWidth, canvasHeight) {
+  for (const { kind, item } of slideItems(slide)) {
+    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight);
+    else drawTextLayer(context, item, canvasWidth, canvasHeight);
   }
+}
+
+async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight) {
+  const asset = projectAsset(overlay.assetId);
+  if (!asset) return;
+  const image = await loadImage(asset.imageData);
+  const metrics = getOverlayMetrics(overlay, asset);
+  const width = metrics.width * canvasWidth;
+  const height = metrics.height * canvasHeight;
+  const x = overlay.x * canvasWidth;
+  const y = overlay.y * canvasHeight;
+  context.save();
+  context.translate(x + width / 2, y + height / 2);
+  context.rotate(((overlay.rotation || 0) * Math.PI) / 180);
+  context.drawImage(image, -width / 2, -height / 2, width, height);
+  context.restore();
 }
 
 function drawTextLayer(context, text, imageWidth, imageHeight) {
@@ -1734,10 +1837,14 @@ async function init() {
         if (slide.imageX == null) slide.imageX = 0;
         if (slide.imageY == null) slide.imageY = 0;
         if (!Array.isArray(slide.overlays)) slide.overlays = [];
-        slide.texts.forEach((text) => {
+        slide.overlays.forEach((overlay, index) => {
+          if (overlay.z == null) overlay.z = index + 1;
+        });
+        slide.texts.forEach((text, index) => {
           if (text.outlineWidth == null) text.outlineWidth = DEFAULT_OUTLINE_WIDTH;
           if (!text.background) text.background = "white";
           if (!text.backgroundShape) text.backgroundShape = "full";
+          if (text.z == null) text.z = (slide.overlays?.length || 0) + index + 1;
         });
       });
     });
@@ -1750,6 +1857,12 @@ async function init() {
   bindGlobalActions();
   document.addEventListener("paste", (event) => {
     handleClipboardPaste(event);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest(".layer-menu")) closeLayerMenu();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeLayerMenu();
   });
 }
 
