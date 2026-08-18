@@ -9,11 +9,11 @@ const OUTLINE_RATIO = 0.22;
 const TEXT_WEIGHT = 500;
 const TEXT_LINE_HEIGHT = 1.12;
 const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
-const BOX_TEXT_LINE_HEIGHT = 1.18;
-const BOX_LINE_HEIGHT = 1.56;
-const BOX_HORIZONTAL_PADDING = 0.66;
-const BOX_CORNER_RADIUS = 0.33;
-const BOX_JUNCTION_RADIUS = 0.18;
+const BOX_TEXT_LINE_HEIGHT = 1.12;
+const BOX_LINE_HEIGHT = 1.28;
+const BOX_HORIZONTAL_PADDING = 0.28;
+const BOX_CORNER_RADIUS = 0.22;
+const BOX_JUNCTION_RADIUS = 0.16;
 
 const state = {
   projects: [],
@@ -1363,9 +1363,7 @@ function measureFont(text) {
 
 function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
-  const horizontalInset = fontSize * (perLineBox ? BOX_HORIZONTAL_PADDING * 2 : 0.32);
-  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - horizontalInset);
+  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - fontSize * 0.32);
   return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
 }
 
@@ -1421,14 +1419,14 @@ function roundedRectSvgPath(x, y, width, height, radii) {
   ].join(" ");
 }
 
-function quarterCircleSvgPath({ cx, cy, radius, quadrant }) {
-  const points = {
-    "upper-left": [cx - radius, cy, cx, cy - radius],
-    "upper-right": [cx, cy - radius, cx + radius, cy],
-    "lower-right": [cx + radius, cy, cx, cy + radius],
-    "lower-left": [cx, cy + radius, cx - radius, cy],
-  }[quadrant];
-  return `M ${cx} ${cy} L ${points[0]} ${points[1]} A ${radius} ${radius} 0 0 1 ${points[2]} ${points[3]} Z`;
+function concaveCornerSvgPath({ cx, cy, radius, quadrant }) {
+  const paths = {
+    "upper-left": `M ${cx} ${cy - radius} L ${cx} ${cy} L ${cx - radius} ${cy} A ${radius} ${radius} 0 0 0 ${cx} ${cy - radius} Z`,
+    "upper-right": `M ${cx} ${cy - radius} L ${cx} ${cy} L ${cx + radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx} ${cy - radius} Z`,
+    "lower-right": `M ${cx} ${cy + radius} L ${cx} ${cy} L ${cx + radius} ${cy} A ${radius} ${radius} 0 0 0 ${cx} ${cy + radius} Z`,
+    "lower-left": `M ${cx} ${cy + radius} L ${cx} ${cy} L ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx} ${cy + radius} Z`,
+  };
+  return paths[quadrant];
 }
 
 function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth) {
@@ -1462,7 +1460,7 @@ function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidt
 
   lineJunctionCorners(widths, lineCenters, contentWidth / 2, boxHeight, junctionRadius).forEach((corner) => {
     const path = document.createElementNS(namespace, "path");
-    path.setAttribute("d", quarterCircleSvgPath(corner));
+    path.setAttribute("d", concaveCornerSvgPath(corner));
     path.setAttribute("fill", fill);
     svg.appendChild(path);
   });
@@ -2653,8 +2651,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   context.textBaseline = "middle";
   context.lineJoin = "round";
   context.lineCap = "round";
-  const horizontalInset = fontSize * (perLineBox ? BOX_HORIZONTAL_PADDING * 2 : 0.32);
-  const lines = wrapText(context, text.text, Math.max(1, width - horizontalInset));
+  const lines = wrapText(context, text.text, Math.max(1, width - fontSize * 0.32));
   const visibleLineCount = Math.max(1, Math.floor((height - verticalPadding * 2) / lineHeight));
   const visibleLines = lines.slice(0, visibleLineCount);
   const blockHeight = visibleLines.length * lineHeight;
@@ -2687,7 +2684,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
       context.fill();
     });
     lineJunctionCorners(pillWidths, lineCenters, x + width / 2, backgroundHeight, junctionRadius)
-      .forEach((corner) => fillQuarterCircle(context, corner));
+      .forEach((corner) => fillConcaveCorner(context, corner));
   }
 
   visibleLines.forEach((line, index) => {
@@ -2747,16 +2744,38 @@ function roundedRect(context, x, y, width, height, radius) {
   context.roundRect(x, y, width, height, radius);
 }
 
-function fillQuarterCircle(context, { cx, cy, radius, quadrant }) {
-  const angles = {
-    "upper-left": [Math.PI, Math.PI * 1.5],
-    "upper-right": [Math.PI * 1.5, Math.PI * 2],
-    "lower-right": [0, Math.PI * 0.5],
-    "lower-left": [Math.PI * 0.5, Math.PI],
+function fillConcaveCorner(context, { cx, cy, radius, quadrant }) {
+  const shapes = {
+    "upper-left": {
+      start: [cx, cy - radius],
+      corner: [cx, cy],
+      arcStart: [cx - radius, cy],
+      arc: [cx - radius, cy - radius, Math.PI * 0.5, 0, true],
+    },
+    "upper-right": {
+      start: [cx, cy - radius],
+      corner: [cx, cy],
+      arcStart: [cx + radius, cy],
+      arc: [cx + radius, cy - radius, Math.PI * 0.5, Math.PI, false],
+    },
+    "lower-right": {
+      start: [cx, cy + radius],
+      corner: [cx, cy],
+      arcStart: [cx + radius, cy],
+      arc: [cx + radius, cy + radius, -Math.PI * 0.5, -Math.PI, true],
+    },
+    "lower-left": {
+      start: [cx, cy + radius],
+      corner: [cx, cy],
+      arcStart: [cx - radius, cy],
+      arc: [cx - radius, cy + radius, -Math.PI * 0.5, 0, false],
+    },
   }[quadrant];
   context.beginPath();
-  context.moveTo(cx, cy);
-  context.arc(cx, cy, radius, angles[0], angles[1]);
+  context.moveTo(...shapes.start);
+  context.lineTo(...shapes.corner);
+  context.lineTo(...shapes.arcStart);
+  context.arc(shapes.arc[0], shapes.arc[1], radius, shapes.arc[2], shapes.arc[3], shapes.arc[4]);
   context.closePath();
   context.fill();
 }
