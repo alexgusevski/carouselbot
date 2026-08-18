@@ -207,6 +207,13 @@ button,
   align-items: center;
 }
 
+.header-actions .button {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
 .project-identity {
   position: absolute;
   left: 50%;
@@ -462,6 +469,7 @@ button,
   position: relative;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--line);
 }
 
@@ -575,12 +583,15 @@ button,
 
 .asset-grid {
   display: grid;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   grid-template-columns: 1fr 1fr;
+  grid-auto-rows: max-content;
   gap: 8px;
   align-content: start;
   padding: 4px 12px 12px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .asset-empty {
