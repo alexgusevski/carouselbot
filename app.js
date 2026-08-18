@@ -1440,7 +1440,7 @@ function addText(point = null, { editDirectly = false } = {}) {
     width,
     height,
     size: 64,
-    style: "outline",
+    style: "plain",
     outlineWidth: DEFAULT_OUTLINE_WIDTH,
     background: "white",
     backgroundShape: "lines",
