@@ -348,6 +348,7 @@ function renderHeader({ editor = false } = {}) {
 }
 
 function renderDashboard() {
+  hideAssetPreview();
   state.activeProjectId = null;
   state.activeSlideId = null;
   clearLayerSelection();
@@ -397,11 +398,13 @@ function renderEditor() {
   const project = activeProject();
   if (!project) return renderDashboard();
   if (!activeSlide() && project.slides[0]) state.activeSlideId = project.slides[0].id;
+  hideAssetPreview();
 
   app.innerHTML = `
     ${renderHeader({ editor: true })}
     <main class="editor-shell">
       ${renderSlideRail(project)}
+      ${renderAssetRail(project)}
       <section class="workspace" aria-label="Image editor">
         <div class="workspace-tools">
           <button class="tool-chip ${state.photoAdjustMode ? "is-active" : ""}" type="button" data-action="adjust-photo" aria-pressed="${state.photoAdjustMode}" ${activeSlide() ? "" : "disabled"}>Adjust photo</button>
@@ -421,37 +424,40 @@ function renderEditor() {
 }
 
 function renderSlideRail(project) {
-  const assets = project.assets || [];
   return `
     <aside class="slide-rail">
-      <div class="slide-rail-section">
-        <div class="rail-heading"><h2>Photos</h2><span>${project.slides.length}</span></div>
-        <div class="slide-list">
-          ${project.slides.map((slide, index) => `
-            <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" aria-label="Open slide ${index + 1}">
-              <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-              <span class="thumb-image"><img src="${slide.imageData}" alt="" /></span>
-            </button>
-          `).join("")}
-        </div>
-        <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+ Add photos</button></div>
+      <div class="rail-heading"><h2>Photos</h2><span>${project.slides.length}</span></div>
+      <div class="slide-list">
+        ${project.slides.map((slide, index) => `
+          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" aria-label="Open slide ${index + 1}">
+            <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
+            <span class="thumb-image"><img src="${slide.imageData}" alt="" /></span>
+          </button>
+        `).join("")}
       </div>
-      <div class="slide-rail-section slide-rail-section--assets">
-        <div class="rail-heading"><h2>Assets</h2><span>${assets.length}</span></div>
-        <div class="asset-grid" aria-label="Uploaded assets">
-          ${assets.length ? assets.map((asset) => `
-            <div class="asset-item" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)} — drag onto the photo">
-              <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
-              <button class="asset-remove" type="button" data-action="delete-asset" data-asset-id="${asset.id}" aria-label="Remove ${escapeHtml(asset.name)}">×</button>
-            </div>
-          `).join("") : `<p class="asset-empty">Upload logos, stickers, or extra photos. Reuse them on any slide.</p>`}
-        </div>
-        <div class="asset-trash" data-asset-trash>
-          ${icon("trash")}
-          <span>Drag here to delete</span>
-        </div>
-        <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">+ Upload assets</button></div>
+      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+ Add photos</button></div>
+    </aside>
+  `;
+}
+
+function renderAssetRail(project) {
+  const assets = project.assets || [];
+  return `
+    <aside class="asset-rail">
+      <div class="rail-heading"><h2>Assets</h2><span>${assets.length}</span></div>
+      <div class="asset-grid" aria-label="Uploaded assets">
+        ${assets.length ? assets.map((asset) => `
+          <div class="asset-item" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)}">
+            <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
+            <button class="asset-remove" type="button" data-action="delete-asset" data-asset-id="${asset.id}" aria-label="Remove ${escapeHtml(asset.name)}">×</button>
+          </div>
+        `).join("") : `<p class="asset-empty">Upload logos, stickers, or extra photos. Drag them onto a photo to place them.</p>`}
       </div>
+      <div class="asset-trash" data-asset-trash>
+        ${icon("trash")}
+        <span>Drag here to delete</span>
+      </div>
+      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">+ Upload assets</button></div>
     </aside>
   `;
 }
@@ -1148,7 +1154,18 @@ async function deleteActiveSlide() {
 function bindAssetLibrary() {
   app.querySelectorAll(".asset-item").forEach((item) => {
     const assetId = item.dataset.assetId;
+    const previewSrc = item.querySelector("img")?.src;
+    item.addEventListener("pointerenter", (event) => {
+      if (state.draggingAssetId || !previewSrc) return;
+      showAssetPreview(previewSrc, event.clientX, event.clientY);
+    });
+    item.addEventListener("pointermove", (event) => {
+      if (state.draggingAssetId) return hideAssetPreview();
+      if (previewSrc) showAssetPreview(previewSrc, event.clientX, event.clientY);
+    });
+    item.addEventListener("pointerleave", hideAssetPreview);
     item.addEventListener("dragstart", (event) => {
+      hideAssetPreview();
       state.draggingAssetId = assetId;
       event.dataTransfer.setData("application/x-slide-asset", assetId);
       event.dataTransfer.setData("text/plain", `asset:${assetId}`);
@@ -1159,20 +1176,41 @@ function bindAssetLibrary() {
       state.draggingAssetId = null;
       item.classList.remove("is-dragging");
       app.querySelector("[data-asset-trash]")?.classList.remove("is-hot");
-    });
-    item.addEventListener("click", (event) => {
-      if (event.target.closest('[data-action="delete-asset"]')) return;
-      addOverlayFromAsset(assetId);
+      hideAssetPreview();
     });
   });
   app.querySelectorAll('[data-action="delete-asset"]').forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      hideAssetPreview();
       deleteProjectAsset(button.dataset.assetId);
     });
   });
   bindAssetTrash();
+}
+
+function showAssetPreview(src, clientX, clientY) {
+  let preview = document.querySelector(".asset-hover-preview");
+  if (!preview) {
+    preview = document.createElement("img");
+    preview.className = "asset-hover-preview";
+    preview.alt = "";
+    document.body.appendChild(preview);
+  }
+  if (preview.getAttribute("src") !== src) preview.src = src;
+  const pad = 16;
+  const size = 240;
+  let left = clientX + pad;
+  let top = clientY + pad;
+  if (left + size > window.innerWidth - 8) left = clientX - size - pad;
+  if (top + size > window.innerHeight - 8) top = clientY - size - pad;
+  preview.style.left = `${Math.max(8, left)}px`;
+  preview.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideAssetPreview() {
+  document.querySelector(".asset-hover-preview")?.remove();
 }
 
 function bindAssetTrash() {

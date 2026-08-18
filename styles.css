@@ -439,32 +439,22 @@ button,
 .editor-shell {
   display: grid;
   height: calc(100vh - 72px);
-  grid-template-columns: 214px minmax(320px, 1fr) 294px;
+  grid-template-columns: 190px 168px minmax(300px, 1fr) 294px;
 }
 
 .slide-rail,
+.asset-rail,
 .inspector {
   min-height: 0;
   background: rgba(251, 250, 247, 0.84);
   backdrop-filter: blur(18px);
 }
 
-.slide-rail {
+.slide-rail,
+.asset-rail {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
-}
-
-.slide-rail-section {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
-.slide-rail-section--assets {
-  flex: 0.92;
-  border-top: 1px solid var(--soft-line);
 }
 
 .rail-heading {
@@ -585,6 +575,20 @@ button,
 .asset-item.is-dragging {
   opacity: 0.55;
   cursor: grabbing;
+}
+
+.asset-hover-preview {
+  position: fixed;
+  z-index: 90;
+  width: auto;
+  height: auto;
+  max-width: 240px;
+  max-height: 240px;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  pointer-events: none;
+  object-fit: contain;
 }
 
 .asset-item img {
@@ -1794,7 +1798,7 @@ input[type="range"]::-webkit-slider-thumb {
 
 @media (max-width: 1040px) {
   .editor-shell {
-    grid-template-columns: 162px minmax(310px, 1fr) 270px;
+    grid-template-columns: 148px 132px minmax(280px, 1fr) 250px;
   }
 
   .dashboard-hero {
@@ -1819,11 +1823,12 @@ input[type="range"]::-webkit-slider-thumb {
 
   .editor-shell {
     height: calc(100vh - 62px);
-    grid-template-columns: 76px minmax(240px, 1fr);
+    grid-template-columns: 68px 64px minmax(200px, 1fr);
   }
 
-  .slide-rail {
-    grid-column: 1;
+  .slide-rail,
+  .asset-rail {
+    grid-column: auto;
   }
 
   .rail-heading {
@@ -1872,7 +1877,7 @@ input[type="range"]::-webkit-slider-thumb {
     z-index: 20;
     right: 0;
     bottom: 0;
-    left: 76px;
+    left: 132px;
     display: none;
     max-height: 62vh;
     border-top: 1px solid var(--line);
