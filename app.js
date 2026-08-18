@@ -986,16 +986,9 @@ function renderInspector() {
             <input id="photo-zoom" type="range" min="1" max="3" step="0.01" value="${slide.imageScale || 1}" />
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
-          <div class="tip"><strong>Move it</strong><span>Drag the photo inside the 9:16 frame. Scroll over the photo or use the slider to zoom.</span></div>
         </div>
-      ` : multiMode ? `
+      ` : multiMode ? "" : overlayMode && state.croppingOverlayId === overlay.id ? `
         <div class="inspector-body">
-          <div class="tip"><strong>Move together</strong><span>Drag any selected layer to move the whole selection. Press Delete to remove them together.</span></div>
-          <div class="tip"><strong>Change selection</strong><span>Hold Cmd (Ctrl on Windows) while clicking layers, or drag across the canvas to select an area.</span></div>
-        </div>
-      ` : overlayMode && state.croppingOverlayId === overlay.id ? `
-        <div class="inspector-body">
-          <div class="tip"><strong>Crop</strong><span>Drag the handles to choose what stays. Click outside the photo to finish and deselect.</span></div>
           <button class="button button--primary" type="button" data-action="done-crop">Done</button>
         </div>
       ` : overlayMode ? `
@@ -1094,7 +1087,6 @@ function renderInspector() {
               </div>
             </div>
           ` : ""}
-          <div class="tip"><strong>Tip</strong><span>Drag an edge to change one dimension, a corner to reshape, or the round handle to rotate. Double-click the text to type directly.</span></div>
         </div>
       ` : `
         <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>

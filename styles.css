@@ -2093,21 +2093,6 @@ input[type="range"]::-webkit-slider-thumb {
   text-align: center;
 }
 
-.tip {
-  display: flex;
-  gap: 8px;
-  padding: 11px;
-  border-radius: 10px;
-  color: var(--muted);
-  background: #ebe9e2;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.tip strong {
-  color: var(--ink);
-}
-
 .inspector-empty {
   padding: 34px 22px;
   color: var(--muted);
