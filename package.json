@@ -2,6 +2,16 @@
   "name": "slide-studio",
   "version": "1.0.0",
   "private": true,
+  "description": "Local-first web editor for TikTok slideshow images",
+  "homepage": "https://slides-editor.pages.dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexgusevski/tiktokslideeditor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alexgusevski/tiktokslideeditor/issues"
+  },
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
