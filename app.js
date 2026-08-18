@@ -22,6 +22,7 @@ const state = {
   showTikTokOverlay: false,
   draggingAssetId: null,
   croppingOverlayId: null,
+  pasteBusy: false,
 };
 
 const app = document.querySelector("#app");
@@ -2076,26 +2077,26 @@ function isEditingTextTarget(target) {
   return Boolean(target?.closest?.("input, textarea, [contenteditable='true'], [contenteditable='']"));
 }
 
+function isImageFile(file) {
+  if (!file) return false;
+  return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name || "");
+}
+
 function clipboardImageFiles(clipboardData) {
   if (!clipboardData) return [];
-  const seen = new Set();
-  const files = [];
-  const add = (file) => {
-    if (!file) return;
-    const isImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name || "");
-    if (!isImage) return;
-    const key = `${file.type}:${file.size}:${file.lastModified}:${file.name}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    files.push(file);
-  };
-  if (clipboardData.files) [...clipboardData.files].forEach(add);
-  if (clipboardData.items) {
-    [...clipboardData.items].forEach((item) => {
-      if (item.kind === "file") add(item.getAsFile());
-    });
-  }
-  return files;
+  const listed = clipboardData.files ? [...clipboardData.files].filter(isImageFile) : [];
+  if (listed.length) return listed;
+  if (!clipboardData.items) return [];
+  return [...clipboardData.items]
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter(isImageFile);
+}
+
+async function fingerprintData(value) {
+  const bytes = new TextEncoder().encode(String(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function createAssetFromFile(file, fallbackName = "Pasted image") {
@@ -2103,6 +2104,12 @@ async function createAssetFromFile(file, fallbackName = "Pasted image") {
   if (!project) return null;
   if (!project.assets) project.assets = [];
   const imageData = await fileToDataUrl(file);
+  const fingerprint = await fingerprintData(imageData);
+  const existing = project.assets.find((asset) => asset.fingerprint === fingerprint || asset.imageData === imageData);
+  if (existing) {
+    if (!existing.fingerprint) existing.fingerprint = fingerprint;
+    return existing;
+  }
   const dimensions = await getImageDimensions(imageData);
   const asset = {
     id: uid(),
@@ -2110,40 +2117,46 @@ async function createAssetFromFile(file, fallbackName = "Pasted image") {
     imageData,
     width: dimensions.width,
     height: dimensions.height,
+    fingerprint,
   };
   project.assets.push(asset);
   return asset;
 }
 
 async function handleClipboardPaste(event) {
-  if (!activeProject() || isEditingTextTarget(event.target)) return;
+  if (!activeProject() || isEditingTextTarget(event.target) || state.pasteBusy) return;
   const files = clipboardImageFiles(event.clipboardData);
   if (!files.length) return;
   event.preventDefault();
+  state.pasteBusy = true;
   const assets = [];
-  for (const [index, file] of files.entries()) {
-    try {
-      const asset = await createAssetFromFile(file, files.length > 1 ? `Pasted image ${index + 1}` : "Pasted image");
-      if (asset) assets.push(asset);
-    } catch (error) {
-      console.error(error);
+  try {
+    for (const [index, file] of files.entries()) {
+      try {
+        const asset = await createAssetFromFile(file, files.length > 1 ? `Pasted image ${index + 1}` : "Pasted image");
+        if (asset) assets.push(asset);
+      } catch (error) {
+        console.error(error);
+      }
     }
+    if (!assets.length) {
+      toast("That clipboard image couldn’t be added.");
+      return;
+    }
+    const slide = activeSlide();
+    if (slide) {
+      assets.forEach((asset, index) => {
+        addOverlayFromAsset(asset.id, { x: 0.5 + index * 0.03, y: 0.5 + index * 0.03 }, { render: false });
+      });
+    }
+    scheduleSave();
+    renderEditor();
+    toast(slide
+      ? `${assets.length} ${assets.length === 1 ? "image" : "images"} pasted onto the photo`
+      : `${assets.length} ${assets.length === 1 ? "asset" : "assets"} added`);
+  } finally {
+    state.pasteBusy = false;
   }
-  if (!assets.length) {
-    toast("That clipboard image couldn’t be added.");
-    return;
-  }
-  const slide = activeSlide();
-  if (slide) {
-    assets.forEach((asset, index) => {
-      addOverlayFromAsset(asset.id, { x: 0.5 + index * 0.03, y: 0.5 + index * 0.03 }, { render: false });
-    });
-  }
-  scheduleSave();
-  renderEditor();
-  toast(slide
-    ? `${assets.length} ${assets.length === 1 ? "image" : "images"} pasted onto the photo`
-    : `${assets.length} ${assets.length === 1 ? "asset" : "assets"} added`);
 }
 
 async function init() {
