@@ -2355,14 +2355,18 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   visibleLines.forEach((line, index) => {
     const lineY = startY + index * lineHeight;
     if (perLineBox && line) {
+      const metrics = context.measureText(line);
+      const padY = fontSize * 0.14;
+      const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.72;
+      const descent = metrics.actualBoundingBoxDescent || fontSize * 0.22;
       const backgroundWidth = pillWidths[index];
-      const backgroundHeight = lineHeight;
+      const backgroundHeight = ascent + descent + padY * 2;
       const radius = Math.min(fontSize * 0.22, backgroundHeight / 2);
       context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
       roundedRect(
         context,
         x + (width - backgroundWidth) / 2,
-        lineY - backgroundHeight / 2,
+        lineY - ascent - padY,
         backgroundWidth,
         backgroundHeight,
         lineCornerRadii(pillWidths, index, radius),

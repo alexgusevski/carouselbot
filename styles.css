@@ -1260,6 +1260,10 @@ button,
   overflow: visible;
 }
 
+.text-box[data-style="boxed"] .text-content-wrap {
+  overflow: visible;
+}
+
 .text-box[data-style="boxed"] .text-content {
   color: #111;
   background: transparent;
@@ -1267,9 +1271,16 @@ button,
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"] .text-line {
-  padding: 0 0.28em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 1.28em;
+  margin: -0.08em 0;
+  padding: 0.04em 0.28em 0.14em;
   color: #111;
   background: #fff;
+  line-height: 1;
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
