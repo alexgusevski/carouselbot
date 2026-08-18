@@ -8,6 +8,7 @@ const DEFAULT_OUTLINE_WIDTH = 14;
 const OUTLINE_RATIO = 0.22;
 const TEXT_WEIGHT = 700;
 const TEXT_LINE_HEIGHT = 1.12;
+const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
 
 const state = {
   projects: [],
@@ -28,6 +29,7 @@ const state = {
   croppingOverlayId: null,
   pasteBusy: false,
   fileDropBusy: false,
+  copiedLayer: null,
 };
 
 const history = {
@@ -949,7 +951,7 @@ function bindEditorEvents() {
     });
   });
 
-  app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
+  app.querySelector('[data-action="add-text"]')?.addEventListener("click", () => addText());
   app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
   app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
   app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
@@ -999,6 +1001,15 @@ function bindEditorEvents() {
       event.stopPropagation();
       beginImageDrag(event, stage);
     }
+  });
+  stage?.addEventListener("dblclick", (event) => {
+    if (event.target.closest(".text-box") || event.target.closest(".overlay-box") || state.croppingOverlayId) return;
+    event.preventDefault();
+    const rect = stage.getBoundingClientRect();
+    addText({
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.height,
+    }, { editDirectly: true });
   });
 
   const resizeObserver = new ResizeObserver(() => sizeStage());
@@ -1121,7 +1132,7 @@ function refreshSelection() {
   const currentInspector = app.querySelector(".inspector");
   if (currentInspector) {
     currentInspector.outerHTML = renderInspector();
-    app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
+    app.querySelector('[data-action="add-text"]')?.addEventListener("click", () => addText());
     app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
     app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
     app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
@@ -1405,17 +1416,19 @@ function ensureTextFits(text) {
   });
 }
 
-function addText() {
+function addText(point = null, { editDirectly = false } = {}) {
   const slide = activeSlide();
   if (!slide) return;
   recordHistory();
+  const width = 0.64;
+  const height = 0.13;
   const text = {
     id: uid(),
     text: "Your text",
-    x: 0.18,
-    y: 0.42,
-    width: 0.64,
-    height: 0.13,
+    x: point ? clamp(point.x - width / 2, 0, 1 - width) : 0.18,
+    y: point ? clamp(point.y - height / 2, 0, 1 - height) : 0.42,
+    width,
+    height,
     size: 64,
     style: "outline",
     outlineWidth: DEFAULT_OUTLINE_WIDTH,
@@ -1429,7 +1442,13 @@ function addText() {
   state.mobileInspectorOpen = true;
   scheduleSave();
   renderEditor();
-  requestAnimationFrame(() => app.querySelector("#text-value")?.select());
+  requestAnimationFrame(() => {
+    if (editDirectly) {
+      app.querySelector(`.text-box[data-text-id="${text.id}"]`)?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    } else {
+      app.querySelector("#text-value")?.select();
+    }
+  });
 }
 
 function deleteSelectedText() {
@@ -2583,6 +2602,97 @@ function isEditingTextTarget(target) {
   return Boolean(target?.closest?.("input, textarea, [contenteditable='true'], [contenteditable='']"));
 }
 
+function handleLayerCopy(event) {
+  if (!activeSlide() || isEditingTextTarget(event.target)) return;
+  const layers = slideItems(activeSlide()).filter(({ kind, item }) => isLayerSelected(kind, item.id));
+  if (!layers.length) return;
+  const copies = layers.flatMap(({ kind, item }) => {
+    if (kind === "text") return [{ kind, item: { ...item } }];
+    const asset = projectAsset(item.assetId);
+    return asset ? [{ kind, item: { ...item }, asset: { ...asset } }] : [];
+  });
+  if (!copies.length) return;
+  const token = uid();
+  state.copiedLayer = { token, layers: copies };
+  event.preventDefault();
+  event.clipboardData?.setData(CLIPBOARD_LAYER_TYPE, token);
+  event.clipboardData?.setData("text/plain", `slide-studio-layer:${token}`);
+  toast(copies.length === 1
+    ? `${copies[0].kind === "overlay" ? "Asset" : "Text"} copied`
+    : `${copies.length} layers copied`);
+}
+
+function copiedLayerFromClipboard(clipboardData) {
+  if (!clipboardData || !state.copiedLayer) return null;
+  let token = clipboardData.getData(CLIPBOARD_LAYER_TYPE);
+  if (!token) {
+    const text = clipboardData.getData("text/plain");
+    if (text.startsWith("slide-studio-layer:")) token = text.slice("slide-studio-layer:".length);
+  }
+  return token === state.copiedLayer.token ? state.copiedLayer : null;
+}
+
+function pasteCopiedLayer(copied) {
+  const project = activeProject();
+  const slide = activeSlide();
+  const layers = copied?.layers || [];
+  if (!project || !slide || !layers.length) return false;
+  if (layers.some((layer) => layer.kind === "overlay" && !layer.asset)) return false;
+  const offset = 0.03;
+  const pastedLayers = [];
+  const pastedKeys = [];
+  let nextZ = nextLayerZ(slide);
+  recordHistory();
+  if (!Array.isArray(project.assets)) project.assets = [];
+  if (!Array.isArray(slide.overlays)) slide.overlays = [];
+  layers.forEach((layer) => {
+    if (layer.kind === "overlay") {
+      let asset = project.assets.find((item) => (
+        (layer.asset.fingerprint && item.fingerprint === layer.asset.fingerprint)
+        || item.imageData === layer.asset.imageData
+      ));
+      if (!asset) {
+        asset = { ...layer.asset, id: uid() };
+        project.assets.push(asset);
+      }
+      const pasted = constrainOverlay({
+        ...layer.item,
+        id: uid(),
+        assetId: asset.id,
+        x: layer.item.x + offset,
+        y: layer.item.y + offset,
+        z: nextZ,
+      }, asset);
+      nextZ += 1;
+      slide.overlays.push(pasted);
+      pastedLayers.push({ kind: "overlay", item: { ...pasted }, asset: { ...asset } });
+      pastedKeys.push(layerKey("overlay", pasted.id));
+      return;
+    }
+    const pasted = {
+      ...layer.item,
+      id: uid(),
+      x: clamp(layer.item.x + offset, 0, 1 - layer.item.width),
+      y: clamp(layer.item.y + offset, 0, 1 - layer.item.height),
+      z: nextZ,
+    };
+    nextZ += 1;
+    slide.texts.push(pasted);
+    pastedLayers.push({ kind: "text", item: { ...pasted } });
+    pastedKeys.push(layerKey("text", pasted.id));
+  });
+  copied.layers = pastedLayers;
+  setLayerSelection(pastedKeys);
+  state.photoAdjustMode = false;
+  state.mobileInspectorOpen = true;
+  scheduleSave();
+  renderEditor();
+  toast(pastedLayers.length === 1
+    ? `${pastedLayers[0].kind === "overlay" ? "Asset" : "Text"} pasted`
+    : `${pastedLayers.length} layers pasted`);
+  return true;
+}
+
 function isImageFile(file) {
   if (!file) return false;
   return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name || "");
@@ -2642,6 +2752,12 @@ async function createAssetFromFile(file, fallbackName = "Pasted image") {
 
 async function handleClipboardPaste(event) {
   if (!activeProject() || isEditingTextTarget(event.target) || state.pasteBusy) return;
+  const copiedLayer = copiedLayerFromClipboard(event.clipboardData);
+  if (copiedLayer) {
+    event.preventDefault();
+    pasteCopiedLayer(copiedLayer);
+    return;
+  }
   const files = clipboardImageFiles(event.clipboardData);
   if (!files.length) return;
   event.preventDefault();
@@ -2709,6 +2825,7 @@ async function init() {
   document.addEventListener("paste", (event) => {
     handleClipboardPaste(event);
   });
+  document.addEventListener("copy", handleLayerCopy);
   document.addEventListener("pointerdown", (event) => {
     if (!event.target.closest(".layer-menu")) closeLayerMenu();
   }, true);
