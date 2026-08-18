@@ -804,7 +804,7 @@ function renderInspector() {
             <input id="photo-zoom" type="range" min="1" max="3" step="0.01" value="${slide.imageScale || 1}" />
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
-          <div class="tip"><strong>Move it</strong><span>Drag the photo inside the 9:16 frame. Zoom in until the crop looks right.</span></div>
+          <div class="tip"><strong>Move it</strong><span>Drag the photo inside the 9:16 frame. Scroll over the photo or use the slider to zoom.</span></div>
         </div>
       ` : multiMode ? `
         <div class="inspector-body">
@@ -1010,6 +1010,33 @@ function bindEditorEvents() {
       beginImageDrag(event, stage);
     }
   });
+  let photoZoomHistoryTimer = null;
+  stage?.addEventListener("wheel", (event) => {
+    if (!state.photoAdjustMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const slide = activeSlide();
+    if (!slide) return;
+    const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? stage.clientHeight
+        : 1;
+    const currentScale = slide.imageScale || 1;
+    const nextScale = clamp(currentScale * Math.exp(-event.deltaY * deltaScale * 0.0015), 1, 3);
+    if (Math.abs(nextScale - currentScale) < 0.0001) return;
+    if (!photoZoomHistoryTimer) recordHistory();
+    window.clearTimeout(photoZoomHistoryTimer);
+    photoZoomHistoryTimer = window.setTimeout(() => {
+      photoZoomHistoryTimer = null;
+    }, 250);
+    zoomPhotoAtPoint(slide, nextScale, event.clientX, event.clientY, stage);
+    const photoZoom = app.querySelector("#photo-zoom");
+    if (photoZoom) photoZoom.value = slide.imageScale;
+    const output = app.querySelector("#photo-zoom-output");
+    if (output) output.textContent = `${Math.round(slide.imageScale * 100)}%`;
+    scheduleSave();
+  }, { passive: false });
   stage?.addEventListener("dblclick", (event) => {
     if (event.target.closest(".text-box") || event.target.closest(".overlay-box") || state.croppingOverlayId) return;
     event.preventDefault();
@@ -1284,6 +1311,25 @@ function updateStageImage(slide) {
   image.style.height = `${layout.height}px`;
   image.style.left = `${layout.left}px`;
   image.style.top = `${layout.top}px`;
+}
+
+function zoomPhotoAtPoint(slide, nextScale, clientX, clientY, stage) {
+  const canvasWidth = state.stageWidth || stage.clientWidth;
+  const canvasHeight = state.stageHeight || stage.clientHeight;
+  if (!canvasWidth || !canvasHeight) return;
+  const rect = stage.getBoundingClientRect();
+  const focalX = clamp(clientX - rect.left, 0, canvasWidth);
+  const focalY = clamp(clientY - rect.top, 0, canvasHeight);
+  const currentLayout = getImageLayout(slide, canvasWidth, canvasHeight);
+  const imagePointX = (focalX - currentLayout.left) / currentLayout.width;
+  const imagePointY = (focalY - currentLayout.top) / currentLayout.height;
+
+  slide.imageScale = clamp(nextScale, 1, 3);
+  const nextLayout = getImageLayout(slide, canvasWidth, canvasHeight);
+  slide.imageX = (focalX - imagePointX * nextLayout.width - (canvasWidth - nextLayout.width) / 2) / canvasWidth;
+  slide.imageY = (focalY - imagePointY * nextLayout.height - (canvasHeight - nextLayout.height) / 2) / canvasHeight;
+  constrainImagePosition(slide);
+  updateStageImage(slide);
 }
 
 function updateTextBox(text) {
