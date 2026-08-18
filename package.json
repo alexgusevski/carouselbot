@@ -6,8 +6,8 @@
     "start": "node server.mjs",
     "dev": "node server.mjs",
     "build": "node scripts/build.mjs",
-    "preview:cloudflare": "npm run build && wrangler dev",
-    "deploy": "npm run build && wrangler deploy"
+    "preview:cloudflare": "npm run build && wrangler pages dev dist",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name slides-editor --branch main"
   },
   "devDependencies": {
     "wrangler": "^4.123.0"
