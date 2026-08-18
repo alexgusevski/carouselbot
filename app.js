@@ -983,13 +983,12 @@ function renderInspector() {
             <div class="color-presets" role="group" aria-label="Text color presets">
               ${TEXT_COLOR_PRESETS.map((preset) => `
                 <button
-                  class="color-preset ${color === preset.value ? "is-active" : ""}"
+                  class="color-preset color-preset--${preset.name.toLowerCase()} ${color === preset.value ? "is-active" : ""}"
                   type="button"
                   data-text-color="${preset.value}"
                   title="${preset.name} ${preset.value}"
                   aria-label="Use ${preset.name} text"
                   aria-pressed="${color === preset.value}"
-                  style="--swatch-color:${preset.value}"
                 ></button>
               `).join("")}
             </div>
@@ -1028,7 +1027,6 @@ function renderInspector() {
               </div>
             </div>
           ` : ""}
-          <div class="tip"><strong>Tip</strong><span>Drag text to move it. Drag any corner to reshape its box. Double-click the text to type directly.</span></div>
         </div>
       ` : `
         <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>
