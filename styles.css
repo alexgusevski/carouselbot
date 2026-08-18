@@ -741,6 +741,20 @@ button,
   position: relative;
 }
 
+.selection-marquee {
+  position: absolute;
+  z-index: 20;
+  display: none;
+  border: 1px solid var(--cyan);
+  background: rgba(37, 244, 238, 0.14);
+  box-shadow: 0 0 0 1px rgba(21, 21, 21, 0.62), inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+
+.selection-marquee.is-visible {
+  display: block;
+}
+
 .stage {
   position: relative;
   overflow: hidden;
@@ -1301,6 +1315,11 @@ button,
 
 .is-selected .resize-handle {
   display: block;
+}
+
+.stage-frame.has-multi-selection .is-selected .resize-handle,
+.stage-frame.has-multi-selection .is-selected .rotate-handle {
+  display: none;
 }
 
 .resize-handle[data-corner="nw"] {

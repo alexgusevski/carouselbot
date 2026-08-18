@@ -15,6 +15,7 @@ const state = {
   activeSlideId: null,
   selectedTextId: null,
   selectedOverlayId: null,
+  selectedLayerKeys: [],
   db: null,
   stageWidth: 0,
   stageHeight: 0,
@@ -63,8 +64,7 @@ function applyHistorySnapshot(snapshot) {
   if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
     state.activeSlideId = state.projects[index].slides[0]?.id || null;
   }
-  if (state.selectedOverlayId && !selectedOverlay()) state.selectedOverlayId = null;
-  if (state.selectedTextId && !selectedText()) state.selectedTextId = null;
+  setLayerSelection(selectedLayerKeys());
   state.croppingOverlayId = null;
   renderEditor();
   putProject(state.projects[index]).catch((error) => console.error(error));
@@ -154,6 +154,60 @@ function selectedOverlay() {
   return activeSlide()?.overlays?.find((overlay) => overlay.id === state.selectedOverlayId) || null;
 }
 
+function layerKey(kind, id) {
+  return `${kind}:${id}`;
+}
+
+function parseLayerKey(key) {
+  const separator = key.indexOf(":");
+  return { kind: key.slice(0, separator), id: key.slice(separator + 1) };
+}
+
+function selectedLayerKeys() {
+  return Array.isArray(state.selectedLayerKeys) ? state.selectedLayerKeys : [];
+}
+
+function isLayerSelected(kind, id) {
+  return selectedLayerKeys().includes(layerKey(kind, id));
+}
+
+function selectedLayers() {
+  const slide = activeSlide();
+  if (!slide) return [];
+  return selectedLayerKeys().flatMap((key) => {
+    const { kind, id } = parseLayerKey(key);
+    const item = kind === "text"
+      ? slide.texts.find((text) => text.id === id)
+      : (slide.overlays || []).find((overlay) => overlay.id === id);
+    return item ? [{ kind, item, key }] : [];
+  });
+}
+
+function setLayerSelection(keys, primaryKey = keys.at(-1) || null) {
+  const validKeys = new Set(slideItems(activeSlide() || { texts: [], overlays: [] })
+    .map(({ kind, item }) => layerKey(kind, item.id)));
+  state.selectedLayerKeys = [...new Set(keys)].filter((key) => validKeys.has(key));
+  const primary = state.selectedLayerKeys.includes(primaryKey)
+    ? parseLayerKey(primaryKey)
+    : state.selectedLayerKeys.length
+      ? parseLayerKey(state.selectedLayerKeys.at(-1))
+      : null;
+  state.selectedTextId = primary?.kind === "text" ? primary.id : null;
+  state.selectedOverlayId = primary?.kind === "overlay" ? primary.id : null;
+}
+
+function selectOnlyLayer(kind, id) {
+  const key = layerKey(kind, id);
+  setLayerSelection([key], key);
+}
+
+function toggleLayerSelection(kind, id) {
+  const key = layerKey(kind, id);
+  const keys = selectedLayerKeys();
+  if (keys.includes(key)) setLayerSelection(keys.filter((item) => item !== key));
+  else setLayerSelection([...keys, key], key);
+}
+
 function projectAsset(assetId) {
   return activeProject()?.assets?.find((asset) => asset.id === assetId) || null;
 }
@@ -202,8 +256,7 @@ function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
 
 function clearLayerSelection() {
   exitCropMode();
-  state.selectedTextId = null;
-  state.selectedOverlayId = null;
+  setLayerSelection([]);
 }
 
 function slideItems(slide) {
@@ -223,6 +276,32 @@ function moveLayer(kind, id, action) {
   const slide = activeSlide();
   if (!slide) return;
   const items = slideItems(slide);
+  const selected = new Set(isLayerSelected(kind, id) ? selectedLayerKeys() : [layerKey(kind, id)]);
+  if (selected.size > 1) {
+    if (action === "front" || action === "back") {
+      const chosen = items.filter((entry) => selected.has(layerKey(entry.kind, entry.item.id)));
+      const remaining = items.filter((entry) => !selected.has(layerKey(entry.kind, entry.item.id)));
+      items.splice(0, items.length, ...(action === "front" ? [...remaining, ...chosen] : [...chosen, ...remaining]));
+    } else if (action === "up") {
+      for (let index = items.length - 2; index >= 0; index -= 1) {
+        const currentSelected = selected.has(layerKey(items[index].kind, items[index].item.id));
+        const nextSelected = selected.has(layerKey(items[index + 1].kind, items[index + 1].item.id));
+        if (currentSelected && !nextSelected) [items[index], items[index + 1]] = [items[index + 1], items[index]];
+      }
+    } else if (action === "down") {
+      for (let index = 1; index < items.length; index += 1) {
+        const currentSelected = selected.has(layerKey(items[index].kind, items[index].item.id));
+        const previousSelected = selected.has(layerKey(items[index - 1].kind, items[index - 1].item.id));
+        if (currentSelected && !previousSelected) [items[index], items[index - 1]] = [items[index - 1], items[index]];
+      }
+    }
+    items.forEach((layer, order) => {
+      layer.item.z = order + 1;
+    });
+    scheduleSave();
+    renderEditor();
+    return;
+  }
   const index = items.findIndex((entry) => entry.kind === kind && entry.item.id === id);
   if (index < 0) return;
   const [entry] = items.splice(index, 1);
@@ -247,20 +326,14 @@ function showLayerMenu(event, kind, id) {
   event.stopPropagation();
   closeLayerMenu();
   if (state.photoAdjustMode) return;
-  if (kind === "overlay") {
-    state.selectedOverlayId = id;
-    state.selectedTextId = null;
-  } else {
-    state.selectedTextId = id;
-    state.selectedOverlayId = null;
-  }
+  if (!isLayerSelected(kind, id)) selectOnlyLayer(kind, id);
   refreshSelection();
 
   const menu = document.createElement("div");
   menu.className = "layer-menu";
   menu.setAttribute("role", "menu");
   const actions = [
-    ...(kind === "overlay" ? [["crop", "crop", "Crop"]] : []),
+    ...(kind === "overlay" && selectedLayers().length === 1 ? [["crop", "crop", "Crop"]] : []),
     ["front", "front", "Bring to front"],
     ["up", "up", "Bring up a level"],
     ["down", "down", "Bring down a level"],
@@ -278,8 +351,7 @@ function showLayerMenu(event, kind, id) {
       clickEvent.stopPropagation();
       closeLayerMenu();
       if (action === "remove") {
-        if (kind === "overlay") deleteSelectedOverlay();
-        else deleteSelectedText();
+        deleteSelectedLayers();
       } else if (action === "crop") {
         beginCrop(id);
       } else {
@@ -303,8 +375,7 @@ function beginCrop(overlayId) {
   const asset = overlay ? projectAsset(overlay.assetId) : null;
   if (!overlay || !asset) return;
   state.photoAdjustMode = false;
-  state.selectedOverlayId = overlay.id;
-  state.selectedTextId = null;
+  selectOnlyLayer("overlay", overlay.id);
   const crop = overlayCrop(overlay);
   if (crop.w < 0.999 || crop.h < 0.999 || crop.x > 0.001 || crop.y > 0.001) {
     const croppedHeight = getOverlayMetrics(overlay, asset).height;
@@ -549,7 +620,7 @@ function renderEmptyStage() {
 function renderStage(slide) {
   return `
     <div class="stage-wrap">
-      <div class="stage-frame">
+      <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""}">
         <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
           <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
           ${renderTikTokOverlay()}
@@ -593,7 +664,7 @@ function renderTikTokOverlay() {
 function renderOverlayBox(overlay) {
   const asset = projectAsset(overlay.assetId);
   if (!asset) return "";
-  const selected = overlay.id === state.selectedOverlayId;
+  const selected = isLayerSelected("overlay", overlay.id);
   const cropping = overlay.id === state.croppingOverlayId;
   const metrics = getOverlayMetrics(overlay, asset);
   const crop = overlayCrop(overlay);
@@ -633,7 +704,7 @@ function renderOverlayBox(overlay) {
 }
 
 function renderTextBox(text) {
-  const selected = text.id === state.selectedTextId;
+  const selected = isLayerSelected("text", text.id);
   const background = text.background || "white";
   const backgroundShape = text.backgroundShape || "lines";
   return `
@@ -659,15 +730,17 @@ function renderTextBox(text) {
 function renderInspector() {
   const text = selectedText();
   const overlay = selectedOverlay();
+  const selectionCount = selectedLayers().length;
+  const multiMode = selectionCount > 1;
   const overlayAsset = overlay ? projectAsset(overlay.assetId) : null;
   const slide = activeSlide();
   const photoMode = Boolean(state.photoAdjustMode && slide);
-  const overlayMode = Boolean(!photoMode && overlay);
+  const overlayMode = Boolean(!photoMode && !multiMode && overlay);
   return `
     <aside class="inspector ${state.mobileInspectorOpen ? "is-mobile-open" : ""}">
       <div class="inspector-header">
-        <h2>${photoMode ? "Photo settings" : overlayMode && state.croppingOverlayId === overlay.id ? "Crop" : overlayMode ? "Overlay" : text ? "Text settings" : "Text"}</h2>
-        ${((text && !photoMode && !overlayMode) || overlayMode) ? `<button class="icon-button" type="button" data-action="${overlayMode ? "delete-overlay" : "delete-text"}" aria-label="${overlayMode ? "Delete overlay" : "Delete text"}">${icon("trash")}</button>` : ""}
+        <h2>${photoMode ? "Photo settings" : multiMode ? `${selectionCount} layers selected` : overlayMode && state.croppingOverlayId === overlay.id ? "Crop" : overlayMode ? "Overlay" : text ? "Text settings" : "Text"}</h2>
+        ${multiMode ? `<button class="icon-button" type="button" data-action="delete-selection" aria-label="Delete selected layers">${icon("trash")}</button>` : ((text && !photoMode && !overlayMode) || overlayMode) ? `<button class="icon-button" type="button" data-action="${overlayMode ? "delete-overlay" : "delete-text"}" aria-label="${overlayMode ? "Delete overlay" : "Delete text"}">${icon("trash")}</button>` : ""}
       </div>
       ${photoMode ? `
         <div class="inspector-body">
@@ -677,6 +750,11 @@ function renderInspector() {
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
           <div class="tip"><strong>Move it</strong><span>Drag the photo inside the 9:16 frame. Zoom in until the crop looks right.</span></div>
+        </div>
+      ` : multiMode ? `
+        <div class="inspector-body">
+          <div class="tip"><strong>Move together</strong><span>Drag any selected layer to move the whole selection. Press Delete to remove them together.</span></div>
+          <div class="tip"><strong>Change selection</strong><span>Hold Cmd (Ctrl on Windows) while clicking layers, or drag across the canvas to select an area.</span></div>
         </div>
       ` : overlayMode && state.croppingOverlayId === overlay.id ? `
         <div class="inspector-body">
@@ -835,6 +913,7 @@ function bindEditorEvents() {
   app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
   app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
   app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
+  app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
   app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
   app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
   app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
@@ -864,26 +943,21 @@ function bindEditorEvents() {
 
   const workspace = app.querySelector(".workspace");
   workspace?.addEventListener("pointerdown", (event) => {
-    if (event.target === workspace || event.target.classList.contains("workspace-inner") || event.target.classList.contains("layer-stack")) {
-      const wasCropping = Boolean(state.croppingOverlayId);
-      clearLayerSelection();
-      if (wasCropping) renderEditor();
-      else refreshSelection();
+    if (state.photoAdjustMode || event.target.closest(".text-box, .overlay-box, .workspace-tools")) return;
+    if (!event.target.closest(".workspace-inner")) return;
+    if (state.croppingOverlayId) {
+      finishCrop();
+      return;
     }
+    beginMarqueeSelection(event);
   });
 
   const stage = app.querySelector(".stage");
   stage?.addEventListener("pointerdown", (event) => {
     if (state.photoAdjustMode) {
       if (event.target.closest(".text-box") || event.target.closest(".overlay-box")) return;
+      event.stopPropagation();
       beginImageDrag(event, stage);
-      return;
-    }
-    if (!event.target.closest(".text-box") && !event.target.closest(".overlay-box")) {
-      const wasCropping = Boolean(state.croppingOverlayId);
-      clearLayerSelection();
-      if (wasCropping) renderEditor();
-      else refreshSelection();
     }
   });
 
@@ -1003,22 +1077,90 @@ function bindInspectorControls() {
 }
 
 function refreshSelection() {
-  app.querySelectorAll(".text-box").forEach((box) => {
-    box.classList.toggle("is-selected", box.dataset.textId === state.selectedTextId);
-  });
-  app.querySelectorAll(".overlay-box").forEach((box) => {
-    box.classList.toggle("is-selected", box.dataset.overlayId === state.selectedOverlayId);
-  });
+  updateSelectionOutlines();
   const currentInspector = app.querySelector(".inspector");
   if (currentInspector) {
     currentInspector.outerHTML = renderInspector();
     app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
     app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
     app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
+    app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
     app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
     app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
     bindInspectorControls();
   }
+}
+
+function updateSelectionOutlines() {
+  app.querySelectorAll(".text-box").forEach((box) => {
+    const selected = isLayerSelected("text", box.dataset.textId);
+    box.classList.toggle("is-selected", selected);
+    box.setAttribute("aria-selected", String(selected));
+  });
+  app.querySelectorAll(".overlay-box").forEach((box) => {
+    const selected = isLayerSelected("overlay", box.dataset.overlayId);
+    box.classList.toggle("is-selected", selected);
+    box.setAttribute("aria-selected", String(selected));
+  });
+  app.querySelector(".stage-frame")?.classList.toggle("has-multi-selection", selectedLayers().length > 1);
+}
+
+function beginMarqueeSelection(event) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const surface = app.querySelector(".workspace-inner");
+  if (!surface) return;
+  const additive = event.metaKey || event.ctrlKey;
+  const baseKeys = additive ? [...selectedLayerKeys()] : [];
+  const basePrimary = additive && selectedLayerKeys().length ? selectedLayerKeys().at(-1) : null;
+  setLayerSelection(baseKeys, basePrimary);
+  updateSelectionOutlines();
+
+  const marquee = document.createElement("div");
+  marquee.className = "selection-marquee";
+  marquee.setAttribute("aria-hidden", "true");
+  surface.appendChild(marquee);
+  const surfaceRect = surface.getBoundingClientRect();
+  const start = { x: event.clientX, y: event.clientY };
+  let moved = false;
+  try { surface.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+
+  const move = (moveEvent) => {
+    const left = Math.min(start.x, moveEvent.clientX);
+    const top = Math.min(start.y, moveEvent.clientY);
+    const right = Math.max(start.x, moveEvent.clientX);
+    const bottom = Math.max(start.y, moveEvent.clientY);
+    moved ||= Math.hypot(moveEvent.clientX - start.x, moveEvent.clientY - start.y) > 3;
+    marquee.classList.toggle("is-visible", moved);
+    marquee.style.left = `${left - surfaceRect.left}px`;
+    marquee.style.top = `${top - surfaceRect.top}px`;
+    marquee.style.width = `${right - left}px`;
+    marquee.style.height = `${bottom - top}px`;
+    if (!moved) return;
+
+    const hitKeys = [...app.querySelectorAll(".text-box, .overlay-box")].flatMap((box) => {
+      const rect = box.getBoundingClientRect();
+      const intersects = rect.right >= left && rect.left <= right && rect.bottom >= top && rect.top <= bottom;
+      if (!intersects) return [];
+      return [box.matches(".text-box")
+        ? layerKey("text", box.dataset.textId)
+        : layerKey("overlay", box.dataset.overlayId)];
+    });
+    const keys = [...new Set([...baseKeys, ...hitKeys])];
+    setLayerSelection(keys, hitKeys.at(-1) || basePrimary);
+    updateSelectionOutlines();
+  };
+  const end = () => {
+    marquee.remove();
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    if (!moved) setLayerSelection(baseKeys, basePrimary);
+    refreshSelection();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
 }
 
 function sizeStage() {
@@ -1242,9 +1384,8 @@ function addText() {
     z: nextLayerZ(slide),
   };
   state.photoAdjustMode = false;
-  state.selectedOverlayId = null;
   slide.texts.push(text);
-  state.selectedTextId = text.id;
+  selectOnlyLayer("text", text.id);
   state.mobileInspectorOpen = true;
   scheduleSave();
   renderEditor();
@@ -1252,13 +1393,8 @@ function addText() {
 }
 
 function deleteSelectedText() {
-  const slide = activeSlide();
-  if (!slide || !state.selectedTextId) return;
-  recordHistory();
-  slide.texts = slide.texts.filter((text) => text.id !== state.selectedTextId);
-  state.selectedTextId = null;
-  scheduleSave();
-  renderEditor();
+  if (!state.selectedTextId) return;
+  deleteSelectedLayers();
 }
 
 async function deleteActiveSlide() {
@@ -1415,8 +1551,7 @@ function addOverlayFromAsset(assetId, point, { render = true } = {}) {
   }
   slide.overlays.push(overlay);
   state.photoAdjustMode = false;
-  state.selectedTextId = null;
-  state.selectedOverlayId = overlay.id;
+  selectOnlyLayer("overlay", overlay.id);
   state.mobileInspectorOpen = true;
   if (render) {
     scheduleSave();
@@ -1487,20 +1622,42 @@ function deleteProjectAsset(assetId) {
   project.slides.forEach((slide) => {
     slide.overlays = (slide.overlays || []).filter((overlay) => overlay.assetId !== assetId);
   });
-  if (state.selectedOverlayId && !selectedOverlay()) state.selectedOverlayId = null;
+  setLayerSelection(selectedLayerKeys());
   scheduleSave();
   renderEditor();
 }
 
 function deleteSelectedOverlay() {
+  if (!state.selectedOverlayId) return;
+  deleteSelectedLayers();
+}
+
+function deleteSelectedLayers() {
   const slide = activeSlide();
-  if (!slide || !state.selectedOverlayId) return;
+  const keys = new Set(selectedLayerKeys());
+  if (!slide || !keys.size) return;
   recordHistory();
   exitCropMode({ apply: false });
-  slide.overlays = (slide.overlays || []).filter((overlay) => overlay.id !== state.selectedOverlayId);
-  state.selectedOverlayId = null;
+  slide.texts = slide.texts.filter((text) => !keys.has(layerKey("text", text.id)));
+  slide.overlays = (slide.overlays || []).filter((overlay) => !keys.has(layerKey("overlay", overlay.id)));
+  setLayerSelection([]);
   scheduleSave();
   renderEditor();
+}
+
+function prepareLayerPointerSelection(event, kind, id) {
+  const key = layerKey(kind, id);
+  if ((event.metaKey || event.ctrlKey) && event.button === 0) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleLayerSelection(kind, id);
+    refreshSelection();
+    return false;
+  }
+  if (isLayerSelected(kind, id)) setLayerSelection(selectedLayerKeys(), key);
+  else selectOnlyLayer(kind, id);
+  refreshSelection();
+  return event.button !== 2;
 }
 
 function bindOverlayBox(box) {
@@ -1509,10 +1666,7 @@ function bindOverlayBox(box) {
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
     const rotate = event.target.closest("[data-rotate]");
     const cropHandle = event.target.closest("[data-crop]")?.dataset.crop;
-    state.selectedOverlayId = box.dataset.overlayId;
-    state.selectedTextId = null;
-    refreshSelection();
-    if (event.button === 2) return;
+    if (!prepareLayerPointerSelection(event, "overlay", box.dataset.overlayId)) return;
     if (state.croppingOverlayId && state.croppingOverlayId !== box.dataset.overlayId) {
       finishCrop();
       return;
@@ -1532,7 +1686,7 @@ function bindOverlayBox(box) {
   box.addEventListener("keydown", (event) => {
     if (event.key === "Backspace" || event.key === "Delete") {
       event.preventDefault();
-      deleteSelectedOverlay();
+      deleteSelectedLayers();
     }
   });
 }
@@ -1667,32 +1821,7 @@ function beginCropMove(event, box) {
 }
 
 function beginOverlayDrag(event, box) {
-  event.preventDefault();
-  const overlay = selectedOverlay();
-  if (!overlay) return;
-  recordHistory();
-  box.classList.add("is-dragging");
-  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
-  const start = { clientX: event.clientX, clientY: event.clientY, x: overlay.x, y: overlay.y };
-  const move = (moveEvent) => {
-    overlay.x = start.x + (moveEvent.clientX - start.clientX) / state.stageWidth;
-    overlay.y = start.y + (moveEvent.clientY - start.clientY) / state.stageHeight;
-    updateOverlayBox(overlay);
-    const trash = app.querySelector("[data-asset-trash]");
-    trash?.classList.toggle("is-hot", pointerOverTrash(moveEvent));
-    scheduleSave();
-  };
-  const end = (endEvent) => {
-    box.classList.remove("is-dragging");
-    app.querySelector("[data-asset-trash]")?.classList.remove("is-hot");
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", end);
-    window.removeEventListener("pointercancel", end);
-    if (pointerOverTrash(endEvent || event)) deleteSelectedOverlay();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end);
-  window.addEventListener("pointercancel", end);
+  beginLayerDrag(event, box, "overlay");
 }
 
 function pointerOverTrash(event) {
@@ -1805,11 +1934,8 @@ function bindTextBox(box) {
   const content = box.querySelector(".text-content");
   box.addEventListener("pointerdown", (event) => {
     if (box.classList.contains("is-editing")) return;
-    const corner = event.target.dataset.corner;
-    state.selectedTextId = box.dataset.textId;
-    state.selectedOverlayId = null;
-    refreshSelection();
-    if (event.button === 2) return;
+    const corner = event.target.closest("[data-corner]")?.dataset.corner;
+    if (!prepareLayerPointerSelection(event, "text", box.dataset.textId)) return;
     if (state.croppingOverlayId) {
       finishCrop();
       return;
@@ -1823,8 +1949,9 @@ function bindTextBox(box) {
   });
   box.addEventListener("dblclick", (event) => {
     event.stopPropagation();
-    const text = selectedText() || activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
-    state.selectedTextId = box.dataset.textId;
+    const text = activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
+    selectOnlyLayer("text", box.dataset.textId);
+    refreshSelection();
     box.classList.add("is-editing", "is-selected");
     content.replaceChildren();
     content.textContent = text?.text || "";
@@ -1854,7 +1981,7 @@ function bindTextBox(box) {
   box.addEventListener("keydown", (event) => {
     if ((event.key === "Backspace" || event.key === "Delete") && !box.classList.contains("is-editing")) {
       event.preventDefault();
-      deleteSelectedText();
+      deleteSelectedLayers();
     }
     if (event.key === "Enter" && !box.classList.contains("is-editing")) {
       event.preventDefault();
@@ -1864,24 +1991,58 @@ function bindTextBox(box) {
 }
 
 function beginDrag(event, box) {
+  beginLayerDrag(event, box, "text");
+}
+
+function beginLayerDrag(event, box, draggedKind) {
   event.preventDefault();
-  const text = selectedText();
-  if (!text) return;
+  const layers = selectedLayers();
+  if (!layers.length) return;
   recordHistory();
-  box.classList.add("is-dragging");
+  const draggingBoxes = layers.flatMap(({ kind, item }) => {
+    const selector = kind === "text"
+      ? `.text-box[data-text-id="${item.id}"]`
+      : `.overlay-box[data-overlay-id="${item.id}"]`;
+    const element = app.querySelector(selector);
+    if (element) element.classList.add("is-dragging");
+    return element ? [element] : [];
+  });
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
-  const start = { clientX: event.clientX, clientY: event.clientY, x: text.x, y: text.y };
+  const start = {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    layers: layers.map((entry) => ({ ...entry, x: entry.item.x, y: entry.item.y })),
+  };
   const move = (moveEvent) => {
-    text.x = clamp(start.x + (moveEvent.clientX - start.clientX) / state.stageWidth, 0, 1 - text.width);
-    text.y = clamp(start.y + (moveEvent.clientY - start.clientY) / state.stageHeight, 0, 1 - text.height);
-    updateTextBox(text);
+    let dx = (moveEvent.clientX - start.clientX) / state.stageWidth;
+    let dy = (moveEvent.clientY - start.clientY) / state.stageHeight;
+    const textStarts = start.layers.filter((entry) => entry.kind === "text");
+    if (textStarts.length) {
+      const minDx = Math.max(...textStarts.map((entry) => -entry.x));
+      const maxDx = Math.min(...textStarts.map((entry) => 1 - entry.item.width - entry.x));
+      const minDy = Math.max(...textStarts.map((entry) => -entry.y));
+      const maxDy = Math.min(...textStarts.map((entry) => 1 - entry.item.height - entry.y));
+      dx = clamp(dx, minDx, maxDx);
+      dy = clamp(dy, minDy, maxDy);
+    }
+    start.layers.forEach((entry) => {
+      entry.item.x = entry.x + dx;
+      entry.item.y = entry.y + dy;
+      if (entry.kind === "text") updateTextBox(entry.item);
+      else updateOverlayBox(entry.item);
+    });
+    if (draggedKind === "overlay") {
+      app.querySelector("[data-asset-trash]")?.classList.toggle("is-hot", pointerOverTrash(moveEvent));
+    }
     scheduleSave();
   };
-  const end = () => {
-    box.classList.remove("is-dragging");
+  const end = (endEvent) => {
+    draggingBoxes.forEach((element) => element.classList.remove("is-dragging"));
+    app.querySelector("[data-asset-trash]")?.classList.remove("is-hot");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", end);
     window.removeEventListener("pointercancel", end);
+    if (draggedKind === "overlay" && pointerOverTrash(endEvent || event)) deleteSelectedLayers();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", end);
@@ -2410,12 +2571,9 @@ async function init() {
       return;
     }
     if ((event.key === "Backspace" || event.key === "Delete") && !isEditingTextTarget(event.target)) {
-      if (state.selectedOverlayId) {
+      if (selectedLayerKeys().length) {
         event.preventDefault();
-        deleteSelectedOverlay();
-      } else if (state.selectedTextId) {
-        event.preventDefault();
-        deleteSelectedText();
+        deleteSelectedLayers();
       }
     }
   });
