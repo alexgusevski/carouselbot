@@ -1042,10 +1042,15 @@ function bindEditorEvents() {
     if (output) output.textContent = `${Math.round(slide.imageScale * 100)}%`;
     scheduleSave();
   }, { passive: false });
-  stage?.addEventListener("dblclick", (event) => {
-    if (event.target.closest(".text-box") || event.target.closest(".overlay-box") || state.croppingOverlayId) return;
-    event.preventDefault();
+  workspace?.addEventListener("dblclick", (event) => {
+    if (!stage || event.button !== 0 || event.target.closest(".text-box, .overlay-box") || state.croppingOverlayId) return;
     const rect = stage.getBoundingClientRect();
+    const isInsideStage = event.clientX >= rect.left
+      && event.clientX <= rect.right
+      && event.clientY >= rect.top
+      && event.clientY <= rect.bottom;
+    if (!isInsideStage) return;
+    event.preventDefault();
     addText({
       x: (event.clientX - rect.left) / rect.width,
       y: (event.clientY - rect.top) / rect.height,
