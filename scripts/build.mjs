@@ -1,4 +1,5 @@
-import { copyFile, cp, mkdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,8 +9,19 @@ const output = join(root, "dist");
 await rm(output, { recursive: true, force: true });
 await mkdir(join(output, "assets"), { recursive: true });
 
+const [indexHtml, appSource, styleSource] = await Promise.all([
+  readFile(join(root, "index.html"), "utf8"),
+  readFile(join(root, "app.js"), "utf8"),
+  readFile(join(root, "styles.css"), "utf8"),
+]);
+const assetVersion = createHash("sha256")
+  .update(appSource)
+  .update(styleSource)
+  .digest("hex")
+  .slice(0, 12);
+
 await Promise.all([
-  copyFile(join(root, "index.html"), join(output, "index.html")),
+  writeFile(join(output, "index.html"), indexHtml.replaceAll("?v=dev", `?v=${assetVersion}`)),
   copyFile(join(root, "404.html"), join(output, "404.html")),
   copyFile(join(root, "app.js"), join(output, "app.js")),
   copyFile(join(root, "styles.css"), join(output, "styles.css")),
