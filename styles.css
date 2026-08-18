@@ -126,6 +126,13 @@ button,
   height: 18px;
 }
 
+.airdrop-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
 .app-header {
   display: flex;
   height: 72px;
@@ -1056,6 +1063,15 @@ button,
   max-width: none;
 }
 
+.overlay-image-clip--outside img {
+  filter: grayscale(1) saturate(0) brightness(1.08) contrast(0.82);
+  opacity: 0.72;
+}
+
+.overlay-image-clip--inside {
+  z-index: 1;
+}
+
 .overlay-box.is-cropping {
   overflow: hidden;
   cursor: default;
@@ -1173,7 +1189,7 @@ button,
   color: #fff;
   font-family: "TikTok Sans", sans-serif;
   font-weight: 760;
-  line-height: 1.05;
+  line-height: 1.12;
   text-align: center;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1201,16 +1217,35 @@ button,
 }
 
 .text-box[data-style="outline"] .text-content {
-  -webkit-text-stroke: var(--outline-width, 4px) #111;
+  -webkit-text-stroke: 0.22em #111;
   paint-order: stroke fill;
-  text-shadow: 0 0.025em 0.04em rgba(0, 0, 0, 0.24);
+  text-shadow: 0 0.03em 0.05em rgba(0, 0, 0, 0.22);
 }
 
 .text-box[data-style="boxed"] .text-content {
-  padding: 0.08em 0.25em 0.1em;
-  border-radius: 0.14em;
+  color: #111;
+  background: transparent;
+  padding: 0;
+}
+
+.text-box[data-style="boxed"][data-box-shape="lines"] .text-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.08em;
+}
+
+.text-box[data-style="boxed"][data-box-shape="lines"] .text-line {
+  display: block;
+  padding: 0.1em 0.28em 0.12em;
+  border-radius: 0.28em;
   color: #111;
   background: #fff;
+}
+
+.text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
+  color: #fff;
+  background: #111;
 }
 
 .text-box[data-style="boxed"][data-box-shape="full"] {

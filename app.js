@@ -5,6 +5,7 @@ const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 const DEFAULT_OUTLINE_WIDTH = 14;
+const OUTLINE_RATIO = 0.22;
 
 const state = {
   projects: [],
@@ -24,6 +25,65 @@ const state = {
   croppingOverlayId: null,
   pasteBusy: false,
 };
+
+const history = {
+  past: [],
+  future: [],
+  applying: false,
+};
+
+function cloneProject(project) {
+  return {
+    ...project,
+    assets: (project.assets || []).map((asset) => ({ ...asset })),
+    slides: (project.slides || []).map((slide) => ({
+      ...slide,
+      texts: (slide.texts || []).map((text) => ({ ...text })),
+      overlays: (slide.overlays || []).map((overlay) => ({ ...overlay })),
+    })),
+  };
+}
+
+function recordHistory() {
+  const project = activeProject();
+  if (!project || history.applying) return;
+  history.past.push(cloneProject(project));
+  if (history.past.length > 30) history.past.shift();
+  history.future = [];
+}
+
+function applyHistorySnapshot(snapshot) {
+  const index = state.projects.findIndex((project) => project.id === snapshot.id);
+  if (index < 0) return;
+  history.applying = true;
+  state.projects[index] = cloneProject(snapshot);
+  state.activeProjectId = snapshot.id;
+  if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
+    state.activeSlideId = state.projects[index].slides[0]?.id || null;
+  }
+  if (state.selectedOverlayId && !selectedOverlay()) state.selectedOverlayId = null;
+  if (state.selectedTextId && !selectedText()) state.selectedTextId = null;
+  state.croppingOverlayId = null;
+  renderEditor();
+  putProject(state.projects[index]).catch((error) => console.error(error));
+  history.applying = false;
+}
+
+function undo() {
+  if (!history.past.length || isEditingTextTarget(document.activeElement)) return;
+  const project = activeProject();
+  if (!project) return;
+  history.future.push(cloneProject(project));
+  applyHistorySnapshot(history.past.pop());
+}
+
+function redo() {
+  if (!history.future.length || isEditingTextTarget(document.activeElement)) return;
+  const project = activeProject();
+  if (!project) return;
+  history.past.push(cloneProject(project));
+  applyHistorySnapshot(history.future.pop());
+}
 
 const app = document.querySelector("#app");
 
@@ -115,23 +175,25 @@ function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), { ful
   return { width, height };
 }
 
-function overlayPositionLimits(metrics) {
-  const minVisible = 0.06;
+function overlayStageInset(overlay, asset = projectAsset(overlay.assetId)) {
+  const metrics = getOverlayMetrics(overlay, asset);
+  if (!metrics.width || !metrics.height) return { top: 0, right: 0, bottom: 0, left: 0 };
   return {
-    minX: minVisible - metrics.width,
-    maxX: 1 - minVisible,
-    minY: minVisible - metrics.height,
-    maxY: 1 - minVisible,
+    top: Math.max(0, -overlay.y / metrics.height),
+    right: Math.max(0, (overlay.x + metrics.width - 1) / metrics.width),
+    bottom: Math.max(0, (overlay.y + metrics.height - 1) / metrics.height),
+    left: Math.max(0, -overlay.x / metrics.width),
   };
+}
+
+function overlayClipCss(overlay, asset) {
+  const inset = overlayStageInset(overlay, asset);
+  return `inset(${inset.top * 100}% ${inset.right * 100}% ${inset.bottom * 100}% ${inset.left * 100}%)`;
 }
 
 function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
   if (!asset) return overlay;
-  overlay.width = clamp(Number(overlay.width) || 0.34, 0.04, 1.6);
-  const metrics = getOverlayMetrics(overlay, asset);
-  const limits = overlayPositionLimits(metrics);
-  overlay.x = clamp(overlay.x, limits.minX, limits.maxX);
-  overlay.y = clamp(overlay.y, limits.minY, limits.maxY);
+  overlay.width = clamp(Number(overlay.width) || 0.34, 0.04, 2.4);
   overlay.rotation = ((Number(overlay.rotation) || 0) % 360 + 360) % 360;
   return overlay;
 }
@@ -155,6 +217,7 @@ function nextLayerZ(slide) {
 }
 
 function moveLayer(kind, id, action) {
+  recordHistory();
   const slide = activeSlide();
   if (!slide) return;
   const items = slideItems(slide);
@@ -233,6 +296,7 @@ function showLayerMenu(event, kind, id) {
 }
 
 function beginCrop(overlayId) {
+  recordHistory();
   const overlay = (activeSlide()?.overlays || []).find((item) => item.id === overlayId);
   const asset = overlay ? projectAsset(overlay.assetId) : null;
   if (!overlay || !asset) return;
@@ -311,6 +375,7 @@ function icon(name) {
   const icons = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    airdrop: '<img class="airdrop-icon" src="assets/airdrop.svg" alt="" />',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
@@ -339,6 +404,9 @@ function renderHeader({ editor = false } = {}) {
       <div class="header-actions">
         ${editor ? `
           <button class="icon-button mobile-edit-button" type="button" data-action="toggle-inspector" aria-label="Toggle text controls">${icon("edit")}</button>
+          <button class="button button--quiet" type="button" data-action="share" ${activeSlide() ? "" : "disabled"}>
+            ${icon("airdrop")} <span>AirDrop</span>
+          </button>
           <button class="button button--primary" type="button" data-action="export" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>Download PNG</span>
           </button>
@@ -538,7 +606,8 @@ function renderOverlayBox(overlay) {
       tabindex="0"
       aria-label="Photo overlay: ${escapeHtml(asset.name)}"
     >
-      <div class="overlay-image-clip"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
+      <div class="overlay-image-clip overlay-image-clip--outside"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
+      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${cropping ? "none" : overlayClipCss(overlay, asset)}"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
       ${cropping ? `
         <div class="crop-rect" style="left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.w * 100}%;height:${crop.h * 100}%;">
           <span class="crop-handle" data-crop="nw"></span>
@@ -563,7 +632,6 @@ function renderOverlayBox(overlay) {
 
 function renderTextBox(text) {
   const selected = text.id === state.selectedTextId;
-  const outlineWidth = text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH;
   const background = text.background || "white";
   const backgroundShape = text.backgroundShape || "lines";
   return `
@@ -573,7 +641,7 @@ function renderTextBox(text) {
       data-style="${text.style}"
       data-background="${background}"
       data-box-shape="${backgroundShape}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;--outline-width:${outlineWidth * (state.stageWidth / DESIGN_WIDTH)}px;"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -655,15 +723,6 @@ function renderInspector() {
               <input id="font-size-number" class="number-input" type="number" min="20" max="180" step="1" value="${Math.round(text.size)}" aria-label="Font size in pixels" />
             </div>
           </div>
-          ${text.style === "outline" ? `
-            <div class="control-group">
-              <label class="control-label" for="outline-width">Outline <output id="outline-output">${Math.round(text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH)} px</output></label>
-              <div class="range-wrap">
-                <input id="outline-width" type="range" min="2" max="18" step="1" value="${text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH}" />
-                <input id="outline-width-number" class="number-input" type="number" min="2" max="18" step="1" value="${Math.round(text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH)}" aria-label="Outline thickness in pixels" />
-              </div>
-            </div>
-          ` : ""}
           ${text.style === "boxed" ? `
             <div class="control-group">
               <div class="control-label">Background</div>
@@ -777,6 +836,7 @@ function bindEditorEvents() {
   app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
   app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
   app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
+  app.querySelector('[data-action="share"]')?.addEventListener("click", shareActiveSlide);
   app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
     state.mobileInspectorOpen = !state.mobileInspectorOpen;
     app.querySelector(".inspector")?.classList.toggle("is-mobile-open", state.mobileInspectorOpen);
@@ -845,6 +905,7 @@ function bindInspectorControls() {
     button.addEventListener("click", () => {
       const text = selectedText();
       if (!text) return;
+      recordHistory();
       text.style = button.dataset.textStyle;
       scheduleSave();
       refreshSelection();
@@ -867,29 +928,16 @@ function bindInspectorControls() {
     ensureTextFits(text);
     scheduleSave();
   };
+  range?.addEventListener("pointerdown", recordHistory);
   range?.addEventListener("input", () => setSize(range.value));
+  number?.addEventListener("pointerdown", recordHistory);
   number?.addEventListener("input", () => setSize(number.value));
-
-  const outlineRange = app.querySelector("#outline-width");
-  const outlineNumber = app.querySelector("#outline-width-number");
-  const setOutlineWidth = (value) => {
-    const text = selectedText();
-    if (!text) return;
-    text.outlineWidth = Math.max(2, Math.min(18, Number(value) || DEFAULT_OUTLINE_WIDTH));
-    if (outlineRange) outlineRange.value = text.outlineWidth;
-    if (outlineNumber) outlineNumber.value = Math.round(text.outlineWidth);
-    const output = app.querySelector("#outline-output");
-    if (output) output.textContent = `${Math.round(text.outlineWidth)} px`;
-    updateTextBox(text);
-    scheduleSave();
-  };
-  outlineRange?.addEventListener("input", () => setOutlineWidth(outlineRange.value));
-  outlineNumber?.addEventListener("input", () => setOutlineWidth(outlineNumber.value));
 
   app.querySelectorAll("[data-background-tone]").forEach((button) => {
     button.addEventListener("click", () => {
       const text = selectedText();
       if (!text) return;
+      recordHistory();
       text.background = button.dataset.backgroundTone;
       app.querySelectorAll("[data-background-tone]").forEach((item) => item.classList.toggle("is-active", item === button));
       updateTextBox(text);
@@ -901,6 +949,7 @@ function bindInspectorControls() {
     button.addEventListener("click", () => {
       const text = selectedText();
       if (!text) return;
+      recordHistory();
       text.backgroundShape = button.dataset.backgroundShape;
       app.querySelectorAll("[data-background-shape]").forEach((item) => item.classList.toggle("is-active", item === button));
       updateTextBox(text);
@@ -910,6 +959,7 @@ function bindInspectorControls() {
   });
 
   const photoZoom = app.querySelector("#photo-zoom");
+  photoZoom?.addEventListener("pointerdown", recordHistory);
   photoZoom?.addEventListener("input", () => {
     const slide = activeSlide();
     if (!slide) return;
@@ -1041,10 +1091,30 @@ function updateTextBox(text) {
   box.dataset.style = text.style;
   box.dataset.background = text.background || "white";
   box.dataset.boxShape = text.backgroundShape || "lines";
-  box.style.setProperty("--outline-width", `${(text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH) * (state.stageWidth / DESIGN_WIDTH)}px`);
   const content = box.querySelector(".text-content");
   content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-  if (!box.classList.contains("is-editing")) content.textContent = text.text;
+  if (!box.classList.contains("is-editing")) paintTextContent(text, content, box);
+}
+
+const measureCanvas = typeof document === "undefined" ? null : document.createElement("canvas");
+
+function paintTextContent(text, content, box) {
+  const perLine = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  if (!perLine) {
+    content.textContent = text.text;
+    return;
+  }
+  const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
+  const context = measureCanvas.getContext("2d");
+  context.font = `760 ${fontSize}px "TikTok Sans"`;
+  const maxWidth = Math.max(1, (box?.clientWidth || state.stageWidth * text.width) - fontSize * 0.56);
+  const lines = wrapText(context, text.text, maxWidth);
+  content.replaceChildren(...lines.map((line) => {
+    const span = document.createElement("span");
+    span.className = "text-line";
+    span.textContent = line || "\u00a0";
+    return span;
+  }));
 }
 
 function updateOverlayBox(overlay) {
@@ -1059,8 +1129,8 @@ function updateOverlayBox(overlay) {
   box.style.width = `${metrics.width * 100}%`;
   box.style.height = `${metrics.height * 100}%`;
   box.style.transform = `rotate(${overlay.rotation || 0}deg)`;
-  const image = box.querySelector("img");
-  if (image) {
+  const images = box.querySelectorAll(".overlay-image-clip img");
+  images.forEach((image) => {
     if (cropping) {
       image.style.width = "100%";
       image.style.height = "100%";
@@ -1072,7 +1142,9 @@ function updateOverlayBox(overlay) {
       image.style.left = `${(-crop.x / crop.w) * 100}%`;
       image.style.top = `${(-crop.y / crop.h) * 100}%`;
     }
-  }
+  });
+  const inside = box.querySelector(".overlay-image-clip--inside");
+  if (inside) inside.style.clipPath = cropping ? "none" : overlayClipCss(overlay, asset);
   const cropRect = box.querySelector(".crop-rect");
   if (cropRect) {
     cropRect.style.left = `${crop.x * 100}%`;
@@ -1105,6 +1177,7 @@ function ensureTextFits(text) {
 function addText() {
   const slide = activeSlide();
   if (!slide) return;
+  recordHistory();
   const text = {
     id: uid(),
     text: "Your text",
@@ -1132,6 +1205,7 @@ function addText() {
 function deleteSelectedText() {
   const slide = activeSlide();
   if (!slide || !state.selectedTextId) return;
+  recordHistory();
   slide.texts = slide.texts.filter((text) => text.id !== state.selectedTextId);
   state.selectedTextId = null;
   scheduleSave();
@@ -1144,6 +1218,7 @@ async function deleteActiveSlide() {
   if (!project || !slide) return;
   const confirmed = window.confirm(`Remove “${slide.name}” from this project?`);
   if (!confirmed) return;
+  recordHistory();
   const index = project.slides.findIndex((item) => item.id === slide.id);
   project.slides.splice(index, 1);
   state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
@@ -1272,6 +1347,7 @@ function addOverlayFromAsset(assetId, point, { render = true } = {}) {
     toast(slide ? "That asset is missing." : "Open a photo first, then drop the asset on it.");
     return null;
   }
+  recordHistory();
   if (!slide.overlays) slide.overlays = [];
   const overlay = constrainOverlay({
     id: uid(),
@@ -1306,6 +1382,7 @@ async function handleAssetUpload(event) {
   if (!files.length) return;
   const project = activeProject();
   if (!project) return;
+  recordHistory();
   if (!project.assets) project.assets = [];
   const button = app.querySelector('[data-action="upload-assets"]');
   if (button) {
@@ -1356,6 +1433,7 @@ function deleteProjectAsset(assetId) {
     ? `Remove “${asset.name}” from this project? It will also disappear from ${usedSlides} ${usedSlides === 1 ? "photo" : "photos"}.`
     : `Remove “${asset.name}” from uploaded assets?`);
   if (!confirmed) return;
+  recordHistory();
   project.assets = project.assets.filter((item) => item.id !== assetId);
   project.slides.forEach((slide) => {
     slide.overlays = (slide.overlays || []).filter((overlay) => overlay.assetId !== assetId);
@@ -1368,6 +1446,7 @@ function deleteProjectAsset(assetId) {
 function deleteSelectedOverlay() {
   const slide = activeSlide();
   if (!slide || !state.selectedOverlayId) return;
+  recordHistory();
   exitCropMode({ apply: false });
   slide.overlays = (slide.overlays || []).filter((overlay) => overlay.id !== state.selectedOverlayId);
   state.selectedOverlayId = null;
@@ -1476,6 +1555,7 @@ function beginCropResize(event, box, handle) {
   const overlay = selectedOverlay();
   const asset = overlay ? projectAsset(overlay.assetId) : null;
   if (!overlay || !asset) return;
+  recordHistory();
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const startCrop = overlayCrop(overlay);
   const startPoint = localPointOnOverlay(event, overlay, asset);
@@ -1541,29 +1621,36 @@ function beginOverlayDrag(event, box) {
   event.preventDefault();
   const overlay = selectedOverlay();
   if (!overlay) return;
+  recordHistory();
   box.classList.add("is-dragging");
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const start = { clientX: event.clientX, clientY: event.clientY, x: overlay.x, y: overlay.y };
   const move = (moveEvent) => {
-    const asset = projectAsset(overlay.assetId);
-    const metrics = getOverlayMetrics(overlay, asset);
     overlay.x = start.x + (moveEvent.clientX - start.clientX) / state.stageWidth;
     overlay.y = start.y + (moveEvent.clientY - start.clientY) / state.stageHeight;
-    const limits = overlayPositionLimits(metrics);
-    overlay.x = clamp(overlay.x, limits.minX, limits.maxX);
-    overlay.y = clamp(overlay.y, limits.minY, limits.maxY);
     updateOverlayBox(overlay);
+    const trash = app.querySelector("[data-asset-trash]");
+    trash?.classList.toggle("is-hot", pointerOverTrash(moveEvent));
     scheduleSave();
   };
-  const end = () => {
+  const end = (endEvent) => {
     box.classList.remove("is-dragging");
+    app.querySelector("[data-asset-trash]")?.classList.remove("is-hot");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", end);
     window.removeEventListener("pointercancel", end);
+    if (pointerOverTrash(endEvent || event)) deleteSelectedOverlay();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", end);
   window.addEventListener("pointercancel", end);
+}
+
+function pointerOverTrash(event) {
+  const trash = app.querySelector("[data-asset-trash]");
+  if (!trash || !event) return false;
+  const rect = trash.getBoundingClientRect();
+  return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
 }
 
 function beginOverlayResize(event, box, corner) {
@@ -1572,6 +1659,7 @@ function beginOverlayResize(event, box, corner) {
   const overlay = selectedOverlay();
   const asset = overlay ? projectAsset(overlay.assetId) : null;
   if (!overlay || !asset) return;
+  recordHistory();
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const startMetrics = getOverlayMetrics(overlay, asset);
   const start = {
@@ -1631,6 +1719,7 @@ function beginOverlayRotate(event, box) {
   const overlay = selectedOverlay();
   const asset = overlay ? projectAsset(overlay.assetId) : null;
   if (!overlay || !asset) return;
+  recordHistory();
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const metrics = getOverlayMetrics(overlay, asset);
   const stage = app.querySelector(".stage");
@@ -1724,6 +1813,7 @@ function beginDrag(event, box) {
   event.preventDefault();
   const text = selectedText();
   if (!text) return;
+  recordHistory();
   box.classList.add("is-dragging");
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const start = { clientX: event.clientX, clientY: event.clientY, x: text.x, y: text.y };
@@ -1749,6 +1839,7 @@ function beginResize(event, box, corner) {
   event.stopPropagation();
   const text = selectedText();
   if (!text) return;
+  recordHistory();
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const start = {
     clientX: event.clientX,
@@ -1799,6 +1890,7 @@ function beginImageDrag(event, stage) {
   event.preventDefault();
   const slide = activeSlide();
   if (!slide) return;
+  recordHistory();
   stage.classList.add("is-moving-photo");
   try { stage.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const start = {
@@ -1834,6 +1926,7 @@ async function handleUpload(event) {
   if (!files.length) return;
   const project = activeProject();
   if (!project) return;
+  recordHistory();
   const button = app.querySelector('[data-action="upload"]');
   if (button) {
     button.disabled = true;
@@ -1900,6 +1993,25 @@ function loadImage(src) {
   });
 }
 
+async function renderSlideBlob() {
+  const slide = activeSlide();
+  if (!slide) return null;
+  await document.fonts.load('700 64px "TikTok Sans"');
+  const image = await loadImage(slide.imageData);
+  const canvas = document.createElement("canvas");
+  canvas.width = OUTPUT_WIDTH;
+  canvas.height = OUTPUT_HEIGHT;
+  const context = canvas.getContext("2d");
+  const imageLayout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
+  context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
+  await drawSlideLayers(context, slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
+}
+
+function slideExportName() {
+  return `${safeFilename(activeProject().name)}-${safeFilename(activeSlide().name)}.png`;
+}
+
 async function exportActiveSlide() {
   const slide = activeSlide();
   if (!slide) return;
@@ -1910,21 +2022,12 @@ async function exportActiveSlide() {
     exportButton.textContent = "Rendering…";
   }
   try {
-    await document.fonts.load('700 64px "TikTok Sans"');
-    const image = await loadImage(slide.imageData);
-    const canvas = document.createElement("canvas");
-    canvas.width = OUTPUT_WIDTH;
-    canvas.height = OUTPUT_HEIGHT;
-    const context = canvas.getContext("2d");
-    const imageLayout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
-    context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-    await drawSlideLayers(context, slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
+    const blob = await renderSlideBlob();
     if (!blob) throw new Error("Could not create PNG");
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${safeFilename(activeProject().name)}-${safeFilename(slide.name)}.png`;
+    anchor.download = slideExportName();
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     toast("PNG downloaded at full resolution");
@@ -1935,6 +2038,43 @@ async function exportActiveSlide() {
     if (exportButton) {
       exportButton.disabled = false;
       exportButton.innerHTML = oldLabel;
+    }
+  }
+}
+
+async function shareActiveSlide() {
+  const slide = activeSlide();
+  if (!slide) return;
+  const shareButton = app.querySelector('[data-action="share"]');
+  const oldLabel = shareButton?.innerHTML;
+  if (shareButton) {
+    shareButton.disabled = true;
+    shareButton.textContent = "Preparing…";
+  }
+  try {
+    const blob = await renderSlideBlob();
+    if (!blob) throw new Error("Could not create PNG");
+    const file = new File([blob], slideExportName(), { type: "image/png" });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: activeProject().name });
+    } else if (navigator.share) {
+      const url = URL.createObjectURL(blob);
+      try {
+        await navigator.share({ title: activeProject().name, url });
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } else {
+      toast("Sharing isn’t available in this browser. Use Download PNG.");
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    console.error(error);
+    toast("Couldn’t open the share menu.");
+  } finally {
+    if (shareButton) {
+      shareButton.disabled = false;
+      shareButton.innerHTML = oldLabel;
     }
   }
 }
@@ -1974,8 +2114,8 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const height = text.height * imageHeight;
   const exportScale = imageWidth / DESIGN_WIDTH;
   const fontSize = text.size * exportScale;
-  const lineHeight = fontSize * 1.05;
-  const horizontalPadding = text.style === "boxed" ? fontSize * 0.26 : fontSize * 0.16;
+  const lineHeight = text.style === "boxed" && text.backgroundShape !== "full" ? fontSize * 1.28 : fontSize * 1.12;
+  const horizontalPadding = text.style === "boxed" ? fontSize * 0.28 : fontSize * 0.16;
   const verticalPadding = fontSize * 0.1;
   context.save();
   context.font = `760 ${fontSize}px "TikTok Sans"`;
@@ -1998,7 +2138,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
     const lineY = startY + index * lineHeight;
     if (text.style === "boxed" && text.backgroundShape !== "full" && line) {
       const backgroundWidth = Math.min(width, context.measureText(line).width + horizontalPadding * 2);
-      const backgroundHeight = lineHeight * 0.98;
+      const backgroundHeight = lineHeight * 0.84;
       context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
       roundedRect(
         context,
@@ -2006,13 +2146,13 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
         lineY - backgroundHeight / 2,
         backgroundWidth,
         backgroundHeight,
-        Math.min(fontSize * 0.14, backgroundHeight / 2),
+        Math.min(fontSize * 0.22, backgroundHeight / 2),
       );
       context.fill();
     }
     if (text.style === "outline") {
       context.strokeStyle = "#111111";
-      context.lineWidth = (text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH) * exportScale;
+      context.lineWidth = fontSize * OUTLINE_RATIO;
       context.strokeText(line, x + width / 2, lineY);
       context.fillStyle = "#ffffff";
       context.fillText(line, x + width / 2, lineY);
@@ -2129,6 +2269,7 @@ async function handleClipboardPaste(event) {
   if (!files.length) return;
   event.preventDefault();
   state.pasteBusy = true;
+  recordHistory();
   const assets = [];
   try {
     for (const [index, file] of files.entries()) {
@@ -2196,6 +2337,29 @@ async function init() {
   }, true);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeLayerMenu();
+    const meta = event.metaKey || event.ctrlKey;
+    if (meta && event.key.toLowerCase() === "z") {
+      if (isEditingTextTarget(event.target)) return;
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (meta && event.key.toLowerCase() === "y") {
+      if (isEditingTextTarget(event.target)) return;
+      event.preventDefault();
+      redo();
+      return;
+    }
+    if ((event.key === "Backspace" || event.key === "Delete") && !isEditingTextTarget(event.target)) {
+      if (state.selectedOverlayId) {
+        event.preventDefault();
+        deleteSelectedOverlay();
+      } else if (state.selectedTextId) {
+        event.preventDefault();
+        deleteSelectedText();
+      }
+    }
   });
 }
 
