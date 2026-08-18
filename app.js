@@ -2503,13 +2503,13 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
       const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.72;
       const descent = metrics.actualBoundingBoxDescent || fontSize * 0.22;
       const backgroundWidth = pillWidths[index];
-      const backgroundHeight = ascent + descent + padY * 2;
+      const backgroundHeight = ascent + descent + padY * 2 + 1;
       const radius = Math.min(fontSize * 0.22, backgroundHeight / 2);
       context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
       roundedRect(
         context,
         x + (width - backgroundWidth) / 2,
-        lineY - ascent - padY,
+        lineY - ascent - padY - 0.5,
         backgroundWidth,
         backgroundHeight,
         lineCornerRadii(pillWidths, index, radius),

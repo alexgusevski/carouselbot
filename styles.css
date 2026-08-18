@@ -1325,16 +1325,18 @@ button,
   justify-content: center;
   box-sizing: border-box;
   height: 1.28em;
-  margin: -0.08em 0;
+  margin: -0.1em 0;
   padding: 0.04em 0.28em 0.14em;
   color: #111;
   background: #fff;
+  box-shadow: 0 1px 0 #fff, 0 -1px 0 #fff;
   line-height: 1;
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
   color: #fff;
   background: #111;
+  box-shadow: 0 1px 0 #111, 0 -1px 0 #111;
 }
 
 .text-box[data-style="boxed"][data-box-shape="full"] {
