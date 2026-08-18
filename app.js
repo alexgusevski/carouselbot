@@ -21,6 +21,7 @@ const state = {
   photoAdjustMode: false,
   showTikTokOverlay: false,
   draggingAssetId: null,
+  croppingOverlayId: null,
 };
 
 const app = document.querySelector("#app");
@@ -94,8 +95,20 @@ function projectAsset(assetId) {
   return activeProject()?.assets?.find((asset) => asset.id === assetId) || null;
 }
 
-function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId)) {
-  const aspect = asset?.width && asset?.height ? asset.height / asset.width : 1;
+function overlayCrop(overlay) {
+  const x = clamp(Number(overlay.cropX) || 0, 0, 0.95);
+  const y = clamp(Number(overlay.cropY) || 0, 0, 0.95);
+  const w = clamp(Number(overlay.cropW) || 1, 0.05, 1 - x);
+  const h = clamp(Number(overlay.cropH) || 1, 0.05, 1 - y);
+  return { x, y, w, h };
+}
+
+function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), { full = false } = {}) {
+  const cropping = !full && state.croppingOverlayId === overlay.id;
+  const crop = full || cropping ? { w: 1, h: 1 } : overlayCrop(overlay);
+  const srcW = (asset?.width || 1) * crop.w;
+  const srcH = (asset?.height || 1) * crop.h;
+  const aspect = srcW ? srcH / srcW : 1;
   const width = overlay.width;
   const height = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
   return { width, height };
@@ -116,6 +129,7 @@ function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
 }
 
 function clearLayerSelection() {
+  exitCropMode();
   state.selectedTextId = null;
   state.selectedOverlayId = null;
 }
@@ -173,6 +187,7 @@ function showLayerMenu(event, kind, id) {
   menu.className = "layer-menu";
   menu.setAttribute("role", "menu");
   const actions = [
+    ...(kind === "overlay" ? [["crop", "crop", "Crop"]] : []),
     ["front", "front", "Bring to front"],
     ["up", "up", "Bring up a level"],
     ["down", "down", "Bring down a level"],
@@ -192,6 +207,8 @@ function showLayerMenu(event, kind, id) {
       if (action === "remove") {
         if (kind === "overlay") deleteSelectedOverlay();
         else deleteSelectedText();
+      } else if (action === "crop") {
+        beginCrop(id);
       } else {
         moveLayer(kind, id, action);
       }
@@ -205,6 +222,47 @@ function showLayerMenu(event, kind, id) {
   const top = clamp(event.clientY, pad, window.innerHeight - height - pad);
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
+}
+
+function beginCrop(overlayId) {
+  const overlay = (activeSlide()?.overlays || []).find((item) => item.id === overlayId);
+  const asset = overlay ? projectAsset(overlay.assetId) : null;
+  if (!overlay || !asset) return;
+  state.photoAdjustMode = false;
+  state.selectedOverlayId = overlay.id;
+  state.selectedTextId = null;
+  const crop = overlayCrop(overlay);
+  if (crop.w < 0.999 || crop.h < 0.999 || crop.x > 0.001 || crop.y > 0.001) {
+    const croppedHeight = getOverlayMetrics(overlay, asset).height;
+    overlay.width /= crop.w;
+    overlay.x -= crop.x * overlay.width;
+    overlay.y -= crop.y * (croppedHeight / crop.h);
+  }
+  state.croppingOverlayId = overlay.id;
+  renderEditor();
+}
+
+function exitCropMode({ apply = true } = {}) {
+  const overlayId = state.croppingOverlayId;
+  if (!overlayId) return false;
+  const overlay = apply ? (activeSlide()?.overlays || []).find((item) => item.id === overlayId) : null;
+  state.croppingOverlayId = null;
+  if (!overlay) return true;
+  const asset = projectAsset(overlay.assetId);
+  const crop = overlayCrop(overlay);
+  const full = getOverlayMetrics(overlay, asset, { full: true });
+  overlay.x += crop.x * full.width;
+  overlay.y += crop.y * full.height;
+  overlay.width *= crop.w;
+  if (asset) constrainOverlay(overlay, asset);
+  return true;
+}
+
+function finishCrop() {
+  if (!state.croppingOverlayId) return;
+  exitCropMode();
+  scheduleSave();
+  renderEditor();
 }
 
 function scheduleSave() {
@@ -446,21 +504,39 @@ function renderOverlayBox(overlay) {
   const asset = projectAsset(overlay.assetId);
   if (!asset) return "";
   const selected = overlay.id === state.selectedOverlayId;
+  const cropping = overlay.id === state.croppingOverlayId;
   const metrics = getOverlayMetrics(overlay, asset);
+  const crop = overlayCrop(overlay);
+  const imageStyle = cropping
+    ? "width:100%;height:100%;left:0;top:0;"
+    : `width:${100 / crop.w}%;height:${100 / crop.h}%;left:${(-crop.x / crop.w) * 100}%;top:${(-crop.y / crop.h) * 100}%;`;
   return `
     <div
-      class="overlay-box ${selected ? "is-selected" : ""}"
+      class="overlay-box ${selected ? "is-selected" : ""} ${cropping ? "is-cropping" : ""}"
       data-overlay-id="${overlay.id}"
       style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${overlay.rotation || 0}deg);"
       tabindex="0"
       aria-label="Photo overlay: ${escapeHtml(asset.name)}"
     >
-      <img src="${asset.imageData}" alt="" draggable="false" />
-      <span class="rotate-handle" data-rotate="true" aria-hidden="true">${icon("rotate")}</span>
-      <span class="resize-handle" data-corner="nw" aria-hidden="true"></span>
-      <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
-      <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
-      <span class="resize-handle" data-corner="se" aria-hidden="true"></span>
+      <div class="overlay-image-clip"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
+      ${cropping ? `
+        <div class="crop-rect" style="left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.w * 100}%;height:${crop.h * 100}%;">
+          <span class="crop-handle" data-crop="nw"></span>
+          <span class="crop-handle" data-crop="n"></span>
+          <span class="crop-handle" data-crop="ne"></span>
+          <span class="crop-handle" data-crop="e"></span>
+          <span class="crop-handle" data-crop="se"></span>
+          <span class="crop-handle" data-crop="s"></span>
+          <span class="crop-handle" data-crop="sw"></span>
+          <span class="crop-handle" data-crop="w"></span>
+        </div>
+      ` : `
+        <span class="rotate-handle" data-rotate="true" aria-hidden="true">${icon("rotate")}</span>
+        <span class="resize-handle" data-corner="nw" aria-hidden="true"></span>
+        <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
+        <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
+        <span class="resize-handle" data-corner="se" aria-hidden="true"></span>
+      `}
     </div>
   `;
 }
@@ -500,7 +576,7 @@ function renderInspector() {
   return `
     <aside class="inspector ${state.mobileInspectorOpen ? "is-mobile-open" : ""}">
       <div class="inspector-header">
-        <h2>${photoMode ? "Photo settings" : overlayMode ? "Overlay" : text ? "Text settings" : "Text"}</h2>
+        <h2>${photoMode ? "Photo settings" : overlayMode && state.croppingOverlayId === overlay.id ? "Crop" : overlayMode ? "Overlay" : text ? "Text settings" : "Text"}</h2>
         ${((text && !photoMode && !overlayMode) || overlayMode) ? `<button class="icon-button" type="button" data-action="${overlayMode ? "delete-overlay" : "delete-text"}" aria-label="${overlayMode ? "Delete overlay" : "Delete text"}">${icon("trash")}</button>` : ""}
       </div>
       ${photoMode ? `
@@ -511,6 +587,11 @@ function renderInspector() {
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
           <div class="tip"><strong>Move it</strong><span>Drag the photo inside the 9:16 frame. Zoom in until the crop looks right.</span></div>
+        </div>
+      ` : overlayMode && state.croppingOverlayId === overlay.id ? `
+        <div class="inspector-body">
+          <div class="tip"><strong>Crop</strong><span>Drag the handles to choose what stays. Click outside the photo to finish and deselect.</span></div>
+          <button class="button button--primary" type="button" data-action="done-crop">Done</button>
         </div>
       ` : overlayMode ? `
         <div class="inspector-body">
@@ -673,6 +754,7 @@ function bindEditorEvents() {
   app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
   app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
   app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
+  app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
   app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
   app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
   app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
@@ -701,8 +783,10 @@ function bindEditorEvents() {
   const workspace = app.querySelector(".workspace");
   workspace?.addEventListener("pointerdown", (event) => {
     if (event.target === workspace || event.target.classList.contains("workspace-inner") || event.target.classList.contains("layer-stack")) {
+      const wasCropping = Boolean(state.croppingOverlayId);
       clearLayerSelection();
-      refreshSelection();
+      if (wasCropping) renderEditor();
+      else refreshSelection();
     }
   });
 
@@ -714,8 +798,10 @@ function bindEditorEvents() {
       return;
     }
     if (!event.target.closest(".text-box") && !event.target.closest(".overlay-box")) {
+      const wasCropping = Boolean(state.croppingOverlayId);
       clearLayerSelection();
-      refreshSelection();
+      if (wasCropping) renderEditor();
+      else refreshSelection();
     }
   });
 
@@ -857,6 +943,7 @@ function refreshSelection() {
     app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
     app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
     app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
+    app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
     app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
     bindInspectorControls();
   }
@@ -945,11 +1032,34 @@ function updateOverlayBox(overlay) {
   const asset = projectAsset(overlay.assetId);
   if (!box || !asset) return;
   const metrics = getOverlayMetrics(overlay, asset);
+  const crop = overlayCrop(overlay);
+  const cropping = overlay.id === state.croppingOverlayId;
   box.style.left = `${overlay.x * 100}%`;
   box.style.top = `${overlay.y * 100}%`;
   box.style.width = `${metrics.width * 100}%`;
   box.style.height = `${metrics.height * 100}%`;
   box.style.transform = `rotate(${overlay.rotation || 0}deg)`;
+  const image = box.querySelector("img");
+  if (image) {
+    if (cropping) {
+      image.style.width = "100%";
+      image.style.height = "100%";
+      image.style.left = "0";
+      image.style.top = "0";
+    } else {
+      image.style.width = `${100 / crop.w}%`;
+      image.style.height = `${100 / crop.h}%`;
+      image.style.left = `${(-crop.x / crop.w) * 100}%`;
+      image.style.top = `${(-crop.y / crop.h) * 100}%`;
+    }
+  }
+  const cropRect = box.querySelector(".crop-rect");
+  if (cropRect) {
+    cropRect.style.left = `${crop.x * 100}%`;
+    cropRect.style.top = `${crop.y * 100}%`;
+    cropRect.style.width = `${crop.w * 100}%`;
+    cropRect.style.height = `${crop.h * 100}%`;
+  }
 }
 
 function ensureTextFits(text) {
@@ -1180,6 +1290,7 @@ function deleteProjectAsset(assetId) {
 function deleteSelectedOverlay() {
   const slide = activeSlide();
   if (!slide || !state.selectedOverlayId) return;
+  exitCropMode({ apply: false });
   slide.overlays = (slide.overlays || []).filter((overlay) => overlay.id !== state.selectedOverlayId);
   state.selectedOverlayId = null;
   scheduleSave();
@@ -1191,10 +1302,20 @@ function bindOverlayBox(box) {
     if (state.photoAdjustMode) return;
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
     const rotate = event.target.closest("[data-rotate]");
+    const cropHandle = event.target.closest("[data-crop]")?.dataset.crop;
     state.selectedOverlayId = box.dataset.overlayId;
     state.selectedTextId = null;
     refreshSelection();
     if (event.button === 2) return;
+    if (state.croppingOverlayId && state.croppingOverlayId !== box.dataset.overlayId) {
+      finishCrop();
+      return;
+    }
+    if (state.croppingOverlayId === box.dataset.overlayId) {
+      if (cropHandle) beginCropResize(event, box, cropHandle);
+      else if (event.target.closest(".crop-rect")) beginCropMove(event, box);
+      return;
+    }
     if (rotate) beginOverlayRotate(event, box);
     else if (corner) beginOverlayResize(event, box, corner);
     else beginOverlayDrag(event, box);
@@ -1224,6 +1345,118 @@ function rotateDelta(dx, dy, degrees) {
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+}
+
+function localPointOnOverlay(event, overlay, asset) {
+  const stage = app.querySelector(".stage");
+  const rect = stage.getBoundingClientRect();
+  const metrics = getOverlayMetrics(overlay, asset);
+  const centerX = overlay.x + metrics.width / 2;
+  const centerY = overlay.y + metrics.height / 2;
+  const nx = (event.clientX - rect.left) / rect.width;
+  const ny = (event.clientY - rect.top) / rect.height;
+  const local = rotateDelta(nx - centerX, ny - centerY, overlay.rotation || 0);
+  return {
+    x: (centerX + local.x - overlay.x) / metrics.width,
+    y: (centerY + local.y - overlay.y) / metrics.height,
+  };
+}
+
+function applyCropValues(overlay, next) {
+  const min = 0.05;
+  let x = next.x;
+  let y = next.y;
+  let w = next.w;
+  let h = next.h;
+  if (w < min) {
+    if (next.anchorX != null) x = next.anchorX - min;
+    w = min;
+  }
+  if (h < min) {
+    if (next.anchorY != null) y = next.anchorY - min;
+    h = min;
+  }
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > 1) w = 1 - x;
+  if (y + h > 1) h = 1 - y;
+  overlay.cropX = clamp(x, 0, 1 - min);
+  overlay.cropY = clamp(y, 0, 1 - min);
+  overlay.cropW = clamp(w, min, 1 - overlay.cropX);
+  overlay.cropH = clamp(h, min, 1 - overlay.cropY);
+}
+
+function beginCropResize(event, box, handle) {
+  event.preventDefault();
+  event.stopPropagation();
+  const overlay = selectedOverlay();
+  const asset = overlay ? projectAsset(overlay.assetId) : null;
+  if (!overlay || !asset) return;
+  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+  const startCrop = overlayCrop(overlay);
+  const startPoint = localPointOnOverlay(event, overlay, asset);
+  const move = (moveEvent) => {
+    const point = localPointOnOverlay(moveEvent, overlay, asset);
+    const next = { ...startCrop };
+    if (handle.includes("e")) next.w = startCrop.w + (point.x - startPoint.x);
+    if (handle.includes("s")) next.h = startCrop.h + (point.y - startPoint.y);
+    if (handle.includes("w")) {
+      next.x = startCrop.x + (point.x - startPoint.x);
+      next.w = startCrop.w - (point.x - startPoint.x);
+      next.anchorX = startCrop.x + startCrop.w;
+    }
+    if (handle.includes("n")) {
+      next.y = startCrop.y + (point.y - startPoint.y);
+      next.h = startCrop.h - (point.y - startPoint.y);
+      next.anchorY = startCrop.y + startCrop.h;
+    }
+    applyCropValues(overlay, next);
+    updateOverlayBox(overlay);
+    scheduleSave();
+  };
+  const end = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+}
+
+function beginCropMove(event, box) {
+  event.preventDefault();
+  const overlay = selectedOverlay();
+  const asset = overlay ? projectAsset(overlay.assetId) : null;
+  if (!overlay || !asset) return;
+  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+  const startCrop = overlayCrop(overlay);
+  const startPoint = localPointOnOverlay(event, overlay, asset);
+  const move = (moveEvent) => {
+    const point = localPointOnOverlay(moveEvent, overlay, asset);
+    applyCropValues(overlay, {
+      x: startCrop.x + (point.x - startPoint.x),
+      y: startCrop.y + (point.y - startPoint.y),
+      w: startCrop.w,
+      h: startCrop.h,
+    });
+    updateOverlayBox(overlay);
+    scheduleSave();
+  };
+  const end = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
 }
 
 function beginOverlayDrag(event, box) {
@@ -1360,6 +1593,10 @@ function bindTextBox(box) {
     state.selectedOverlayId = null;
     refreshSelection();
     if (event.button === 2) return;
+    if (state.croppingOverlayId) {
+      finishCrop();
+      return;
+    }
     if (corner) beginResize(event, box, corner);
     else beginDrag(event, box);
   });
@@ -1639,10 +1876,15 @@ async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight) {
   const height = metrics.height * canvasHeight;
   const x = overlay.x * canvasWidth;
   const y = overlay.y * canvasHeight;
+  const crop = overlayCrop(overlay);
+  const sx = crop.x * image.naturalWidth;
+  const sy = crop.y * image.naturalHeight;
+  const sw = Math.max(1, crop.w * image.naturalWidth);
+  const sh = Math.max(1, crop.h * image.naturalHeight);
   context.save();
   context.translate(x + width / 2, y + height / 2);
   context.rotate(((overlay.rotation || 0) * Math.PI) / 180);
-  context.drawImage(image, -width / 2, -height / 2, width, height);
+  context.drawImage(image, sx, sy, sw, sh, -width / 2, -height / 2, width, height);
   context.restore();
 }
 

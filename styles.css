@@ -1007,6 +1007,50 @@ button,
   user-select: none;
 }
 
+.overlay-image-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.overlay-image-clip img {
+  position: absolute;
+  max-width: none;
+}
+
+.overlay-box.is-cropping {
+  overflow: hidden;
+  cursor: default;
+}
+
+.crop-rect {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(15, 15, 15, 0.5);
+  cursor: move;
+  touch-action: none;
+}
+
+.crop-handle {
+  position: absolute;
+  z-index: 4;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--ink);
+  background: var(--cyan);
+  box-shadow: 0 0 0 1px #fff;
+}
+
+.crop-handle[data-crop="nw"] { top: -6px; left: -6px; cursor: nwse-resize; }
+.crop-handle[data-crop="ne"] { top: -6px; right: -6px; cursor: nesw-resize; }
+.crop-handle[data-crop="sw"] { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.crop-handle[data-crop="se"] { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.crop-handle[data-crop="n"] { top: -6px; left: 50%; cursor: ns-resize; transform: translateX(-50%); }
+.crop-handle[data-crop="s"] { bottom: -6px; left: 50%; cursor: ns-resize; transform: translateX(-50%); }
+.crop-handle[data-crop="e"] { top: 50%; right: -6px; cursor: ew-resize; transform: translateY(-50%); }
+.crop-handle[data-crop="w"] { top: 50%; left: -6px; cursor: ew-resize; transform: translateY(-50%); }
+
 .overlay-box:hover {
   border-color: rgba(255, 255, 255, 0.52);
 }
