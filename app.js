@@ -11,6 +11,7 @@ const state = {
   activeProjectId: null,
   activeSlideId: null,
   selectedTextId: null,
+  selectedOverlayId: null,
   db: null,
   stageWidth: 0,
   stageHeight: 0,
@@ -19,6 +20,7 @@ const state = {
   mobileInspectorOpen: false,
   photoAdjustMode: false,
   showTikTokOverlay: false,
+  draggingAssetId: null,
 };
 
 const app = document.querySelector("#app");
@@ -84,6 +86,40 @@ function selectedText() {
   return activeSlide()?.texts.find((text) => text.id === state.selectedTextId) || null;
 }
 
+function selectedOverlay() {
+  return activeSlide()?.overlays?.find((overlay) => overlay.id === state.selectedOverlayId) || null;
+}
+
+function projectAsset(assetId) {
+  return activeProject()?.assets?.find((asset) => asset.id === assetId) || null;
+}
+
+function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId)) {
+  const aspect = asset?.width && asset?.height ? asset.height / asset.width : 1;
+  const width = overlay.width;
+  const height = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
+  return { width, height };
+}
+
+function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
+  if (!asset) return overlay;
+  overlay.width = clamp(Number(overlay.width) || 0.34, 0.06, 0.96);
+  let metrics = getOverlayMetrics(overlay, asset);
+  if (metrics.height > 0.94) {
+    overlay.width *= 0.94 / metrics.height;
+    metrics = getOverlayMetrics(overlay, asset);
+  }
+  overlay.x = clamp(overlay.x, 0, Math.max(0, 1 - metrics.width));
+  overlay.y = clamp(overlay.y, 0, Math.max(0, 1 - metrics.height));
+  overlay.rotation = ((Number(overlay.rotation) || 0) % 360 + 360) % 360;
+  return overlay;
+}
+
+function clearLayerSelection() {
+  state.selectedTextId = null;
+  state.selectedOverlayId = null;
+}
+
 function scheduleSave() {
   const project = activeProject();
   if (!project) return;
@@ -124,6 +160,7 @@ function icon(name) {
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
+    rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
   };
   return icons[name] || "";
 }
@@ -156,7 +193,7 @@ function renderHeader({ editor = false } = {}) {
 function renderDashboard() {
   state.activeProjectId = null;
   state.activeSlideId = null;
-  state.selectedTextId = null;
+  clearLayerSelection();
   const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
   app.innerHTML = `
     ${renderHeader()}
@@ -219,25 +256,41 @@ function renderEditor() {
       </section>
       ${renderInspector()}
     </main>
-    <input id="photo-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+    <input id="photo-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
+    <input id="asset-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
   `;
   bindEditorEvents();
   if (activeSlide()) requestAnimationFrame(sizeStage);
 }
 
 function renderSlideRail(project) {
+  const assets = project.assets || [];
   return `
     <aside class="slide-rail">
-      <div class="rail-heading"><h2>Photos</h2><span>${project.slides.length}</span></div>
-      <div class="slide-list">
-        ${project.slides.map((slide, index) => `
-          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" aria-label="Open slide ${index + 1}">
-            <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-            <span class="thumb-image"><img src="${slide.imageData}" alt="" /></span>
-          </button>
-        `).join("")}
+      <div class="slide-rail-section">
+        <div class="rail-heading"><h2>Photos</h2><span>${project.slides.length}</span></div>
+        <div class="slide-list">
+          ${project.slides.map((slide, index) => `
+            <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" aria-label="Open slide ${index + 1}">
+              <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
+              <span class="thumb-image"><img src="${slide.imageData}" alt="" /></span>
+            </button>
+          `).join("")}
+        </div>
+        <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+ Add photos</button></div>
       </div>
-      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+ Add photos</button></div>
+      <div class="slide-rail-section slide-rail-section--assets">
+        <div class="rail-heading"><h2>Assets</h2><span>${assets.length}</span></div>
+        <div class="asset-grid" aria-label="Uploaded assets">
+          ${assets.length ? assets.map((asset) => `
+            <div class="asset-item" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)} — drag onto the photo">
+              <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
+              <button class="asset-remove" type="button" data-action="delete-asset" data-asset-id="${asset.id}" aria-label="Remove ${escapeHtml(asset.name)}">×</button>
+            </div>
+          `).join("") : `<p class="asset-empty">Upload logos, stickers, or extra photos. Reuse them on any slide.</p>`}
+        </div>
+        <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">+ Upload assets</button></div>
+      </div>
     </aside>
   `;
 }
@@ -260,6 +313,9 @@ function renderStage(slide) {
     <div class="stage-wrap">
       <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
         <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
+        <div class="overlay-layer">
+          ${(slide.overlays || []).map(renderOverlayBox).join("")}
+        </div>
         <div class="text-layer">
           ${slide.texts.map(renderTextBox).join("")}
         </div>
@@ -297,6 +353,29 @@ function renderTikTokOverlay() {
   `;
 }
 
+function renderOverlayBox(overlay) {
+  const asset = projectAsset(overlay.assetId);
+  if (!asset) return "";
+  const selected = overlay.id === state.selectedOverlayId;
+  const metrics = getOverlayMetrics(overlay, asset);
+  return `
+    <div
+      class="overlay-box ${selected ? "is-selected" : ""}"
+      data-overlay-id="${overlay.id}"
+      style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${overlay.rotation || 0}deg);"
+      tabindex="0"
+      aria-label="Photo overlay: ${escapeHtml(asset.name)}"
+    >
+      <img src="${asset.imageData}" alt="" draggable="false" />
+      <span class="rotate-handle" data-rotate="true" aria-hidden="true">${icon("rotate")}</span>
+      <span class="resize-handle" data-corner="nw" aria-hidden="true"></span>
+      <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
+      <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
+      <span class="resize-handle" data-corner="se" aria-hidden="true"></span>
+    </div>
+  `;
+}
+
 function renderTextBox(text) {
   const selected = text.id === state.selectedTextId;
   const outlineWidth = text.outlineWidth ?? DEFAULT_OUTLINE_WIDTH;
@@ -324,13 +403,16 @@ function renderTextBox(text) {
 
 function renderInspector() {
   const text = selectedText();
+  const overlay = selectedOverlay();
+  const overlayAsset = overlay ? projectAsset(overlay.assetId) : null;
   const slide = activeSlide();
   const photoMode = Boolean(state.photoAdjustMode && slide);
+  const overlayMode = Boolean(!photoMode && overlay);
   return `
     <aside class="inspector ${state.mobileInspectorOpen ? "is-mobile-open" : ""}">
       <div class="inspector-header">
-        <h2>${photoMode ? "Photo settings" : text ? "Text settings" : "Text"}</h2>
-        ${text && !photoMode ? `<button class="icon-button" type="button" data-action="delete-text" aria-label="Delete text">${icon("trash")}</button>` : ""}
+        <h2>${photoMode ? "Photo settings" : overlayMode ? "Overlay" : text ? "Text settings" : "Text"}</h2>
+        ${((text && !photoMode && !overlayMode) || overlayMode) ? `<button class="icon-button" type="button" data-action="${overlayMode ? "delete-overlay" : "delete-text"}" aria-label="${overlayMode ? "Delete overlay" : "Delete text"}">${icon("trash")}</button>` : ""}
       </div>
       ${photoMode ? `
         <div class="inspector-body">
@@ -340,6 +422,21 @@ function renderInspector() {
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
           <div class="tip"><strong>Move it</strong><span>Drag the photo inside the 9:16 frame. Zoom in until the crop looks right.</span></div>
+        </div>
+      ` : overlayMode ? `
+        <div class="inspector-body">
+          <div class="control-group">
+            <div class="control-label">File</div>
+            <p class="overlay-asset-name">${escapeHtml(overlayAsset?.name || "Photo")}</p>
+          </div>
+          <div class="control-group">
+            <label class="control-label" for="overlay-rotation">Rotate <output id="overlay-rotation-output">${Math.round(overlay.rotation || 0)}°</output></label>
+            <div class="range-wrap">
+              <input id="overlay-rotation" type="range" min="0" max="359" step="1" value="${Math.round(overlay.rotation || 0)}" />
+              <input id="overlay-rotation-number" class="number-input" type="number" min="0" max="359" step="1" value="${Math.round(overlay.rotation || 0)}" aria-label="Rotation in degrees" />
+            </div>
+          </div>
+          <div class="tip"><strong>Place it</strong><span>Drag to move. Corner handles resize and keep the photo’s shape. The top handle rotates it.</span></div>
         </div>
       ` : text ? `
         <div class="inspector-body">
@@ -396,7 +493,7 @@ function renderInspector() {
           <div class="tip"><strong>Tip</strong><span>Drag text to move it. Drag any corner to reshape its box. Double-click the text to type directly.</span></div>
         </div>
       ` : `
-        <div class="inspector-empty"><span>T</span><p>${slide ? "Select a text layer, or add one to this photo." : "Add a photo to start placing text."}</p></div>
+        <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>
       `}
       <div class="bottom-actions">
         <button class="button button--primary" type="button" data-action="add-text" ${activeSlide() ? "" : "disabled"}>+ Add text</button>
@@ -411,7 +508,7 @@ function openProject(projectId) {
   if (!project) return;
   state.activeProjectId = projectId;
   state.activeSlideId = project.slides[0]?.id || null;
-  state.selectedTextId = null;
+  clearLayerSelection();
   state.photoAdjustMode = false;
   renderEditor();
 }
@@ -439,7 +536,7 @@ function showProjectModal() {
   backdrop.querySelector("form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = input.value.trim() || "Untitled slideshow";
-    const project = { id: uid(), name, createdAt: Date.now(), updatedAt: Date.now(), slides: [] };
+    const project = { id: uid(), name, createdAt: Date.now(), updatedAt: Date.now(), slides: [], assets: [] };
     state.projects.push(project);
     await putProject(project);
     backdrop.remove();
@@ -470,11 +567,15 @@ function bindEditorEvents() {
     button.addEventListener("click", () => app.querySelector("#photo-upload").click());
   });
   app.querySelector("#photo-upload")?.addEventListener("change", handleUpload);
+  app.querySelectorAll('[data-action="upload-assets"]').forEach((button) => {
+    button.addEventListener("click", () => app.querySelector("#asset-upload").click());
+  });
+  app.querySelector("#asset-upload")?.addEventListener("change", handleAssetUpload);
 
   app.querySelectorAll("[data-slide-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeSlideId = button.dataset.slideId;
-      state.selectedTextId = null;
+      clearLayerSelection();
       state.photoAdjustMode = false;
       renderEditor();
     });
@@ -482,6 +583,7 @@ function bindEditorEvents() {
 
   app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
   app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
+  app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
   app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
   app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
   app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
@@ -490,7 +592,7 @@ function bindEditorEvents() {
   });
   app.querySelector('[data-action="adjust-photo"]')?.addEventListener("click", () => {
     state.photoAdjustMode = !state.photoAdjustMode;
-    state.selectedTextId = null;
+    clearLayerSelection();
     state.mobileInspectorOpen = true;
     renderEditor();
   });
@@ -502,20 +604,30 @@ function bindEditorEvents() {
   });
 
   app.querySelectorAll(".text-box").forEach(bindTextBox);
+  app.querySelectorAll(".overlay-box").forEach(bindOverlayBox);
+  bindAssetLibrary();
+  bindStageAssetDrop();
   bindInspectorControls();
 
   const workspace = app.querySelector(".workspace");
   workspace?.addEventListener("pointerdown", (event) => {
-    if (event.target === workspace || event.target.classList.contains("workspace-inner") || event.target.classList.contains("text-layer")) {
-      state.selectedTextId = null;
+    if (event.target === workspace || event.target.classList.contains("workspace-inner") || event.target.classList.contains("text-layer") || event.target.classList.contains("overlay-layer")) {
+      clearLayerSelection();
       refreshSelection();
     }
   });
 
   const stage = app.querySelector(".stage");
   stage?.addEventListener("pointerdown", (event) => {
-    if (!state.photoAdjustMode || event.target.closest(".text-box")) return;
-    beginImageDrag(event, stage);
+    if (state.photoAdjustMode) {
+      if (event.target.closest(".text-box") || event.target.closest(".overlay-box")) return;
+      beginImageDrag(event, stage);
+      return;
+    }
+    if (!event.target.closest(".text-box") && !event.target.closest(".overlay-box")) {
+      clearLayerSelection();
+      refreshSelection();
+    }
   });
 
   const resizeObserver = new ResizeObserver(() => sizeStage());
@@ -625,17 +737,37 @@ function bindInspectorControls() {
     if (output) output.textContent = "100%";
     scheduleSave();
   });
+
+  const rotationRange = app.querySelector("#overlay-rotation");
+  const rotationNumber = app.querySelector("#overlay-rotation-number");
+  const setRotation = (value) => {
+    const overlay = selectedOverlay();
+    if (!overlay) return;
+    overlay.rotation = ((Number(value) || 0) % 360 + 360) % 360;
+    if (rotationRange) rotationRange.value = Math.round(overlay.rotation);
+    if (rotationNumber) rotationNumber.value = Math.round(overlay.rotation);
+    const output = app.querySelector("#overlay-rotation-output");
+    if (output) output.textContent = `${Math.round(overlay.rotation)}°`;
+    updateOverlayBox(overlay);
+    scheduleSave();
+  };
+  rotationRange?.addEventListener("input", () => setRotation(rotationRange.value));
+  rotationNumber?.addEventListener("input", () => setRotation(rotationNumber.value));
 }
 
 function refreshSelection() {
   app.querySelectorAll(".text-box").forEach((box) => {
     box.classList.toggle("is-selected", box.dataset.textId === state.selectedTextId);
   });
+  app.querySelectorAll(".overlay-box").forEach((box) => {
+    box.classList.toggle("is-selected", box.dataset.overlayId === state.selectedOverlayId);
+  });
   const currentInspector = app.querySelector(".inspector");
   if (currentInspector) {
     currentInspector.outerHTML = renderInspector();
     app.querySelector('[data-action="add-text"]')?.addEventListener("click", addText);
     app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
+    app.querySelector('[data-action="delete-overlay"]')?.addEventListener("click", deleteSelectedOverlay);
     app.querySelector('[data-action="delete-slide"]')?.addEventListener("click", deleteActiveSlide);
     bindInspectorControls();
   }
@@ -662,6 +794,7 @@ function sizeStage() {
   stage.style.setProperty("--stage-scale", width / OUTPUT_WIDTH);
   updateStageImage(slide);
   activeSlide().texts.forEach(updateTextBox);
+  (activeSlide().overlays || []).forEach(updateOverlayBox);
 }
 
 function getImageLayout(slide, canvasWidth, canvasHeight) {
@@ -718,6 +851,18 @@ function updateTextBox(text) {
   if (!box.classList.contains("is-editing")) content.textContent = text.text;
 }
 
+function updateOverlayBox(overlay) {
+  const box = app.querySelector(`.overlay-box[data-overlay-id="${overlay.id}"]`);
+  const asset = projectAsset(overlay.assetId);
+  if (!box || !asset) return;
+  const metrics = getOverlayMetrics(overlay, asset);
+  box.style.left = `${overlay.x * 100}%`;
+  box.style.top = `${overlay.y * 100}%`;
+  box.style.width = `${metrics.width * 100}%`;
+  box.style.height = `${metrics.height * 100}%`;
+  box.style.transform = `rotate(${overlay.rotation || 0}deg)`;
+}
+
 function ensureTextFits(text) {
   requestAnimationFrame(() => {
     const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
@@ -755,6 +900,7 @@ function addText() {
     backgroundShape: "lines",
   };
   state.photoAdjustMode = false;
+  state.selectedOverlayId = null;
   slide.texts.push(text);
   state.selectedTextId = text.id;
   state.mobileInspectorOpen = true;
@@ -781,9 +927,330 @@ async function deleteActiveSlide() {
   const index = project.slides.findIndex((item) => item.id === slide.id);
   project.slides.splice(index, 1);
   state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
-  state.selectedTextId = null;
+  clearLayerSelection();
   scheduleSave();
   renderEditor();
+}
+
+function bindAssetLibrary() {
+  app.querySelectorAll(".asset-item").forEach((item) => {
+    const assetId = item.dataset.assetId;
+    item.addEventListener("dragstart", (event) => {
+      state.draggingAssetId = assetId;
+      event.dataTransfer.setData("application/x-slide-asset", assetId);
+      event.dataTransfer.setData("text/plain", `asset:${assetId}`);
+      event.dataTransfer.effectAllowed = "copy";
+      item.classList.add("is-dragging");
+    });
+    item.addEventListener("dragend", () => {
+      state.draggingAssetId = null;
+      item.classList.remove("is-dragging");
+    });
+    item.addEventListener("click", (event) => {
+      if (event.target.closest('[data-action="delete-asset"]')) return;
+      addOverlayFromAsset(assetId);
+    });
+  });
+  app.querySelectorAll('[data-action="delete-asset"]').forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteProjectAsset(button.dataset.assetId);
+    });
+  });
+}
+
+function bindStageAssetDrop() {
+  const stage = app.querySelector(".stage");
+  if (!stage) return;
+  const hasAssetPayload = (event) => Boolean(state.draggingAssetId) || [...event.dataTransfer.types].includes("application/x-slide-asset");
+  stage.addEventListener("dragover", (event) => {
+    if (!hasAssetPayload(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    stage.classList.add("is-drop-target");
+  });
+  stage.addEventListener("dragleave", (event) => {
+    if (!stage.contains(event.relatedTarget)) stage.classList.remove("is-drop-target");
+  });
+  stage.addEventListener("drop", (event) => {
+    event.preventDefault();
+    stage.classList.remove("is-drop-target");
+    const payload = event.dataTransfer.getData("application/x-slide-asset") || event.dataTransfer.getData("text/plain");
+    const assetId = payload.startsWith("asset:") ? payload.slice(6) : payload;
+    if (!assetId) return;
+    const rect = stage.getBoundingClientRect();
+    addOverlayFromAsset(assetId, {
+      x: (event.clientX - rect.left) / rect.width,
+      y: (event.clientY - rect.top) / rect.height,
+    });
+  });
+}
+
+function addOverlayFromAsset(assetId, point) {
+  const slide = activeSlide();
+  const asset = projectAsset(assetId);
+  if (!slide || !asset) {
+    toast(slide ? "That asset is missing." : "Open a photo first, then drop the asset on it.");
+    return;
+  }
+  if (!slide.overlays) slide.overlays = [];
+  const overlay = constrainOverlay({
+    id: uid(),
+    assetId: asset.id,
+    x: 0.33,
+    y: 0.36,
+    width: 0.34,
+    rotation: 0,
+  }, asset);
+  const metrics = getOverlayMetrics(overlay, asset);
+  if (point) {
+    overlay.x = point.x - metrics.width / 2;
+    overlay.y = point.y - metrics.height / 2;
+    constrainOverlay(overlay, asset);
+  }
+  slide.overlays.push(overlay);
+  state.photoAdjustMode = false;
+  state.selectedTextId = null;
+  state.selectedOverlayId = overlay.id;
+  state.mobileInspectorOpen = true;
+  scheduleSave();
+  renderEditor();
+}
+
+async function handleAssetUpload(event) {
+  const files = [...event.target.files];
+  event.target.value = "";
+  if (!files.length) return;
+  const project = activeProject();
+  if (!project) return;
+  if (!project.assets) project.assets = [];
+  const button = app.querySelector('[data-action="upload-assets"]');
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Adding…";
+  }
+  let added = 0;
+  try {
+    for (const file of files) {
+      try {
+        if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name)) continue;
+        const imageData = await fileToDataUrl(file);
+        const dimensions = await getImageDimensions(imageData);
+        project.assets.push({
+          id: uid(),
+          name: file.name.replace(/\.[^.]+$/, "") || "Asset",
+          imageData,
+          width: dimensions.width,
+          height: dimensions.height,
+        });
+        added += 1;
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    if (!added) {
+      toast("Those files aren’t usable images.");
+      renderEditor();
+      return;
+    }
+    await putProject(project);
+    toast(`${added} ${added === 1 ? "asset" : "assets"} uploaded`);
+    renderEditor();
+  } catch (error) {
+    console.error(error);
+    toast("One of those files couldn’t be added.");
+    renderEditor();
+  }
+}
+
+function deleteProjectAsset(assetId) {
+  const project = activeProject();
+  if (!project?.assets) return;
+  const asset = project.assets.find((item) => item.id === assetId);
+  if (!asset) return;
+  const usedSlides = project.slides.filter((slide) => (slide.overlays || []).some((overlay) => overlay.assetId === assetId)).length;
+  const confirmed = window.confirm(usedSlides
+    ? `Remove “${asset.name}” from this project? It will also disappear from ${usedSlides} ${usedSlides === 1 ? "photo" : "photos"}.`
+    : `Remove “${asset.name}” from uploaded assets?`);
+  if (!confirmed) return;
+  project.assets = project.assets.filter((item) => item.id !== assetId);
+  project.slides.forEach((slide) => {
+    slide.overlays = (slide.overlays || []).filter((overlay) => overlay.assetId !== assetId);
+  });
+  if (state.selectedOverlayId && !selectedOverlay()) state.selectedOverlayId = null;
+  scheduleSave();
+  renderEditor();
+}
+
+function deleteSelectedOverlay() {
+  const slide = activeSlide();
+  if (!slide || !state.selectedOverlayId) return;
+  slide.overlays = (slide.overlays || []).filter((overlay) => overlay.id !== state.selectedOverlayId);
+  state.selectedOverlayId = null;
+  scheduleSave();
+  renderEditor();
+}
+
+function bindOverlayBox(box) {
+  box.addEventListener("pointerdown", (event) => {
+    if (state.photoAdjustMode) return;
+    const corner = event.target.closest("[data-corner]")?.dataset.corner;
+    const rotate = event.target.closest("[data-rotate]");
+    state.selectedOverlayId = box.dataset.overlayId;
+    state.selectedTextId = null;
+    refreshSelection();
+    if (rotate) beginOverlayRotate(event, box);
+    else if (corner) beginOverlayResize(event, box, corner);
+    else beginOverlayDrag(event, box);
+  });
+  box.addEventListener("keydown", (event) => {
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      deleteSelectedOverlay();
+    }
+  });
+}
+
+function stagePoint(event) {
+  const stage = app.querySelector(".stage");
+  const rect = stage.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) / rect.width,
+    y: (event.clientY - rect.top) / rect.height,
+  };
+}
+
+function rotateDelta(dx, dy, degrees) {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+}
+
+function beginOverlayDrag(event, box) {
+  event.preventDefault();
+  const overlay = selectedOverlay();
+  if (!overlay) return;
+  box.classList.add("is-dragging");
+  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+  const start = { clientX: event.clientX, clientY: event.clientY, x: overlay.x, y: overlay.y };
+  const move = (moveEvent) => {
+    const asset = projectAsset(overlay.assetId);
+    const metrics = getOverlayMetrics(overlay, asset);
+    overlay.x = start.x + (moveEvent.clientX - start.clientX) / state.stageWidth;
+    overlay.y = start.y + (moveEvent.clientY - start.clientY) / state.stageHeight;
+    overlay.x = clamp(overlay.x, 0, Math.max(0, 1 - metrics.width));
+    overlay.y = clamp(overlay.y, 0, Math.max(0, 1 - metrics.height));
+    updateOverlayBox(overlay);
+    scheduleSave();
+  };
+  const end = () => {
+    box.classList.remove("is-dragging");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+}
+
+function beginOverlayResize(event, box, corner) {
+  event.preventDefault();
+  event.stopPropagation();
+  const overlay = selectedOverlay();
+  const asset = overlay ? projectAsset(overlay.assetId) : null;
+  if (!overlay || !asset) return;
+  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+  const startMetrics = getOverlayMetrics(overlay, asset);
+  const start = {
+    width: overlay.width,
+    x: overlay.x,
+    y: overlay.y,
+    height: startMetrics.height,
+    pointer: stagePoint(event),
+  };
+  const anchors = {
+    se: { x: start.x, y: start.y },
+    sw: { x: start.x + start.width, y: start.y },
+    ne: { x: start.x, y: start.y + start.height },
+    nw: { x: start.x + start.width, y: start.y + start.height },
+  };
+  const anchor = anchors[corner];
+  const center = { x: start.x + start.width / 2, y: start.y + start.height / 2 };
+  const toLocal = (point) => {
+    const local = rotateDelta(point.x - center.x, point.y - center.y, overlay.rotation || 0);
+    return { x: center.x + local.x, y: center.y + local.y };
+  };
+  const startLocal = toLocal(start.pointer);
+  const startDistance = Math.hypot(
+    (startLocal.x - anchor.x) * state.stageWidth,
+    (startLocal.y - anchor.y) * state.stageHeight,
+  ) || 1;
+  const move = (moveEvent) => {
+    const local = toLocal(stagePoint(moveEvent));
+    const distance = Math.hypot(
+      (local.x - anchor.x) * state.stageWidth,
+      (local.y - anchor.y) * state.stageHeight,
+    );
+    overlay.width = start.width * (distance / startDistance);
+    constrainOverlay(overlay, asset);
+    const metrics = getOverlayMetrics(overlay, asset);
+    if (corner.includes("w")) overlay.x = anchor.x - metrics.width;
+    else overlay.x = anchor.x;
+    if (corner.includes("n")) overlay.y = anchor.y - metrics.height;
+    else overlay.y = anchor.y;
+    constrainOverlay(overlay, asset);
+    updateOverlayBox(overlay);
+    scheduleSave();
+  };
+  const end = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+}
+
+function beginOverlayRotate(event, box) {
+  event.preventDefault();
+  event.stopPropagation();
+  const overlay = selectedOverlay();
+  const asset = overlay ? projectAsset(overlay.assetId) : null;
+  if (!overlay || !asset) return;
+  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+  const metrics = getOverlayMetrics(overlay, asset);
+  const stage = app.querySelector(".stage");
+  const rect = stage.getBoundingClientRect();
+  const centerX = rect.left + (overlay.x + metrics.width / 2) * rect.width;
+  const centerY = rect.top + (overlay.y + metrics.height / 2) * rect.height;
+  const startAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
+  const startRotation = overlay.rotation || 0;
+  const move = (moveEvent) => {
+    const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
+    let degrees = startRotation + ((angle - startAngle) * 180) / Math.PI;
+    if (moveEvent.shiftKey) degrees = Math.round(degrees / 15) * 15;
+    overlay.rotation = ((degrees % 360) + 360) % 360;
+    updateOverlayBox(overlay);
+    const output = app.querySelector("#overlay-rotation-output");
+    const range = app.querySelector("#overlay-rotation");
+    const number = app.querySelector("#overlay-rotation-number");
+    if (output) output.textContent = `${Math.round(overlay.rotation)}°`;
+    if (range) range.value = Math.round(overlay.rotation);
+    if (number) number.value = Math.round(overlay.rotation);
+    scheduleSave();
+  };
+  const end = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
 }
 
 function bindTextBox(box) {
@@ -792,6 +1259,7 @@ function bindTextBox(box) {
     if (box.classList.contains("is-editing")) return;
     const corner = event.target.dataset.corner;
     state.selectedTextId = box.dataset.textId;
+    state.selectedOverlayId = null;
     refreshSelection();
     if (corner) beginResize(event, box, corner);
     else beginDrag(event, box);
@@ -967,6 +1435,7 @@ async function handleUpload(event) {
         imageX: 0,
         imageY: 0,
         texts: [],
+        overlays: [],
       });
     }
     if (!state.activeSlideId) state.activeSlideId = project.slides[0]?.id || null;
@@ -991,7 +1460,13 @@ function fileToDataUrl(file) {
 function getImageDimensions(src) {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onload = () => {
+      if (!image.naturalWidth || !image.naturalHeight) {
+        reject(new Error("Image has no dimensions"));
+        return;
+      }
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    };
     image.onerror = reject;
     image.src = src;
   });
@@ -1024,6 +1499,7 @@ async function exportActiveSlide() {
     const context = canvas.getContext("2d");
     const imageLayout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
     context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
+    await drawOverlayLayers(context, slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
     slide.texts.forEach((text) => drawTextLayer(context, text, OUTPUT_WIDTH, OUTPUT_HEIGHT));
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
     if (!blob) throw new Error("Could not create PNG");
@@ -1042,6 +1518,25 @@ async function exportActiveSlide() {
       exportButton.disabled = false;
       exportButton.innerHTML = oldLabel;
     }
+  }
+}
+
+async function drawOverlayLayers(context, slide, canvasWidth, canvasHeight) {
+  const overlays = slide.overlays || [];
+  for (const overlay of overlays) {
+    const asset = projectAsset(overlay.assetId);
+    if (!asset) continue;
+    const image = await loadImage(asset.imageData);
+    const metrics = getOverlayMetrics(overlay, asset);
+    const width = metrics.width * canvasWidth;
+    const height = metrics.height * canvasHeight;
+    const x = overlay.x * canvasWidth;
+    const y = overlay.y * canvasHeight;
+    context.save();
+    context.translate(x + width / 2, y + height / 2);
+    context.rotate(((overlay.rotation || 0) * Math.PI) / 180);
+    context.drawImage(image, -width / 2, -height / 2, width, height);
+    context.restore();
   }
 }
 
@@ -1155,16 +1650,20 @@ async function init() {
   try {
     state.db = await openDatabase();
     state.projects = await getAllProjects();
-    state.projects.forEach((project) => project.slides.forEach((slide) => {
-      if (slide.imageScale == null) slide.imageScale = 1;
-      if (slide.imageX == null) slide.imageX = 0;
-      if (slide.imageY == null) slide.imageY = 0;
-      slide.texts.forEach((text) => {
-        if (text.outlineWidth == null) text.outlineWidth = DEFAULT_OUTLINE_WIDTH;
-        if (!text.background) text.background = "white";
-        if (!text.backgroundShape) text.backgroundShape = "full";
+    state.projects.forEach((project) => {
+      if (!Array.isArray(project.assets)) project.assets = [];
+      project.slides.forEach((slide) => {
+        if (slide.imageScale == null) slide.imageScale = 1;
+        if (slide.imageX == null) slide.imageX = 0;
+        if (slide.imageY == null) slide.imageY = 0;
+        if (!Array.isArray(slide.overlays)) slide.overlays = [];
+        slide.texts.forEach((text) => {
+          if (text.outlineWidth == null) text.outlineWidth = DEFAULT_OUTLINE_WIDTH;
+          if (!text.background) text.background = "white";
+          if (!text.backgroundShape) text.backgroundShape = "full";
+        });
       });
-    }));
+    });
   } catch (error) {
     console.error(error);
     state.projects = [];

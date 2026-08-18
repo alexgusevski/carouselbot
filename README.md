@@ -23,8 +23,10 @@ The public site is [slides-editor.pages.dev](https://slides-editor.pages.dev).
 ## What it does
 
 - Creates projects that persist in the browser with IndexedDB
-- Uploads multiple PNG, JPEG, or WebP photos
+- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF photos
 - Crops every photo to TikTok's portrait 9:16 format with drag and zoom controls
+- Keeps a project-wide asset library so extra photos can be reused on any slide
+- Adds photo overlays by dragging an uploaded asset onto the main image, then resizing (aspect ratio locked) or rotating
 - Adds multiline text layers that can be dragged and resized
 - Includes clean text, adjustable outlines, per-line rounded backgrounds, and full-box backgrounds
 - Offers white or black background treatments
