@@ -10,6 +10,16 @@ npm start
 
 Then open [http://localhost:4173](http://localhost:4173).
 
+## Deploy to Cloudflare
+
+This project uses Cloudflare Workers Static Assets. The deployment contains only the browser-ready files in `dist/`; there is no backend Worker invocation.
+
+```bash
+npm run deploy
+```
+
+The public Worker is named `slides-editor` and is served from the account's `workers.dev` domain.
+
 ## What it does
 
 - Creates projects that persist in the browser with IndexedDB

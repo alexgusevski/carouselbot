@@ -4,6 +4,12 @@
   "private": true,
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node server.mjs"
+    "dev": "node server.mjs",
+    "build": "node scripts/build.mjs",
+    "preview:cloudflare": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.123.0"
   }
 }
