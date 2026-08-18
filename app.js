@@ -7,6 +7,10 @@ const OUTPUT_HEIGHT = 1920;
 const DEFAULT_OUTLINE_WIDTH = 14;
 const OUTLINE_RATIO = 0.22;
 
+function textWeight(style) {
+  return style === "plain" ? 500 : 800;
+}
+
 const state = {
   projects: [],
   activeProjectId: null,
@@ -1098,17 +1102,57 @@ function updateTextBox(text) {
 
 const measureCanvas = typeof document === "undefined" ? null : document.createElement("canvas");
 
+function measureFont(text) {
+  const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
+  const weight = textWeight(text.style);
+  const context = measureCanvas.getContext("2d");
+  context.font = `${weight} ${fontSize}px "TikTok Sans"`;
+  return { context, fontSize, weight };
+}
+
+function wrappedLinesForBox(text, box) {
+  const { context, fontSize } = measureFont(text);
+  const pad = text.style === "boxed" ? fontSize * 0.56 : fontSize * 0.28;
+  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - pad);
+  return { lines: wrapText(context, text.text, maxWidth), fontSize };
+}
+
 function paintTextContent(text, content, box) {
+  if (text.style === "outline") {
+    const { lines, fontSize } = wrappedLinesForBox(text, box);
+    const stroke = fontSize * OUTLINE_RATIO;
+    const lineHeight = fontSize * 1.32;
+    content.replaceChildren(...lines.map((line) => {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("class", "outline-line");
+      svg.setAttribute("height", String(lineHeight));
+      svg.setAttribute("width", "100%");
+      const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      node.setAttribute("x", "50%");
+      node.setAttribute("y", "52%");
+      node.setAttribute("text-anchor", "middle");
+      node.setAttribute("dominant-baseline", "middle");
+      node.setAttribute("fill", "#ffffff");
+      node.setAttribute("stroke", "#111111");
+      node.setAttribute("stroke-width", String(stroke));
+      node.setAttribute("stroke-linejoin", "round");
+      node.setAttribute("stroke-linecap", "round");
+      node.setAttribute("paint-order", "stroke fill");
+      node.setAttribute("font-family", "TikTok Sans, sans-serif");
+      node.setAttribute("font-weight", "800");
+      node.setAttribute("font-size", `${fontSize}px`);
+      node.textContent = line || " ";
+      svg.appendChild(node);
+      return svg;
+    }));
+    return;
+  }
   const perLine = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
   if (!perLine) {
     content.textContent = text.text;
     return;
   }
-  const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
-  const context = measureCanvas.getContext("2d");
-  context.font = `760 ${fontSize}px "TikTok Sans"`;
-  const maxWidth = Math.max(1, (box?.clientWidth || state.stageWidth * text.width) - fontSize * 0.56);
-  const lines = wrapText(context, text.text, maxWidth);
+  const { lines } = wrappedLinesForBox(text, box);
   content.replaceChildren(...lines.map((line) => {
     const span = document.createElement("span");
     span.className = "text-line";
@@ -1774,8 +1818,11 @@ function bindTextBox(box) {
   });
   box.addEventListener("dblclick", (event) => {
     event.stopPropagation();
+    const text = selectedText() || activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
     state.selectedTextId = box.dataset.textId;
     box.classList.add("is-editing", "is-selected");
+    content.replaceChildren();
+    content.textContent = text?.text || "";
     content.contentEditable = "true";
     content.focus();
     const selection = window.getSelection();
@@ -1796,6 +1843,8 @@ function bindTextBox(box) {
   content.addEventListener("blur", () => {
     content.contentEditable = "false";
     box.classList.remove("is-editing");
+    const text = selectedText() || activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
+    if (text) updateTextBox(text);
   });
   box.addEventListener("keydown", (event) => {
     if ((event.key === "Backspace" || event.key === "Delete") && !box.classList.contains("is-editing")) {
@@ -1996,7 +2045,10 @@ function loadImage(src) {
 async function renderSlideBlob() {
   const slide = activeSlide();
   if (!slide) return null;
-  await document.fonts.load('700 64px "TikTok Sans"');
+  await Promise.all([
+    document.fonts.load('500 64px "TikTok Sans"'),
+    document.fonts.load('800 64px "TikTok Sans"'),
+  ]);
   const image = await loadImage(slide.imageData);
   const canvas = document.createElement("canvas");
   canvas.width = OUTPUT_WIDTH;
@@ -2118,10 +2170,11 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const horizontalPadding = text.style === "boxed" ? fontSize * 0.28 : fontSize * 0.16;
   const verticalPadding = fontSize * 0.1;
   context.save();
-  context.font = `760 ${fontSize}px "TikTok Sans"`;
+  context.font = `${textWeight(text.style)} ${fontSize}px "TikTok Sans"`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.lineJoin = "round";
+  context.lineCap = "round";
   const lines = wrapText(context, text.text, Math.max(1, width - horizontalPadding * 2));
   const visibleLineCount = Math.max(1, Math.floor((height - verticalPadding * 2) / lineHeight));
   const visibleLines = lines.slice(0, visibleLineCount);

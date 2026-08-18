@@ -1188,12 +1188,16 @@ button,
   overflow: hidden;
   color: #fff;
   font-family: "TikTok Sans", sans-serif;
-  font-weight: 760;
+  font-weight: 800;
   line-height: 1.12;
   text-align: center;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   pointer-events: none;
+}
+
+.text-box[data-style="plain"] .text-content-wrap {
+  font-weight: 500;
 }
 
 .text-content {
@@ -1216,10 +1220,27 @@ button,
   user-select: text;
 }
 
+.text-box[data-style="outline"] .text-content-wrap {
+  overflow: visible;
+}
+
 .text-box[data-style="outline"] .text-content {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: visible;
+}
+
+.text-box[data-style="outline"].is-editing .text-content {
+  display: inline;
   -webkit-text-stroke: 0.22em #111;
   paint-order: stroke fill;
-  text-shadow: 0 0.03em 0.05em rgba(0, 0, 0, 0.22);
+}
+
+.outline-line {
+  display: block;
+  width: 100%;
+  overflow: visible;
 }
 
 .text-box[data-style="boxed"] .text-content {
@@ -1463,16 +1484,18 @@ button,
   color: #fff;
   background: #929089;
   font-size: 20px;
-  font-weight: 760;
+  font-weight: 500;
   line-height: 1;
 }
 
 .style-preview--outline {
+  font-weight: 800;
   -webkit-text-stroke: 2.4px #111;
   paint-order: stroke fill;
 }
 
 .style-preview--boxed {
+  font-weight: 800;
   border-radius: 5px;
   color: #111;
   background: #fff;
