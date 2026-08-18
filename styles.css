@@ -780,7 +780,6 @@ button,
   transform: translateY(-1px);
 }
 
-.canvas-action--primary,
 .canvas-action.is-active {
   color: var(--white);
   background: var(--ink);
@@ -946,12 +945,12 @@ button,
 
 .tt-topbar {
   position: absolute;
-  top: 48px;
+  top: 54px;
   left: 50%;
   display: flex;
-  gap: 30px;
+  gap: 38px;
   align-items: center;
-  font-size: 29px;
+  font-size: 36px;
   transform: translateX(-50%);
 }
 
@@ -966,9 +965,9 @@ button,
 .tt-topbar strong::after {
   position: absolute;
   right: 12px;
-  bottom: -10px;
+  bottom: -12px;
   left: 12px;
-  height: 4px;
+  height: 5px;
   border-radius: 999px;
   background: #fff;
   content: "";
@@ -976,110 +975,110 @@ button,
 
 .tt-search {
   position: absolute;
-  top: -16px;
-  left: calc(100% + 275px);
-  font-size: 50px;
+  top: -20px;
+  left: calc(100% + 250px);
+  font-size: 62px;
   font-weight: 400;
 }
 
 .tt-side-actions {
   position: absolute;
-  right: 18px;
-  bottom: 250px;
+  right: 22px;
+  bottom: 312px;
   display: flex;
-  width: 78px;
+  width: 98px;
   flex-direction: column;
-  gap: 22px;
+  gap: 28px;
   align-items: center;
 }
 
 .tt-avatar {
   position: relative;
-  width: 62px;
-  height: 62px;
-  margin-bottom: 5px;
-  border: 3px solid #fff;
+  width: 78px;
+  height: 78px;
+  margin-bottom: 6px;
+  border: 4px solid #fff;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.32);
 }
 
 .tt-avatar b {
   position: absolute;
-  right: 12px;
-  bottom: -11px;
+  right: 15px;
+  bottom: -14px;
   display: grid;
-  width: 27px;
-  height: 27px;
+  width: 34px;
+  height: 34px;
   place-items: center;
   border-radius: 50%;
   background: #fe2c55;
-  font-size: 24px;
+  font-size: 30px;
   line-height: 1;
   text-shadow: none;
 }
 
 .tt-action {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   justify-items: center;
 }
 
 .tt-action > span {
   display: grid;
-  width: 62px;
-  height: 54px;
+  width: 78px;
+  height: 68px;
   place-items: center;
-  font-size: 53px;
+  font-size: 66px;
   font-weight: 760;
   line-height: 1;
 }
 
 .tt-action small {
-  font-size: 20px;
+  font-size: 25px;
   font-weight: 700;
 }
 
 .tt-bubble {
   position: relative;
-  -webkit-text-stroke: 5px #fff;
+  -webkit-text-stroke: 6px #fff;
   color: transparent;
 }
 
 .tt-bookmark {
-  font-size: 56px !important;
+  font-size: 70px !important;
 }
 
 .tt-share {
-  font-size: 58px !important;
+  font-size: 72px !important;
 }
 
 .tt-disc {
   display: grid;
-  width: 64px;
-  height: 64px;
-  margin-top: 2px;
+  width: 80px;
+  height: 80px;
+  margin-top: 3px;
   place-items: center;
-  border: 14px solid #252525;
+  border: 18px solid #252525;
   border-radius: 50%;
   background: #777;
-  font-size: 19px;
+  font-size: 24px;
 }
 
 .tt-caption {
   position: absolute;
-  right: 126px;
-  bottom: 126px;
-  left: 19px;
-  font-size: 25px;
+  right: 158px;
+  bottom: 158px;
+  left: 24px;
+  font-size: 31px;
   line-height: 1.32;
 }
 
 .tt-caption strong {
-  font-size: 27px;
+  font-size: 34px;
 }
 
 .tt-caption p {
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 .tt-caption span {
@@ -1092,8 +1091,8 @@ button,
   bottom: 0;
   left: 0;
   display: grid;
-  height: 92px;
-  padding: 9px 20px 7px;
+  height: 115px;
+  padding: 11px 25px 9px;
   grid-template-columns: repeat(5, 1fr);
   align-items: center;
   background: rgba(0, 0, 0, 0.86);
@@ -1102,27 +1101,27 @@ button,
 
 .tt-bottom-nav span {
   display: grid;
-  gap: 2px;
+  gap: 3px;
   place-items: center;
-  font-size: 17px;
+  font-size: 21px;
   font-weight: 650;
 }
 
 .tt-bottom-nav b {
-  font-size: 35px;
+  font-size: 44px;
   line-height: 1;
 }
 
 .tt-bottom-nav .tt-create {
   display: grid;
-  width: 72px;
-  height: 44px;
+  width: 90px;
+  height: 55px;
   justify-self: center;
-  border-radius: 10px;
+  border-radius: 12px;
   color: #111;
   background: #fff;
-  box-shadow: -8px 0 0 #25f4ee, 8px 0 0 #fe2c55;
-  font-size: 38px;
+  box-shadow: -10px 0 0 #25f4ee, 10px 0 0 #fe2c55;
+  font-size: 48px;
   line-height: 1;
 }
 

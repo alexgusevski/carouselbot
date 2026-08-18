@@ -681,10 +681,10 @@ function renderStage(slide) {
 function renderCanvasActions() {
   return `
     <div class="canvas-actions" aria-label="Canvas actions">
-      <button class="canvas-action canvas-action--primary" type="button" data-action="add-text" title="Add text">${icon("text")}<span>Add text</span></button>
-      <button class="canvas-action" type="button" data-action="upload-assets" title="Add image">${icon("image")}<span>Add image</span></button>
+      <button class="canvas-action" type="button" data-action="add-text" title="Add text">${icon("text")}<span>Text</span></button>
+      <button class="canvas-action" type="button" data-action="upload-assets" title="Add image">${icon("image")}<span>Image</span></button>
       <button class="canvas-action ${state.photoAdjustMode ? "is-active" : ""}" type="button" data-action="adjust-photo" aria-pressed="${state.photoAdjustMode}" title="Adjust photo">${icon("adjust")}<span>Adjust photo</span></button>
-      <button class="canvas-action ${state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${state.showTikTokOverlay}" title="TikTok UI preview">${icon("preview")}<span>TikTok preview</span></button>
+      <button class="canvas-action ${state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${state.showTikTokOverlay}" title="Toggle TikTok UI overlay">${icon("preview")}<span>Overlay</span></button>
     </div>
   `;
 }
