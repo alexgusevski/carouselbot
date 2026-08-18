@@ -827,6 +827,21 @@ button,
   position: relative;
 }
 
+.stage-image-ghost {
+  position: absolute;
+  z-index: 0;
+  display: none;
+  max-width: none;
+  filter: grayscale(1) saturate(0) brightness(0.92) contrast(0.76);
+  opacity: 0.52;
+  pointer-events: none;
+  user-select: none;
+}
+
+.stage-frame.is-adjusting-photo .stage-image-ghost {
+  display: block;
+}
+
 .selection-marquee {
   position: absolute;
   z-index: 20;
@@ -843,6 +858,7 @@ button,
 
 .stage {
   position: relative;
+  z-index: 1;
   overflow: hidden;
   background: #232323;
   user-select: none;
@@ -866,20 +882,18 @@ button,
   cursor: grabbing;
 }
 
-.stage.is-adjusting .text-layer,
-.stage.is-adjusting .overlay-layer,
-.stage.is-adjusting .layer-stack {
+.stage-frame.is-adjusting-photo .layer-stack {
   opacity: 0.7;
   pointer-events: none;
 }
 
-.stage.is-adjusting .text-box,
-.stage.is-adjusting .overlay-box {
+.stage-frame.is-adjusting-photo .text-box,
+.stage-frame.is-adjusting-photo .overlay-box {
   pointer-events: none;
 }
 
-.stage.is-adjusting .resize-handle,
-.stage.is-adjusting .rotate-handle {
+.stage-frame.is-adjusting-photo .resize-handle,
+.stage-frame.is-adjusting-photo .rotate-handle {
   display: none;
 }
 
@@ -1129,6 +1143,7 @@ button,
 .overlay-layer,
 .layer-stack {
   position: absolute;
+  z-index: 2;
   inset: 0;
   pointer-events: none;
 }
@@ -1166,6 +1181,15 @@ button,
 .overlay-image-clip--outside img {
   filter: grayscale(1) saturate(0) brightness(1.08) contrast(0.82);
   opacity: 0.72;
+}
+
+.overlay-image-clip--outside {
+  display: none;
+}
+
+.overlay-box.is-selected .overlay-image-clip--outside,
+.overlay-box.is-cropping .overlay-image-clip--outside {
+  display: block;
 }
 
 .overlay-image-clip--inside {
@@ -1281,6 +1305,28 @@ button,
   cursor: grabbing;
 }
 
+.text-visual {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.text-visual--outside {
+  display: none;
+  filter: grayscale(1) saturate(0) brightness(0.9) contrast(0.78);
+  opacity: 0.56;
+  pointer-events: none;
+}
+
+.text-box.is-selected .text-visual--outside {
+  display: grid;
+}
+
+.text-visual--inside {
+  z-index: 1;
+}
+
 .text-content-wrap {
   width: 100%;
   max-height: 100%;
@@ -1385,7 +1431,7 @@ button,
   pointer-events: none;
 }
 
-.text-box[data-style="boxed"][data-box-shape="full"] {
+.text-box[data-style="boxed"][data-box-shape="full"] .text-visual {
   border-radius: 0.18em;
   background: #fff;
 }
@@ -1401,7 +1447,7 @@ button,
   background: transparent;
 }
 
-.text-box[data-style="boxed"][data-box-shape="full"][data-background="black"] {
+.text-box[data-style="boxed"][data-box-shape="full"][data-background="black"] .text-visual {
   background: #111;
 }
 

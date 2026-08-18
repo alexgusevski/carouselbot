@@ -323,13 +323,22 @@ function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), { ful
 
 function overlayStageInset(overlay, asset = projectAsset(overlay.assetId)) {
   const metrics = getOverlayMetrics(overlay, asset);
-  if (!metrics.width || !metrics.height) return { top: 0, right: 0, bottom: 0, left: 0 };
+  return layerStageInset(overlay.x, overlay.y, metrics.width, metrics.height);
+}
+
+function layerStageInset(x, y, width, height) {
+  if (!width || !height) return { top: 0, right: 0, bottom: 0, left: 0 };
   return {
-    top: Math.max(0, -overlay.y / metrics.height),
-    right: Math.max(0, (overlay.x + metrics.width - 1) / metrics.width),
-    bottom: Math.max(0, (overlay.y + metrics.height - 1) / metrics.height),
-    left: Math.max(0, -overlay.x / metrics.width),
+    top: Math.max(0, -y / height),
+    right: Math.max(0, (x + width - 1) / width),
+    bottom: Math.max(0, (y + height - 1) / height),
+    left: Math.max(0, -x / width),
   };
+}
+
+function layerClipCss(x, y, width, height) {
+  const inset = layerStageInset(x, y, width, height);
+  return `inset(${inset.top * 100}% ${inset.right * 100}% ${inset.bottom * 100}% ${inset.left * 100}%)`;
 }
 
 function overlayClipCss(overlay, asset) {
@@ -749,7 +758,8 @@ function renderStage(slide) {
   return `
     <div class="canvas-composition">
       <div class="stage-wrap">
-        <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""}">
+        <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
+          <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
           <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
             <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
             ${renderTikTokOverlay()}
@@ -822,7 +832,7 @@ function renderOverlayBox(overlay) {
       aria-label="Photo overlay: ${escapeHtml(asset.name)}"
     >
       <div class="overlay-image-clip overlay-image-clip--outside"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
-      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${cropping ? "none" : overlayClipCss(overlay, asset)}"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
+      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
       ${cropping ? `
         <div class="crop-rect" style="left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.w * 100}%;height:${crop.h * 100}%;">
           <span class="crop-handle" data-crop="nw"></span>
@@ -862,7 +872,12 @@ function renderTextBox(text) {
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
-      <div class="text-content-wrap"><span class="text-content" spellcheck="false">${escapeHtml(text.text)}</span></div>
+      <div class="text-visual text-visual--outside" aria-hidden="true">
+        <div class="text-content-wrap"><span class="text-content" spellcheck="false">${escapeHtml(text.text)}</span></div>
+      </div>
+      <div class="text-visual text-visual--inside" style="clip-path:${layerClipCss(text.x, text.y, text.width, text.height)}">
+        <div class="text-content-wrap"><span class="text-content" spellcheck="false">${escapeHtml(text.text)}</span></div>
+      </div>
       <span class="resize-handle" data-corner="nw" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
@@ -1523,13 +1538,15 @@ function constrainImagePosition(slide) {
 }
 
 function updateStageImage(slide) {
-  const image = app.querySelector(".stage-image");
-  if (!image || !state.stageWidth || !state.stageHeight) return;
+  const images = app.querySelectorAll(".stage-image, .stage-image-ghost");
+  if (!images.length || !state.stageWidth || !state.stageHeight) return;
   const layout = getImageLayout(slide, state.stageWidth, state.stageHeight);
-  image.style.width = `${layout.width}px`;
-  image.style.height = `${layout.height}px`;
-  image.style.left = `${layout.left}px`;
-  image.style.top = `${layout.top}px`;
+  images.forEach((image) => {
+    image.style.width = `${layout.width}px`;
+    image.style.height = `${layout.height}px`;
+    image.style.left = `${layout.left}px`;
+    image.style.top = `${layout.top}px`;
+  });
 }
 
 function zoomPhotoAtPoint(slide, nextScale, clientX, clientY, stage) {
@@ -1564,9 +1581,13 @@ function updateTextBox(text) {
   const color = textColor(text);
   box.style.setProperty("--text-color", color);
   box.style.setProperty("--outline-color", outlineColorFor(color));
-  const content = box.querySelector(".text-content");
-  content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-  if (!box.classList.contains("is-editing")) paintTextContent(text, content, box);
+  const insideVisual = box.querySelector(".text-visual--inside");
+  if (insideVisual) insideVisual.style.clipPath = layerClipCss(text.x, text.y, text.width, text.height);
+  box.querySelectorAll(".text-content").forEach((content) => {
+    content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
+    const editingThisContent = box.classList.contains("is-editing") && content.contentEditable === "true";
+    if (!editingThisContent) paintTextContent(text, content, box);
+  });
 }
 
 const measureCanvas = typeof document === "undefined" ? null : document.createElement("canvas");
@@ -1753,7 +1774,7 @@ function updateOverlayBox(overlay) {
     }
   });
   const inside = box.querySelector(".overlay-image-clip--inside");
-  if (inside) inside.style.clipPath = cropping ? "none" : overlayClipCss(overlay, asset);
+  if (inside) inside.style.clipPath = overlayClipCss(overlay, asset);
   const cropRect = box.querySelector(".crop-rect");
   if (cropRect) {
     cropRect.style.left = `${crop.x * 100}%`;
@@ -1775,10 +1796,8 @@ function ensureTextFits(text) {
     if (neededPixels <= box.clientHeight) return;
 
     const nextHeight = Math.min(1, neededPixels / state.stageHeight);
-    text.y = Math.min(text.y, 1 - nextHeight);
     text.height = nextHeight;
-    box.style.top = `${text.y * 100}%`;
-    box.style.height = `${text.height * 100}%`;
+    updateTextBox(text);
     scheduleSave();
   });
 }
@@ -2439,7 +2458,7 @@ function beginOverlayRotate(event, box) {
 }
 
 function bindTextBox(box) {
-  const content = box.querySelector(".text-content");
+  const content = box.querySelector(".text-visual--inside .text-content");
   box.addEventListener("pointerdown", (event) => {
     if (box.classList.contains("is-editing")) return;
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
@@ -2475,6 +2494,8 @@ function bindTextBox(box) {
     const text = selectedText();
     if (!text) return;
     text.text = content.innerText.replace(/\n$/, "");
+    const outsideContent = box.querySelector(".text-visual--outside .text-content");
+    if (outsideContent) paintTextContent(text, outsideContent, box);
     const textarea = app.querySelector("#text-value");
     if (textarea) textarea.value = text.text;
     ensureTextFits(text);
@@ -2522,17 +2543,8 @@ function beginLayerDrag(event, box, draggedKind) {
     layers: layers.map((entry) => ({ ...entry, x: entry.item.x, y: entry.item.y })),
   };
   const move = (moveEvent) => {
-    let dx = (moveEvent.clientX - start.clientX) / state.stageWidth;
-    let dy = (moveEvent.clientY - start.clientY) / state.stageHeight;
-    const textStarts = start.layers.filter((entry) => entry.kind === "text");
-    if (textStarts.length) {
-      const minDx = Math.max(...textStarts.map((entry) => -entry.x));
-      const maxDx = Math.min(...textStarts.map((entry) => 1 - entry.item.width - entry.x));
-      const minDy = Math.max(...textStarts.map((entry) => -entry.y));
-      const maxDy = Math.min(...textStarts.map((entry) => 1 - entry.item.height - entry.y));
-      dx = clamp(dx, minDx, maxDx);
-      dy = clamp(dy, minDy, maxDy);
-    }
+    const dx = (moveEvent.clientX - start.clientX) / state.stageWidth;
+    const dy = (moveEvent.clientY - start.clientY) / state.stageHeight;
     start.layers.forEach((entry) => {
       entry.item.x = entry.x + dx;
       entry.item.y = entry.y + dy;
@@ -2582,14 +2594,14 @@ function beginResize(event, box, corner) {
     let nextWidth = start.width;
     let nextHeight = start.height;
 
-    if (corner.includes("e")) nextWidth = clamp(start.width + dx, minWidth, 1 - start.x);
-    if (corner.includes("s")) nextHeight = clamp(start.height + dy, minHeight, 1 - start.y);
+    if (corner.includes("e")) nextWidth = Math.max(minWidth, start.width + dx);
+    if (corner.includes("s")) nextHeight = Math.max(minHeight, start.height + dy);
     if (corner.includes("w")) {
-      nextX = clamp(start.x + dx, 0, start.x + start.width - minWidth);
+      nextX = Math.min(start.x + dx, start.x + start.width - minWidth);
       nextWidth = start.width + (start.x - nextX);
     }
     if (corner.includes("n")) {
-      nextY = clamp(start.y + dy, 0, start.y + start.height - minHeight);
+      nextY = Math.min(start.y + dy, start.y + start.height - minHeight);
       nextHeight = start.height + (start.y - nextY);
     }
     text.x = nextX;
