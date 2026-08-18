@@ -928,14 +928,47 @@ button,
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.canvas-zoom-controls {
+  display: inline-flex;
+  overflow: hidden;
+  align-items: center;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  border-radius: 999px;
+  letter-spacing: normal;
+}
+
+.canvas-zoom-button,
+.canvas-zoom-level {
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: rgba(251, 250, 247, 0.94);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.canvas-zoom-button {
+  width: 24px;
 }
 
 .canvas-zoom-level {
-  padding-left: 10px;
-  border-left: 1px solid var(--line);
+  min-width: 42px;
+  border-right: 0;
+  border-left: 0;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+}
+
+.canvas-zoom-button:hover,
+.canvas-zoom-level:hover {
+  background: var(--white);
 }
 
 .tiktok-overlay {

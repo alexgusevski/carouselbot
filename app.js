@@ -803,7 +803,11 @@ function renderStage(slide) {
         </div>
         <span class="stage-dimensions">
           <span>${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
-          <span class="canvas-zoom-level" title="Canvas zoom · Cmd/Ctrl + scroll">${Math.round(state.canvasZoom * 100)}%</span>
+          <span class="canvas-zoom-controls" aria-label="Canvas zoom">
+            <button class="canvas-zoom-button" type="button" data-action="canvas-zoom-out" aria-label="Zoom canvas out">−</button>
+            <button class="canvas-zoom-level" type="button" data-action="canvas-zoom-reset" title="Reset canvas zoom">${Math.round(state.canvasZoom * 100)}%</button>
+            <button class="canvas-zoom-button" type="button" data-action="canvas-zoom-in" aria-label="Zoom canvas in">+</button>
+          </span>
         </span>
       </div>
       ${renderCanvasActions()}
@@ -1176,6 +1180,9 @@ function bindEditorEvents() {
     event.currentTarget.setAttribute("aria-pressed", String(state.showTikTokOverlay));
     app.querySelector(".tiktok-overlay")?.classList.toggle("is-hidden", !state.showTikTokOverlay);
   });
+  app.querySelector('[data-action="canvas-zoom-out"]')?.addEventListener("click", () => setCanvasZoom(state.canvasZoom / 1.2));
+  app.querySelector('[data-action="canvas-zoom-reset"]')?.addEventListener("click", () => setCanvasZoom(1));
+  app.querySelector('[data-action="canvas-zoom-in"]')?.addEventListener("click", () => setCanvasZoom(state.canvasZoom * 1.2));
 
   app.querySelectorAll(".text-box").forEach(bindTextBox);
   app.querySelectorAll(".overlay-box").forEach(bindOverlayBox);
@@ -1213,6 +1220,16 @@ function bindEditorEvents() {
     );
     setCanvasZoom(nextZoom, event.clientX, event.clientY);
   }, { passive: false, capture: true });
+  let gestureStartZoom = state.canvasZoom;
+  editorShell?.addEventListener("gesturestart", (event) => {
+    event.preventDefault();
+    gestureStartZoom = state.canvasZoom;
+  }, { passive: false });
+  editorShell?.addEventListener("gesturechange", (event) => {
+    event.preventDefault();
+    setCanvasZoom(gestureStartZoom * event.scale, event.clientX, event.clientY);
+  }, { passive: false });
+  editorShell?.addEventListener("gestureend", (event) => event.preventDefault(), { passive: false });
   stage?.addEventListener("pointerdown", (event) => {
     if (state.photoAdjustMode) {
       if (event.target.closest(".text-box") || event.target.closest(".overlay-box")) return;
@@ -3448,6 +3465,23 @@ async function init() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeLayerMenu();
     const meta = event.metaKey || event.ctrlKey;
+    if (meta && app.querySelector(".stage")) {
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setCanvasZoom(state.canvasZoom * 1.2);
+        return;
+      }
+      if (event.key === "-") {
+        event.preventDefault();
+        setCanvasZoom(state.canvasZoom / 1.2);
+        return;
+      }
+      if (event.key === "0") {
+        event.preventDefault();
+        setCanvasZoom(1);
+        return;
+      }
+    }
     if (meta && event.key.toLowerCase() === "z") {
       if (isEditingTextTarget(event.target)) return;
       event.preventDefault();
