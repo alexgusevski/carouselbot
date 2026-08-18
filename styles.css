@@ -906,6 +906,7 @@ button,
 }
 
 .stage-frame.is-adjusting-photo .resize-handle,
+.stage-frame.is-adjusting-photo .edge-resize-handle,
 .stage-frame.is-adjusting-photo .rotate-handle {
   display: none;
 }
@@ -1355,6 +1356,18 @@ button,
   pointer-events: none;
 }
 
+.text-box[data-align="left"] .text-content-wrap,
+.text-box[data-align="left"] .text-content,
+.text-box[data-align="left"] .text-line {
+  text-align: left;
+}
+
+.text-box[data-align="right"] .text-content-wrap,
+.text-box[data-align="right"] .text-content,
+.text-box[data-align="right"] .text-line {
+  text-align: right;
+}
+
 .text-content {
   position: relative;
   display: flex;
@@ -1430,6 +1443,14 @@ button,
   line-height: 1.12;
 }
 
+.text-box[data-style="boxed"][data-box-shape="lines"][data-align="left"] .text-line {
+  justify-content: flex-start;
+}
+
+.text-box[data-style="boxed"][data-box-shape="lines"][data-align="right"] .text-line {
+  justify-content: flex-end;
+}
+
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
   color: var(--text-color, #fff);
 }
@@ -1480,11 +1501,50 @@ button,
   box-shadow: 0 0 0 1px #fff;
 }
 
+.edge-resize-handle {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  background: var(--cyan);
+  box-shadow: 0 0 0 1px #fff;
+}
+
+.is-selected .edge-resize-handle {
+  display: block;
+}
+
+.edge-resize-handle[data-edge="n"],
+.edge-resize-handle[data-edge="s"] {
+  left: 50%;
+  width: 18px;
+  height: 8px;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.edge-resize-handle[data-edge="n"] { top: -5px; }
+.edge-resize-handle[data-edge="s"] { bottom: -5px; }
+
+.edge-resize-handle[data-edge="e"],
+.edge-resize-handle[data-edge="w"] {
+  top: 50%;
+  width: 8px;
+  height: 18px;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.edge-resize-handle[data-edge="e"] { right: -5px; }
+.edge-resize-handle[data-edge="w"] { left: -5px; }
+
 .is-selected .resize-handle {
   display: block;
 }
 
 .stage-frame.has-multi-selection .is-selected .resize-handle,
+.stage-frame.has-multi-selection .is-selected .edge-resize-handle,
 .stage-frame.has-multi-selection .is-selected .rotate-handle {
   display: none;
 }
@@ -1835,6 +1895,38 @@ button,
 .color-value-row button:hover {
   color: var(--ink);
   background: #eceae3;
+}
+
+.alignment-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.alignment-option {
+  display: grid;
+  min-height: 42px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--white);
+  cursor: pointer;
+}
+
+.alignment-option:hover,
+.alignment-option.is-active {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.alignment-option.is-active {
+  box-shadow: 2px 2px 0 var(--cyan);
+}
+
+.alignment-option svg {
+  width: 20px;
+  height: 20px;
 }
 
 .tone-options {

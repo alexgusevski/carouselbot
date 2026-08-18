@@ -318,8 +318,13 @@ function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), { ful
   const srcH = (asset?.height || 1) * crop.h;
   const aspect = srcW ? srcH / srcW : 1;
   const width = overlay.width;
-  const height = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
+  const naturalHeight = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
+  const height = Number.isFinite(Number(overlay.height)) ? Number(overlay.height) : naturalHeight;
   return { width, height };
+}
+
+function textAlignment(text) {
+  return ["left", "center", "right"].includes(text?.align) ? text.align : "center";
 }
 
 function overlayStageInset(overlay, asset = projectAsset(overlay.assetId)) {
@@ -350,6 +355,9 @@ function overlayClipCss(overlay, asset) {
 function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
   if (!asset) return overlay;
   overlay.width = clamp(Number(overlay.width) || 0.34, 0.04, 2.4);
+  const crop = overlayCrop(overlay);
+  const naturalHeight = overlay.width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * (((asset.height || 1) * crop.h) / ((asset.width || 1) * crop.w));
+  overlay.height = clamp(Number(overlay.height) || naturalHeight, 0.025, 2.4);
   overlay.rotation = ((Number(overlay.rotation) || 0) % 360 + 360) % 360;
   return overlay;
 }
@@ -532,10 +540,10 @@ function beginCrop(overlayId) {
   selectOnlyLayer("overlay", overlay.id);
   const crop = overlayCrop(overlay);
   if (crop.w < 0.999 || crop.h < 0.999 || crop.x > 0.001 || crop.y > 0.001) {
-    const croppedHeight = getOverlayMetrics(overlay, asset).height;
     overlay.width /= crop.w;
+    overlay.height = getOverlayMetrics(overlay, asset).height / crop.h;
     overlay.x -= crop.x * overlay.width;
-    overlay.y -= crop.y * (croppedHeight / crop.h);
+    overlay.y -= crop.y * overlay.height;
   }
   state.croppingOverlayId = overlay.id;
   renderEditor();
@@ -553,6 +561,7 @@ function exitCropMode({ apply = true } = {}) {
   overlay.x += crop.x * full.width;
   overlay.y += crop.y * full.height;
   overlay.width *= crop.w;
+  overlay.height = full.height * crop.h;
   if (asset) constrainOverlay(overlay, asset);
   return true;
 }
@@ -606,6 +615,9 @@ function icon(name) {
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
+    "align-left": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 10h11M4 14h16M4 18h9"/></svg>',
+    "align-center": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M6.5 10h11M4 14h16M7.5 18h9"/></svg>',
+    "align-right": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M9 10h11M4 14h16M11 18h9"/></svg>',
     front: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 11-5-5-5 5"/><path d="m17 18-5-5-5 5"/></svg>',
     up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
@@ -864,6 +876,10 @@ function renderOverlayBox(overlay) {
         </div>
       ` : `
         <span class="rotate-handle" data-rotate="true" aria-hidden="true">${icon("rotate")}</span>
+        <span class="edge-resize-handle" data-edge="n" aria-hidden="true"></span>
+        <span class="edge-resize-handle" data-edge="e" aria-hidden="true"></span>
+        <span class="edge-resize-handle" data-edge="s" aria-hidden="true"></span>
+        <span class="edge-resize-handle" data-edge="w" aria-hidden="true"></span>
         <span class="resize-handle" data-corner="nw" aria-hidden="true"></span>
         <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
         <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
@@ -886,7 +902,8 @@ function renderTextBox(text) {
       data-style="${text.style}"
       data-background="${background}"
       data-box-shape="${backgroundShape}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;--text-color:${color};--outline-color:${outlineColor};"
+      data-align="${textAlignment(text)}"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -896,6 +913,11 @@ function renderTextBox(text) {
       <div class="text-visual text-visual--inside" style="clip-path:${layerClipCss(text.x, text.y, text.width, text.height)}">
         <div class="text-content-wrap"><span class="text-content" spellcheck="false">${escapeHtml(text.text)}</span></div>
       </div>
+      <span class="rotate-handle" data-rotate="true" aria-hidden="true">${icon("rotate")}</span>
+      <span class="edge-resize-handle" data-edge="n" aria-hidden="true"></span>
+      <span class="edge-resize-handle" data-edge="e" aria-hidden="true"></span>
+      <span class="edge-resize-handle" data-edge="s" aria-hidden="true"></span>
+      <span class="edge-resize-handle" data-edge="w" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="nw" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
@@ -1044,6 +1066,12 @@ function renderInspector() {
               </div>
             </div>
           </div>
+          <div class="control-group">
+            <div class="control-label">Alignment</div>
+            <div class="alignment-options" role="group" aria-label="Text alignment">
+              ${["left", "center", "right"].map((align) => `<button class="alignment-option ${textAlignment(text) === align ? "is-active" : ""}" type="button" data-text-align="${align}" aria-label="Align text ${align}" aria-pressed="${textAlignment(text) === align}">${icon(`align-${align}`)}</button>`).join("")}
+            </div>
+          </div>
           ${text.style === "boxed" ? `
             <div class="control-group">
               <div class="control-label">Background</div>
@@ -1060,6 +1088,7 @@ function renderInspector() {
               </div>
             </div>
           ` : ""}
+          <div class="tip"><strong>Tip</strong><span>Drag an edge to change one dimension, a corner to reshape, or the round handle to rotate. Double-click the text to type directly.</span></div>
         </div>
       ` : `
         <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>
@@ -1245,6 +1274,22 @@ function bindInspectorControls() {
       refreshSelection();
       updateTextBox(text);
       ensureTextFits(text);
+    });
+  });
+
+  app.querySelectorAll("[data-text-align]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const text = selectedText();
+      if (!text) return;
+      recordHistory();
+      text.align = button.dataset.textAlign;
+      app.querySelectorAll("[data-text-align]").forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      updateTextBox(text);
+      scheduleSave();
     });
   });
 
@@ -1573,15 +1618,22 @@ function updateTextBox(text) {
   box.style.top = `${text.y * 100}%`;
   box.style.width = `${text.width * 100}%`;
   box.style.height = `${text.height * 100}%`;
+  box.style.transform = `rotate(${text.rotation || 0}deg)`;
   box.dataset.style = text.style;
   box.dataset.background = text.background || "white";
   box.dataset.boxShape = text.backgroundShape || "lines";
+  box.dataset.align = textAlignment(text);
   const color = textColor(text);
   box.style.setProperty("--text-color", color);
   box.style.setProperty("--outline-color", outlineColorFor(color));
   const insideVisual = box.querySelector(".text-visual--inside");
   if (insideVisual) insideVisual.style.clipPath = layerClipCss(text.x, text.y, text.width, text.height);
+  box.querySelectorAll(".text-content-wrap").forEach((contentWrap) => {
+    contentWrap.style.textAlign = textAlignment(text);
+  });
   box.querySelectorAll(".text-content").forEach((content) => {
+    content.style.textAlign = textAlignment(text);
+    content.style.alignItems = textAlignment(text) === "left" ? "flex-start" : textAlignment(text) === "right" ? "flex-end" : "center";
     content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
     const editingThisContent = box.classList.contains("is-editing") && content.contentEditable === "true";
     if (!editingThisContent) paintTextContent(text, content, box);
@@ -1673,6 +1725,8 @@ function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidt
   const height = (widths.length - 1) * lineHeight + boxHeight;
   const lineCenters = widths.map((_, index) => index * lineHeight + boxHeight / 2);
   const fill = text.background === "black" ? "#111111" : "#ffffff";
+  const align = textAlignment(text);
+  const lineStart = (width) => align === "left" ? 0 : align === "right" ? contentWidth - width : (contentWidth - width) / 2;
   const svg = document.createElementNS(namespace, "svg");
   svg.setAttribute("class", "text-background");
   svg.setAttribute("viewBox", `0 0 ${contentWidth} ${height}`);
@@ -1684,7 +1738,7 @@ function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidt
   widths.forEach((width, index) => {
     const path = document.createElementNS(namespace, "path");
     path.setAttribute("d", roundedRectSvgPath(
-      (contentWidth - width) / 2,
+      lineStart(width),
       index * lineHeight,
       width,
       boxHeight,
@@ -1694,7 +1748,7 @@ function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidt
     svg.appendChild(path);
   });
 
-  lineJunctionCorners(widths, lineCenters, contentWidth / 2, boxHeight, junctionRadius).forEach((corner) => {
+  (align === "center" ? lineJunctionCorners(widths, lineCenters, contentWidth / 2, boxHeight, junctionRadius) : []).forEach((corner) => {
     const path = document.createElementNS(namespace, "path");
     path.setAttribute("d", concaveCornerSvgPath(corner));
     path.setAttribute("fill", fill);
@@ -1720,9 +1774,10 @@ function paintTextContent(text, content, box) {
       svg.setAttribute("height", String(lineHeight));
       svg.setAttribute("width", "100%");
       const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      node.setAttribute("x", "50%");
+      const align = textAlignment(text);
+      node.setAttribute("x", align === "left" ? "0" : align === "right" ? "100%" : "50%");
       node.setAttribute("y", "50%");
-      node.setAttribute("text-anchor", "middle");
+      node.setAttribute("text-anchor", align === "left" ? "start" : align === "right" ? "end" : "middle");
       node.setAttribute("dominant-baseline", "middle");
       node.setAttribute("fill", textColor(text));
       node.setAttribute("stroke", outlineColorFor(textColor(text)));
@@ -1819,6 +1874,8 @@ function addText(point = null, { editDirectly = false } = {}) {
     color: "#FFFFFF",
     background: "white",
     backgroundShape: "lines",
+    align: "center",
+    rotation: 0,
     z: nextLayerZ(slide),
   };
   state.photoAdjustMode = false;
@@ -2189,6 +2246,7 @@ function bindOverlayBox(box) {
   box.addEventListener("pointerdown", (event) => {
     if (state.photoAdjustMode) return;
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
+    const edge = event.target.closest("[data-edge]")?.dataset.edge;
     const rotate = event.target.closest("[data-rotate]");
     const cropHandle = event.target.closest("[data-crop]")?.dataset.crop;
     if (!prepareLayerPointerSelection(event, "overlay", box.dataset.overlayId)) return;
@@ -2203,6 +2261,7 @@ function bindOverlayBox(box) {
     }
     if (rotate) beginOverlayRotate(event, box);
     else if (corner) beginOverlayResize(event, box, corner);
+    else if (edge) beginOverlayResize(event, box, edge, { preserveAspect: false });
     else beginOverlayDrag(event, box);
   });
   box.addEventListener("contextmenu", (event) => {
@@ -2230,6 +2289,71 @@ function rotateDelta(dx, dy, degrees) {
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+}
+
+function pointerDeltaInLayerAxes(event, startEvent, degrees) {
+  const rotated = rotateDelta(event.clientX - startEvent.clientX, event.clientY - startEvent.clientY, degrees);
+  return {
+    x: rotated.x / state.stageWidth,
+    y: rotated.y / state.stageHeight,
+  };
+}
+
+function layerOffsetToStage(dx, dy, degrees) {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const pixelX = dx * state.stageWidth;
+  const pixelY = dy * state.stageHeight;
+  return {
+    x: (pixelX * cos - pixelY * sin) / state.stageWidth,
+    y: (pixelX * sin + pixelY * cos) / state.stageHeight,
+  };
+}
+
+function resizeLayerRect(start, handle, delta, { minWidth, minHeight, maxWidth = Infinity, maxHeight = Infinity, preserveAspect = false } = {}) {
+  let width = start.width;
+  let height = start.height;
+  let centerShiftX = 0;
+  let centerShiftY = 0;
+  if (preserveAspect) {
+    const signX = handle.includes("e") ? 1 : -1;
+    const signY = handle.includes("s") ? 1 : -1;
+    const vectorX = signX * start.width * state.stageWidth;
+    const vectorY = signY * start.height * state.stageHeight;
+    const nextX = vectorX + delta.x * state.stageWidth;
+    const nextY = vectorY + delta.y * state.stageHeight;
+    const projectedScale = (nextX * vectorX + nextY * vectorY) / (vectorX ** 2 + vectorY ** 2 || 1);
+    const scale = clamp(projectedScale, Math.max(minWidth / start.width, minHeight / start.height), Math.min(maxWidth / start.width, maxHeight / start.height));
+    width = start.width * scale;
+    height = start.height * scale;
+    centerShiftX = signX * (width - start.width) / 2;
+    centerShiftY = signY * (height - start.height) / 2;
+  } else {
+    if (handle.includes("e")) {
+      width = clamp(start.width + delta.x, minWidth, maxWidth);
+      centerShiftX = (width - start.width) / 2;
+    }
+    if (handle.includes("w")) {
+      width = clamp(start.width - delta.x, minWidth, maxWidth);
+      centerShiftX = (start.width - width) / 2;
+    }
+    if (handle.includes("s")) {
+      height = clamp(start.height + delta.y, minHeight, maxHeight);
+      centerShiftY = (height - start.height) / 2;
+    }
+    if (handle.includes("n")) {
+      height = clamp(start.height - delta.y, minHeight, maxHeight);
+      centerShiftY = (start.height - height) / 2;
+    }
+  }
+  const stageShift = layerOffsetToStage(centerShiftX, centerShiftY, start.rotation);
+  return {
+    x: start.centerX + stageShift.x - width / 2,
+    y: start.centerY + stageShift.y - height / 2,
+    width,
+    height,
+  };
 }
 
 function localPointOnOverlay(event, overlay, asset) {
@@ -2356,7 +2480,7 @@ function pointerOverTrash(event) {
   return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
 }
 
-function beginOverlayResize(event, box, corner) {
+function beginOverlayResize(event, box, handle, { preserveAspect = true } = {}) {
   event.preventDefault();
   event.stopPropagation();
   const overlay = selectedOverlay();
@@ -2366,42 +2490,29 @@ function beginOverlayResize(event, box, corner) {
   try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
   const startMetrics = getOverlayMetrics(overlay, asset);
   const start = {
+    clientX: event.clientX,
+    clientY: event.clientY,
     width: overlay.width,
     x: overlay.x,
     y: overlay.y,
     height: startMetrics.height,
-    pointer: stagePoint(event),
+    centerX: overlay.x + overlay.width / 2,
+    centerY: overlay.y + startMetrics.height / 2,
+    rotation: overlay.rotation || 0,
   };
-  const anchors = {
-    se: { x: start.x, y: start.y },
-    sw: { x: start.x + start.width, y: start.y },
-    ne: { x: start.x, y: start.y + start.height },
-    nw: { x: start.x + start.width, y: start.y + start.height },
-  };
-  const anchor = anchors[corner];
-  const center = { x: start.x + start.width / 2, y: start.y + start.height / 2 };
-  const toLocal = (point) => {
-    const local = rotateDelta(point.x - center.x, point.y - center.y, overlay.rotation || 0);
-    return { x: center.x + local.x, y: center.y + local.y };
-  };
-  const startLocal = toLocal(start.pointer);
-  const startDistance = Math.hypot(
-    (startLocal.x - anchor.x) * state.stageWidth,
-    (startLocal.y - anchor.y) * state.stageHeight,
-  ) || 1;
   const move = (moveEvent) => {
-    const local = toLocal(stagePoint(moveEvent));
-    const distance = Math.hypot(
-      (local.x - anchor.x) * state.stageWidth,
-      (local.y - anchor.y) * state.stageHeight,
-    );
-    overlay.width = start.width * (distance / startDistance);
-    constrainOverlay(overlay, asset);
-    const metrics = getOverlayMetrics(overlay, asset);
-    if (corner.includes("w")) overlay.x = anchor.x - metrics.width;
-    else overlay.x = anchor.x;
-    if (corner.includes("n")) overlay.y = anchor.y - metrics.height;
-    else overlay.y = anchor.y;
+    const delta = pointerDeltaInLayerAxes(moveEvent, start, start.rotation);
+    const next = resizeLayerRect(start, handle, delta, {
+      minWidth: 0.04,
+      minHeight: 0.025,
+      maxWidth: 2.4,
+      maxHeight: 2.4,
+      preserveAspect,
+    });
+    overlay.x = next.x;
+    overlay.y = next.y;
+    overlay.width = next.width;
+    overlay.height = next.height;
     constrainOverlay(overlay, asset);
     updateOverlayBox(overlay);
     scheduleSave();
@@ -2460,12 +2571,16 @@ function bindTextBox(box) {
   box.addEventListener("pointerdown", (event) => {
     if (box.classList.contains("is-editing")) return;
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
+    const edge = event.target.closest("[data-edge]")?.dataset.edge;
+    const rotate = event.target.closest("[data-rotate]");
     if (!prepareLayerPointerSelection(event, "text", box.dataset.textId)) return;
     if (state.croppingOverlayId) {
       finishCrop();
       return;
     }
-    if (corner) beginResize(event, box, corner);
+    if (rotate) beginTextRotate(event, box);
+    else if (corner) beginResize(event, box, corner);
+    else if (edge) beginResize(event, box, edge);
     else beginDrag(event, box);
   });
   box.addEventListener("contextmenu", (event) => {
@@ -2567,7 +2682,7 @@ function beginLayerDrag(event, box, draggedKind) {
   window.addEventListener("pointercancel", end);
 }
 
-function beginResize(event, box, corner) {
+function beginResize(event, box, handle) {
   event.preventDefault();
   event.stopPropagation();
   const text = selectedText();
@@ -2581,31 +2696,53 @@ function beginResize(event, box, corner) {
     y: text.y,
     width: text.width,
     height: text.height,
+    centerX: text.x + text.width / 2,
+    centerY: text.y + text.height / 2,
+    rotation: text.rotation || 0,
   };
   const minWidth = 0.1;
   const minHeight = 0.045;
   const move = (moveEvent) => {
-    const dx = (moveEvent.clientX - start.clientX) / state.stageWidth;
-    const dy = (moveEvent.clientY - start.clientY) / state.stageHeight;
-    let nextX = start.x;
-    let nextY = start.y;
-    let nextWidth = start.width;
-    let nextHeight = start.height;
+    const delta = pointerDeltaInLayerAxes(moveEvent, start, start.rotation);
+    const next = resizeLayerRect(start, handle, delta, {
+      minWidth,
+      minHeight,
+    });
+    text.width = next.width;
+    text.height = next.height;
+    text.x = next.x;
+    text.y = next.y;
+    updateTextBox(text);
+    scheduleSave();
+  };
+  const end = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+}
 
-    if (corner.includes("e")) nextWidth = Math.max(minWidth, start.width + dx);
-    if (corner.includes("s")) nextHeight = Math.max(minHeight, start.height + dy);
-    if (corner.includes("w")) {
-      nextX = Math.min(start.x + dx, start.x + start.width - minWidth);
-      nextWidth = start.width + (start.x - nextX);
-    }
-    if (corner.includes("n")) {
-      nextY = Math.min(start.y + dy, start.y + start.height - minHeight);
-      nextHeight = start.height + (start.y - nextY);
-    }
-    text.x = nextX;
-    text.y = nextY;
-    text.width = nextWidth;
-    text.height = nextHeight;
+function beginTextRotate(event, box) {
+  event.preventDefault();
+  event.stopPropagation();
+  const text = selectedText();
+  if (!text) return;
+  recordHistory();
+  try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+  const stage = app.querySelector(".stage");
+  const rect = stage.getBoundingClientRect();
+  const centerX = rect.left + (text.x + text.width / 2) * rect.width;
+  const centerY = rect.top + (text.y + text.height / 2) * rect.height;
+  const startAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
+  const startRotation = text.rotation || 0;
+  const move = (moveEvent) => {
+    const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
+    let degrees = startRotation + ((angle - startAngle) * 180) / Math.PI;
+    if (moveEvent.shiftKey) degrees = Math.round(degrees / 15) * 15;
+    text.rotation = ((degrees % 360) + 360) % 360;
     updateTextBox(text);
     scheduleSave();
   };
@@ -2863,20 +3000,25 @@ async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight) {
 }
 
 function drawTextLayer(context, text, imageWidth, imageHeight) {
-  const x = text.x * imageWidth;
-  const y = text.y * imageHeight;
   const width = text.width * imageWidth;
   const height = text.height * imageHeight;
+  const centerX = (text.x + text.width / 2) * imageWidth;
+  const centerY = (text.y + text.height / 2) * imageHeight;
+  const x = -width / 2;
+  const y = -height / 2;
   const exportScale = imageWidth / DESIGN_WIDTH;
   const fontSize = text.size * exportScale;
+  const align = textAlignment(text);
   const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const horizontalPadding = fontSize * BOX_HORIZONTAL_PADDING;
   const verticalPadding = fontSize * 0.1;
   const color = textColor(text);
   context.save();
+  context.translate(centerX, centerY);
+  context.rotate(((text.rotation || 0) * Math.PI) / 180);
   context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
-  context.textAlign = "center";
+  context.textAlign = align;
   context.textBaseline = "middle";
   context.lineJoin = "round";
   context.lineCap = "round";
@@ -2886,6 +3028,8 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const blockHeight = visibleLines.length * lineHeight;
   const startY = y + (height - blockHeight) / 2 + lineHeight / 2;
   const pillWidths = visibleLines.map((line) => Math.min(width, context.measureText(line || " ").width + horizontalPadding * 2));
+  const textX = align === "left" ? x + fontSize * 0.16 : align === "right" ? x + width - fontSize * 0.16 : x + width / 2;
+  const pillStart = (pillWidth) => align === "left" ? x : align === "right" ? x + width - pillWidth : x + (width - pillWidth) / 2;
 
   if (text.style === "boxed" && text.backgroundShape === "full") {
     context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
@@ -2904,7 +3048,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
       const backgroundWidth = pillWidths[index];
       roundedRect(
         context,
-        x + (width - backgroundWidth) / 2,
+        pillStart(backgroundWidth),
         lineCenters[index] - backgroundHeight / 2,
         backgroundWidth,
         backgroundHeight,
@@ -2912,7 +3056,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
       );
       context.fill();
     });
-    lineJunctionCorners(pillWidths, lineCenters, x + width / 2, backgroundHeight, junctionRadius)
+    (align === "center" ? lineJunctionCorners(pillWidths, lineCenters, x + width / 2, backgroundHeight, junctionRadius) : [])
       .forEach((corner) => fillConcaveCorner(context, corner));
   }
 
@@ -2921,12 +3065,12 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
     if (text.style === "outline") {
       context.strokeStyle = outlineColorFor(color);
       context.lineWidth = fontSize * OUTLINE_RATIO;
-      context.strokeText(line, x + width / 2, lineY);
+      context.strokeText(line, textX, lineY);
       context.fillStyle = color;
-      context.fillText(line, x + width / 2, lineY);
+      context.fillText(line, textX, lineY);
     } else {
       context.fillStyle = color;
-      context.fillText(line, x + width / 2, lineY);
+      context.fillText(line, textX, lineY);
     }
   });
   context.restore();
@@ -3224,6 +3368,11 @@ async function init() {
         if (slide.imageY == null) slide.imageY = 0;
         if (!Array.isArray(slide.overlays)) slide.overlays = [];
         slide.overlays.forEach((overlay, index) => {
+          const asset = project.assets.find((item) => item.id === overlay.assetId);
+          if (overlay.height == null && asset) {
+            const crop = overlayCrop(overlay);
+            overlay.height = overlay.width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * ((asset.height * crop.h) / (asset.width * crop.w));
+          }
           if (overlay.z == null) overlay.z = index + 1;
         });
         slide.texts.forEach((text, index) => {
@@ -3231,6 +3380,8 @@ async function init() {
           if (!normalizeHexColor(text.color)) text.color = textColor(text);
           if (!text.background) text.background = "white";
           if (!text.backgroundShape) text.backgroundShape = "full";
+          if (!text.align) text.align = "center";
+          if (text.rotation == null) text.rotation = 0;
           if (text.z == null) text.z = (slide.overlays?.length || 0) + index + 1;
         });
       });
