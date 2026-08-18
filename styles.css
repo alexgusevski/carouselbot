@@ -1188,16 +1188,12 @@ button,
   overflow: hidden;
   color: #fff;
   font-family: "TikTok Sans", sans-serif;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.12;
   text-align: center;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   pointer-events: none;
-}
-
-.text-box[data-style="plain"] .text-content-wrap {
-  font-weight: 500;
 }
 
 .text-content {
@@ -1253,15 +1249,16 @@ button,
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.08em;
+  gap: 0;
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"] .text-line {
   display: block;
-  padding: 0.1em 0.28em 0.12em;
+  padding: 0.08em 0.28em;
   border-radius: 0.28em;
   color: #111;
   background: #fff;
+  line-height: 1.12;
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
@@ -1282,7 +1279,7 @@ button,
 
 .text-box[data-style="boxed"][data-background="black"] .text-content {
   color: #fff;
-  background: #111;
+  background: transparent;
 }
 
 .text-box[data-style="boxed"][data-box-shape="full"][data-background="black"] {
@@ -1484,18 +1481,16 @@ button,
   color: #fff;
   background: #929089;
   font-size: 20px;
-  font-weight: 500;
+  font-weight: 700;
   line-height: 1;
 }
 
 .style-preview--outline {
-  font-weight: 800;
   -webkit-text-stroke: 2.4px #111;
   paint-order: stroke fill;
 }
 
 .style-preview--boxed {
-  font-weight: 800;
   border-radius: 5px;
   color: #111;
   background: #fff;

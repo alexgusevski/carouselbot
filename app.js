@@ -6,10 +6,8 @@ const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 const DEFAULT_OUTLINE_WIDTH = 14;
 const OUTLINE_RATIO = 0.22;
-
-function textWeight(style) {
-  return style === "plain" ? 500 : 800;
-}
+const TEXT_WEIGHT = 700;
+const TEXT_LINE_HEIGHT = 1.12;
 
 const state = {
   projects: [],
@@ -1104,16 +1102,14 @@ const measureCanvas = typeof document === "undefined" ? null : document.createEl
 
 function measureFont(text) {
   const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
-  const weight = textWeight(text.style);
   const context = measureCanvas.getContext("2d");
-  context.font = `${weight} ${fontSize}px "TikTok Sans"`;
-  return { context, fontSize, weight };
+  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  return { context, fontSize };
 }
 
 function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const pad = text.style === "boxed" ? fontSize * 0.56 : fontSize * 0.28;
-  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - pad);
+  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - fontSize * 0.32);
   return { lines: wrapText(context, text.text, maxWidth), fontSize };
 }
 
@@ -1121,7 +1117,7 @@ function paintTextContent(text, content, box) {
   if (text.style === "outline") {
     const { lines, fontSize } = wrappedLinesForBox(text, box);
     const stroke = fontSize * OUTLINE_RATIO;
-    const lineHeight = fontSize * 1.32;
+    const lineHeight = fontSize * TEXT_LINE_HEIGHT;
     content.replaceChildren(...lines.map((line) => {
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("class", "outline-line");
@@ -1139,7 +1135,7 @@ function paintTextContent(text, content, box) {
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("paint-order", "stroke fill");
       node.setAttribute("font-family", "TikTok Sans, sans-serif");
-      node.setAttribute("font-weight", "800");
+      node.setAttribute("font-weight", String(TEXT_WEIGHT));
       node.setAttribute("font-size", `${fontSize}px`);
       node.textContent = line || " ";
       svg.appendChild(node);
@@ -2045,10 +2041,7 @@ function loadImage(src) {
 async function renderSlideBlob() {
   const slide = activeSlide();
   if (!slide) return null;
-  await Promise.all([
-    document.fonts.load('500 64px "TikTok Sans"'),
-    document.fonts.load('800 64px "TikTok Sans"'),
-  ]);
+  await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
   const image = await loadImage(slide.imageData);
   const canvas = document.createElement("canvas");
   canvas.width = OUTPUT_WIDTH;
@@ -2166,16 +2159,16 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const height = text.height * imageHeight;
   const exportScale = imageWidth / DESIGN_WIDTH;
   const fontSize = text.size * exportScale;
-  const lineHeight = text.style === "boxed" && text.backgroundShape !== "full" ? fontSize * 1.28 : fontSize * 1.12;
+  const lineHeight = fontSize * TEXT_LINE_HEIGHT;
   const horizontalPadding = text.style === "boxed" ? fontSize * 0.28 : fontSize * 0.16;
   const verticalPadding = fontSize * 0.1;
   context.save();
-  context.font = `${textWeight(text.style)} ${fontSize}px "TikTok Sans"`;
+  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.lineJoin = "round";
   context.lineCap = "round";
-  const lines = wrapText(context, text.text, Math.max(1, width - horizontalPadding * 2));
+  const lines = wrapText(context, text.text, Math.max(1, width - fontSize * 0.32));
   const visibleLineCount = Math.max(1, Math.floor((height - verticalPadding * 2) / lineHeight));
   const visibleLines = lines.slice(0, visibleLineCount);
   const blockHeight = visibleLines.length * lineHeight;
@@ -2191,7 +2184,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
     const lineY = startY + index * lineHeight;
     if (text.style === "boxed" && text.backgroundShape !== "full" && line) {
       const backgroundWidth = Math.min(width, context.measureText(line).width + horizontalPadding * 2);
-      const backgroundHeight = lineHeight * 0.84;
+      const backgroundHeight = lineHeight;
       context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
       roundedRect(
         context,
