@@ -4,16 +4,26 @@ const STORE_NAME = "projects";
 const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
-const DEFAULT_OUTLINE_WIDTH = 14;
-const OUTLINE_RATIO = 0.22;
-const TEXT_WEIGHT = 500;
+const DEFAULT_OUTLINE_WIDTH = 12;
+const OUTLINE_RATIO = 0.18;
+const TEXT_WEIGHT = 550;
 const TEXT_LINE_HEIGHT = 1.12;
 const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
 const BOX_TEXT_LINE_HEIGHT = 1.12;
-const BOX_LINE_HEIGHT = 1.28;
-const BOX_HORIZONTAL_PADDING = 0.28;
-const BOX_CORNER_RADIUS = 0.22;
-const BOX_JUNCTION_RADIUS = 0.16;
+const BOX_LINE_HEIGHT = 1.42;
+const BOX_HORIZONTAL_PADDING = 0.52;
+const BOX_CORNER_RADIUS = 0.27;
+const BOX_JUNCTION_RADIUS = 0.18;
+const FONT_SIZE_MIN = 20;
+const FONT_SIZE_MAX = 180;
+const FONT_SIZE_SLIDER_MAX = 1000;
+const FONT_SIZE_SLIDER_STEP = 10;
+const FONT_SIZE_SLIDER_STOPS = [
+  { position: 0, size: FONT_SIZE_MIN },
+  { position: 220, size: 40 },
+  { position: 780, size: 70 },
+  { position: FONT_SIZE_SLIDER_MAX, size: FONT_SIZE_MAX },
+];
 
 const state = {
   projects: [],
@@ -787,6 +797,37 @@ function renderTextBox(text) {
   `;
 }
 
+function interpolateFontSizeControl(value, inputKey, outputKey) {
+  const first = FONT_SIZE_SLIDER_STOPS[0];
+  const last = FONT_SIZE_SLIDER_STOPS.at(-1);
+  const numericValue = Number(value);
+  const boundedValue = clamp(
+    Number.isFinite(numericValue) ? numericValue : first[inputKey],
+    first[inputKey],
+    last[inputKey],
+  );
+  const upperIndex = FONT_SIZE_SLIDER_STOPS.findIndex((stop) => boundedValue <= stop[inputKey]);
+  if (upperIndex <= 0) return first[outputKey];
+  const lower = FONT_SIZE_SLIDER_STOPS[upperIndex - 1];
+  const upper = FONT_SIZE_SLIDER_STOPS[upperIndex];
+  const progress = (boundedValue - lower[inputKey]) / (upper[inputKey] - lower[inputKey]);
+  return lower[outputKey] + (upper[outputKey] - lower[outputKey]) * progress;
+}
+
+function fontSizeFromSliderPosition(position) {
+  return Math.round(interpolateFontSizeControl(position, "position", "size") * 2) / 2;
+}
+
+function sliderPositionFromFontSize(size) {
+  const position = interpolateFontSizeControl(size, "size", "position");
+  return Math.round(position / FONT_SIZE_SLIDER_STEP) * FONT_SIZE_SLIDER_STEP;
+}
+
+function formatFontSize(size) {
+  const value = Math.round(clamp(Number(size) || FONT_SIZE_MIN, FONT_SIZE_MIN, FONT_SIZE_MAX) * 2) / 2;
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 function renderInspector() {
   const text = selectedText();
   const overlay = selectedOverlay();
@@ -856,10 +897,10 @@ function renderInspector() {
             </div>
           </div>
           <div class="control-group">
-            <label class="control-label" for="font-size">Size <output>${Math.round(text.size)} px</output></label>
+            <label class="control-label" for="font-size">Size <output>${formatFontSize(text.size)} px</output></label>
             <div class="range-wrap">
-              <input id="font-size" type="range" min="20" max="180" step="1" value="${text.size}" />
-              <input id="font-size-number" class="number-input" type="number" min="20" max="180" step="1" value="${Math.round(text.size)}" aria-label="Font size in pixels" />
+              <input id="font-size" type="range" min="0" max="${FONT_SIZE_SLIDER_MAX}" step="${FONT_SIZE_SLIDER_STEP}" value="${sliderPositionFromFontSize(text.size)}" aria-valuetext="${formatFontSize(text.size)} pixels" />
+              <input id="font-size-number" class="number-input" type="number" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${formatFontSize(text.size)}" aria-label="Font size in pixels" />
             </div>
           </div>
           ${text.style === "boxed" ? `
@@ -1088,20 +1129,23 @@ function bindInspectorControls() {
 
   const range = app.querySelector("#font-size");
   const number = app.querySelector("#font-size-number");
-  const setSize = (value) => {
+  const setSize = (value, { fromSlider = false } = {}) => {
     const text = selectedText();
     if (!text) return;
-    text.size = Math.max(20, Math.min(180, Number(value) || 20));
-    if (range) range.value = text.size;
-    if (number) number.value = Math.round(text.size);
+    text.size = fromSlider
+      ? fontSizeFromSliderPosition(value)
+      : Math.round(clamp(Number(value) || FONT_SIZE_MIN, FONT_SIZE_MIN, FONT_SIZE_MAX) * 2) / 2;
+    if (range) range.value = sliderPositionFromFontSize(text.size);
+    if (range) range.setAttribute("aria-valuetext", `${formatFontSize(text.size)} pixels`);
+    if (number) number.value = formatFontSize(text.size);
     const output = app.querySelector(".control-label output");
-    if (output) output.textContent = `${Math.round(text.size)} px`;
+    if (output) output.textContent = `${formatFontSize(text.size)} px`;
     updateTextBox(text);
     ensureTextFits(text);
     scheduleSave();
   };
   range?.addEventListener("pointerdown", recordHistory);
-  range?.addEventListener("input", () => setSize(range.value));
+  range?.addEventListener("input", () => setSize(range.value, { fromSlider: true }));
   number?.addEventListener("pointerdown", recordHistory);
   number?.addEventListener("input", () => setSize(number.value));
 
