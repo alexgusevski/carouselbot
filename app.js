@@ -4,6 +4,7 @@ const STORE_NAME = "projects";
 const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
+const INITIAL_OVERLAY_MAX_SIZE = 0.82;
 const DEFAULT_OUTLINE_WIDTH = 12;
 const OUTLINE_RATIO = 0.18;
 const TEXT_WEIGHT = 550;
@@ -353,6 +354,22 @@ function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
   return overlay;
 }
 
+function initialOverlayWidth(asset) {
+  const sourceWidth = Number(asset?.width);
+  const sourceHeight = Number(asset?.height);
+  if (!Number.isFinite(sourceWidth) || sourceWidth <= 0 || !Number.isFinite(sourceHeight) || sourceHeight <= 0) {
+    return 0.34;
+  }
+  const naturalWidth = sourceWidth / OUTPUT_WIDTH;
+  const naturalHeight = sourceHeight / OUTPUT_HEIGHT;
+  const fitScale = Math.min(
+    1,
+    INITIAL_OVERLAY_MAX_SIZE / naturalWidth,
+    INITIAL_OVERLAY_MAX_SIZE / naturalHeight,
+  );
+  return clamp(naturalWidth * fitScale, 0.04, INITIAL_OVERLAY_MAX_SIZE);
+}
+
 function clearLayerSelection() {
   exitCropMode();
   setLayerSelection([]);
@@ -598,6 +615,7 @@ function icon(name) {
     image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4 3.5 3 3-2.5 5 4.5"/></svg>',
     adjust: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h7"/><path d="M15 7h5"/><circle cx="13" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>',
     preview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M10 6h4"/><path d="M10 17.5h4"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   };
   return icons[name] || "";
 }
@@ -714,7 +732,7 @@ function renderSlideRail(project) {
           </button>
         `).join("")}
       </div>
-      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+New slide</button></div>
+      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">${icon("plus")}<span>New slide</span></button></div>
     </aside>
   `;
 }
@@ -736,7 +754,7 @@ function renderAssetRail(project) {
         ${icon("trash")}
         <span>Drag here to delete</span>
       </div>
-      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">+ Upload assets</button></div>
+      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">${icon("plus")}<span>Upload assets</span></button></div>
     </aside>
   `;
 }
@@ -1060,39 +1078,19 @@ function openProject(projectId) {
   renderEditor();
 }
 
-function showProjectModal() {
-  const backdrop = document.createElement("div");
-  backdrop.className = "modal-backdrop";
-  backdrop.innerHTML = `
-    <form class="modal">
-      <h2>New project</h2>
-      <p>Give this slideshow a name. It stays saved in this browser.</p>
-      <input name="project-name" value="Untitled slideshow" maxlength="64" autocomplete="off" aria-label="Project name" />
-      <div class="modal-actions">
-        <button class="button button--quiet" type="button" data-action="cancel-modal">Cancel</button>
-        <button class="button button--primary" type="submit">Create project</button>
-      </div>
-    </form>
-  `;
-  document.body.appendChild(backdrop);
-  const input = backdrop.querySelector("input");
-  requestAnimationFrame(() => input.select());
-  backdrop.addEventListener("click", (event) => {
-    if (event.target === backdrop || event.target.closest('[data-action="cancel-modal"]')) backdrop.remove();
-  });
-  backdrop.querySelector("form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const name = input.value.trim() || "Untitled slideshow";
-    const project = { id: uid(), name, createdAt: Date.now(), updatedAt: Date.now(), slides: [], assets: [] };
-    state.projects.push(project);
-    await putProject(project);
-    backdrop.remove();
-    openProject(project.id);
+function createProject() {
+  const now = Date.now();
+  const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, slides: [], assets: [] };
+  state.projects.push(project);
+  openProject(project.id);
+  putProject(project).catch((error) => {
+    console.error(error);
+    toast("Couldn’t save this project in your browser.");
   });
 }
 
 function bindDashboardEvents() {
-  app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", showProjectModal));
+  app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
   app.querySelectorAll("[data-project-id]").forEach((button) => {
     button.addEventListener("click", () => openProject(button.dataset.projectId));
   });
@@ -1106,7 +1104,7 @@ function bindEditorEvents() {
   bindGlobalActions();
   const title = app.querySelector(".project-title-input");
   title?.addEventListener("input", () => {
-    activeProject().name = title.value || "Untitled slideshow";
+    activeProject().name = title.value || "New Project";
     scheduleSave();
   });
 
@@ -1161,7 +1159,7 @@ function bindEditorEvents() {
 
   const workspace = app.querySelector(".workspace");
   workspace?.addEventListener("pointerdown", (event) => {
-    if (state.photoAdjustMode || event.target.closest(".text-box, .overlay-box, .canvas-actions")) return;
+    if (state.photoAdjustMode || event.target.closest("button, input, textarea, select, a, [contenteditable], .text-box, .overlay-box, .canvas-actions")) return;
     if (!event.target.closest(".workspace-inner")) return;
     if (state.croppingOverlayId) {
       finishCrop();
@@ -2071,7 +2069,7 @@ function addOverlayFromAsset(assetId, point, { render = true, record = true } = 
     assetId: asset.id,
     x: 0.33,
     y: 0.36,
-    width: 0.34,
+    width: initialOverlayWidth(asset),
     rotation: 0,
     z: nextLayerZ(slide),
   }, asset);

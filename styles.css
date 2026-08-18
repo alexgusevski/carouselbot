@@ -578,7 +578,20 @@ button,
 }
 
 .rail-upload .button {
+  display: inline-flex;
   width: 100%;
+  gap: 8px;
+  padding: 0 10px;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.rail-upload .button svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
 }
 
 .asset-grid {
@@ -2212,11 +2225,6 @@ input[type="range"]::-webkit-slider-thumb {
   .rail-upload .button,
   .asset-empty {
     font-size: 0;
-  }
-
-  .rail-upload .button::after {
-    font-size: 24px;
-    content: "+";
   }
 
   .asset-grid {
