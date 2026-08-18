@@ -24,6 +24,16 @@ const FONT_SIZE_SLIDER_STOPS = [
   { position: 780, size: 70 },
   { position: FONT_SIZE_SLIDER_MAX, size: FONT_SIZE_MAX },
 ];
+const TEXT_COLOR_PRESETS = [
+  { name: "White", value: "#FFFFFF" },
+  { name: "Black", value: "#111111" },
+  { name: "Yellow", value: "#FFE45E" },
+  { name: "Pink", value: "#FE2C55" },
+  { name: "Cyan", value: "#25F4EE" },
+  { name: "Blue", value: "#4D7CFE" },
+  { name: "Green", value: "#35D07F" },
+  { name: "Purple", value: "#A855F7" },
+];
 
 const state = {
   projects: [],
@@ -116,6 +126,68 @@ function escapeHtml(value = "") {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function normalizeHexColor(value, fallback = null) {
+  let hex = String(value || "").trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(hex)) hex = hex.split("").map((character) => character + character).join("");
+  return /^[0-9a-f]{6}$/i.test(hex) ? `#${hex.toUpperCase()}` : fallback;
+}
+
+function textColor(text) {
+  const legacyDefault = text?.style === "boxed" && text?.background !== "black" ? "#111111" : "#FFFFFF";
+  return normalizeHexColor(text?.color, legacyDefault);
+}
+
+function hexToRgb(hex) {
+  const value = normalizeHexColor(hex, "#FFFFFF").slice(1);
+  return {
+    r: parseInt(value.slice(0, 2), 16),
+    g: parseInt(value.slice(2, 4), 16),
+    b: parseInt(value.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex(value) {
+  const channels = String(value || "").match(/-?\d+(?:\.\d+)?/g);
+  if (!channels || channels.length !== 3) return null;
+  const hex = channels
+    .map((channel) => Math.round(clamp(Number(channel), 0, 255)).toString(16).padStart(2, "0"))
+    .join("");
+  return normalizeHexColor(hex);
+}
+
+function formatRgb(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function outlineColorFor(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.55 ? "#111111" : "#FFFFFF";
+}
+
+function ensureBoxedTextContrast(text) {
+  if (text?.style !== "boxed") return;
+  const backgroundColor = text.background === "black" ? "#111111" : "#FFFFFF";
+  if (textColor(text) === backgroundColor) text.color = outlineColorFor(backgroundColor);
+}
+
+async function copyText(value) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch (error) {
+    const input = document.createElement("textarea");
+    input.value = value;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand("copy");
+    input.remove();
+  }
+  toast(`Copied ${value}`);
 }
 
 function openDatabase() {
@@ -777,6 +849,8 @@ function renderTextBox(text) {
   const selected = isLayerSelected("text", text.id);
   const background = text.background || "white";
   const backgroundShape = text.backgroundShape || "lines";
+  const color = textColor(text);
+  const outlineColor = outlineColorFor(color);
   return `
     <div
       class="text-box ${selected ? "is-selected" : ""}"
@@ -784,7 +858,7 @@ function renderTextBox(text) {
       data-style="${text.style}"
       data-background="${background}"
       data-box-shape="${backgroundShape}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;--text-color:${color};--outline-color:${outlineColor};"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -837,6 +911,7 @@ function renderInspector() {
   const slide = activeSlide();
   const photoMode = Boolean(state.photoAdjustMode && slide);
   const overlayMode = Boolean(!photoMode && !multiMode && overlay);
+  const color = textColor(text);
   return `
     <aside class="inspector ${state.mobileInspectorOpen ? "is-mobile-open" : ""}">
       <div class="inspector-header">
@@ -901,6 +976,40 @@ function renderInspector() {
             <div class="range-wrap">
               <input id="font-size" type="range" min="0" max="${FONT_SIZE_SLIDER_MAX}" step="${FONT_SIZE_SLIDER_STEP}" value="${sliderPositionFromFontSize(text.size)}" aria-valuetext="${formatFontSize(text.size)} pixels" />
               <input id="font-size-number" class="number-input" type="number" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${formatFontSize(text.size)}" aria-label="Font size in pixels" />
+            </div>
+          </div>
+          <div class="control-group color-control">
+            <div class="control-label">Text color</div>
+            <div class="color-presets" role="group" aria-label="Text color presets">
+              ${TEXT_COLOR_PRESETS.map((preset) => `
+                <button
+                  class="color-preset ${color === preset.value ? "is-active" : ""}"
+                  type="button"
+                  data-text-color="${preset.value}"
+                  title="${preset.name} ${preset.value}"
+                  aria-label="Use ${preset.name} text"
+                  aria-pressed="${color === preset.value}"
+                  style="--swatch-color:${preset.value}"
+                ></button>
+              `).join("")}
+            </div>
+            <div class="color-custom">
+              <label class="color-picker-wrap" for="text-color-picker">
+                <input id="text-color-picker" type="color" value="${color}" aria-label="Choose a custom text color" />
+                <span>Color wheel</span>
+              </label>
+              <div class="color-values">
+                <div class="color-value-row">
+                  <label for="text-color-hex">Hex</label>
+                  <input id="text-color-hex" type="text" value="${color}" maxlength="7" spellcheck="false" aria-label="Text color hex value" />
+                  <button type="button" data-copy-color="hex" aria-label="Copy hex color">Copy</button>
+                </div>
+                <div class="color-value-row">
+                  <label for="text-color-rgb">RGB</label>
+                  <input id="text-color-rgb" type="text" value="${formatRgb(color)}" spellcheck="false" aria-label="Text color RGB value" />
+                  <button type="button" data-copy-color="rgb" aria-label="Copy RGB color">Copy</button>
+                </div>
+              </div>
             </div>
           </div>
           ${text.style === "boxed" ? `
@@ -1120,6 +1229,7 @@ function bindInspectorControls() {
       if (!text) return;
       recordHistory();
       text.style = button.dataset.textStyle;
+      ensureBoxedTextContrast(text);
       scheduleSave();
       refreshSelection();
       updateTextBox(text);
@@ -1149,13 +1259,70 @@ function bindInspectorControls() {
   number?.addEventListener("pointerdown", recordHistory);
   number?.addEventListener("input", () => setSize(number.value));
 
+  const colorPicker = app.querySelector("#text-color-picker");
+  const hexInput = app.querySelector("#text-color-hex");
+  const rgbInput = app.querySelector("#text-color-rgb");
+  const setTextColor = (value, { source = null } = {}) => {
+    const text = selectedText();
+    const color = normalizeHexColor(value);
+    if (!text || !color) return false;
+    text.color = color;
+    if (colorPicker && source !== "picker") colorPicker.value = color;
+    if (hexInput && source !== "hex") hexInput.value = color;
+    if (rgbInput && source !== "rgb") rgbInput.value = formatRgb(color);
+    app.querySelectorAll("[data-text-color]").forEach((button) => {
+      const active = button.dataset.textColor === color;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    updateTextBox(text);
+    scheduleSave();
+    return true;
+  };
+
+  app.querySelectorAll("[data-text-color]").forEach((button) => {
+    button.addEventListener("click", () => {
+      recordHistory();
+      setTextColor(button.dataset.textColor);
+    });
+  });
+  colorPicker?.addEventListener("pointerdown", recordHistory);
+  colorPicker?.addEventListener("input", () => setTextColor(colorPicker.value, { source: "picker" }));
+  hexInput?.addEventListener("focus", recordHistory, { once: true });
+  hexInput?.addEventListener("input", () => {
+    const fullHex = hexInput.value.trim().replace(/^#/, "");
+    if (/^[0-9a-f]{6}$/i.test(fullHex)) setTextColor(fullHex, { source: "hex" });
+  });
+  hexInput?.addEventListener("change", () => {
+    const color = normalizeHexColor(hexInput.value);
+    if (color) setTextColor(color);
+    else hexInput.value = textColor(selectedText());
+  });
+  rgbInput?.addEventListener("focus", recordHistory, { once: true });
+  rgbInput?.addEventListener("input", () => {
+    const color = rgbToHex(rgbInput.value);
+    if (color) setTextColor(color, { source: "rgb" });
+  });
+  rgbInput?.addEventListener("change", () => {
+    const color = rgbToHex(rgbInput.value);
+    if (color) setTextColor(color);
+    else rgbInput.value = formatRgb(textColor(selectedText()));
+  });
+  app.querySelectorAll("[data-copy-color]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const color = textColor(selectedText());
+      copyText(button.dataset.copyColor === "rgb" ? formatRgb(color) : color);
+    });
+  });
+
   app.querySelectorAll("[data-background-tone]").forEach((button) => {
     button.addEventListener("click", () => {
       const text = selectedText();
       if (!text) return;
       recordHistory();
       text.background = button.dataset.backgroundTone;
-      app.querySelectorAll("[data-background-tone]").forEach((item) => item.classList.toggle("is-active", item === button));
+      ensureBoxedTextContrast(text);
+      refreshSelection();
       updateTextBox(text);
       scheduleSave();
     });
@@ -1396,6 +1563,9 @@ function updateTextBox(text) {
   box.dataset.style = text.style;
   box.dataset.background = text.background || "white";
   box.dataset.boxShape = text.backgroundShape || "lines";
+  const color = textColor(text);
+  box.style.setProperty("--text-color", color);
+  box.style.setProperty("--outline-color", outlineColorFor(color));
   const content = box.querySelector(".text-content");
   content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
   if (!box.classList.contains("is-editing")) paintTextContent(text, content, box);
@@ -1537,8 +1707,8 @@ function paintTextContent(text, content, box) {
       node.setAttribute("y", "50%");
       node.setAttribute("text-anchor", "middle");
       node.setAttribute("dominant-baseline", "middle");
-      node.setAttribute("fill", "#ffffff");
-      node.setAttribute("stroke", "#111111");
+      node.setAttribute("fill", textColor(text));
+      node.setAttribute("stroke", outlineColorFor(textColor(text)));
       node.setAttribute("stroke-width", String(fontSize * OUTLINE_RATIO));
       node.setAttribute("stroke-linejoin", "round");
       node.setAttribute("stroke-linecap", "round");
@@ -1620,7 +1790,7 @@ function addText(point = null, { editDirectly = false } = {}) {
   if (!slide) return;
   recordHistory();
   const width = 0.64;
-  const height = 0.13;
+  const height = 0.08;
   const text = {
     id: uid(),
     text: "Your text",
@@ -1631,6 +1801,7 @@ function addText(point = null, { editDirectly = false } = {}) {
     size: 64,
     style: "plain",
     outlineWidth: DEFAULT_OUTLINE_WIDTH,
+    color: "#FFFFFF",
     background: "white",
     backgroundShape: "lines",
     z: nextLayerZ(slide),
@@ -2694,6 +2865,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const horizontalPadding = fontSize * BOX_HORIZONTAL_PADDING;
   const verticalPadding = fontSize * 0.1;
+  const color = textColor(text);
   context.save();
   context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
   context.textAlign = "center";
@@ -2739,13 +2911,13 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   visibleLines.forEach((line, index) => {
     const lineY = startY + index * lineHeight;
     if (text.style === "outline") {
-      context.strokeStyle = "#111111";
+      context.strokeStyle = outlineColorFor(color);
       context.lineWidth = fontSize * OUTLINE_RATIO;
       context.strokeText(line, x + width / 2, lineY);
-      context.fillStyle = "#ffffff";
+      context.fillStyle = color;
       context.fillText(line, x + width / 2, lineY);
     } else {
-      context.fillStyle = text.style === "boxed" && text.background !== "black" ? "#111111" : "#ffffff";
+      context.fillStyle = color;
       context.fillText(line, x + width / 2, lineY);
     }
   });
@@ -3048,6 +3220,7 @@ async function init() {
         });
         slide.texts.forEach((text, index) => {
           if (text.outlineWidth == null) text.outlineWidth = DEFAULT_OUTLINE_WIDTH;
+          if (!normalizeHexColor(text.color)) text.color = textColor(text);
           if (!text.background) text.background = "white";
           if (!text.backgroundShape) text.backgroundShape = "full";
           if (text.z == null) text.z = (slide.overlays?.length || 0) + index + 1;

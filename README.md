@@ -14,6 +14,7 @@ Everything runs in the browser. Photos and projects stay in IndexedDB on your de
 - Keeps a project-wide asset library so extra photos can be reused on any slide
 - Adds photo overlays by dragging an uploaded asset onto the main image, then resizing (aspect ratio locked) or rotating
 - Adds multiline text layers that can be dragged and resized
+- Offers text color presets plus a live color wheel with synchronized hex and RGB values
 - Includes clean text, adjustable outlines, per-line rounded backgrounds, and full-box backgrounds
 - Offers white or black background treatments
 - Toggles a semi-transparent TikTok UI placement preview that is never exported
