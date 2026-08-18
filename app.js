@@ -446,6 +446,10 @@ function renderSlideRail(project) {
             </div>
           `).join("") : `<p class="asset-empty">Upload logos, stickers, or extra photos. Reuse them on any slide.</p>`}
         </div>
+        <div class="asset-trash" data-asset-trash>
+          ${icon("trash")}
+          <span>Drag here to delete</span>
+        </div>
         <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">+ Upload assets</button></div>
       </div>
     </aside>
@@ -1148,12 +1152,13 @@ function bindAssetLibrary() {
       state.draggingAssetId = assetId;
       event.dataTransfer.setData("application/x-slide-asset", assetId);
       event.dataTransfer.setData("text/plain", `asset:${assetId}`);
-      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.effectAllowed = "copyMove";
       item.classList.add("is-dragging");
     });
     item.addEventListener("dragend", () => {
       state.draggingAssetId = null;
       item.classList.remove("is-dragging");
+      app.querySelector("[data-asset-trash]")?.classList.remove("is-hot");
     });
     item.addEventListener("click", (event) => {
       if (event.target.closest('[data-action="delete-asset"]')) return;
@@ -1166,6 +1171,31 @@ function bindAssetLibrary() {
       event.stopPropagation();
       deleteProjectAsset(button.dataset.assetId);
     });
+  });
+  bindAssetTrash();
+}
+
+function bindAssetTrash() {
+  const tray = app.querySelector("[data-asset-trash]");
+  if (!tray) return;
+  const isAssetDrag = (event) => Boolean(state.draggingAssetId) || [...event.dataTransfer.types].includes("application/x-slide-asset");
+  tray.addEventListener("dragover", (event) => {
+    if (!isAssetDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    tray.classList.add("is-hot");
+  });
+  tray.addEventListener("dragleave", (event) => {
+    if (!tray.contains(event.relatedTarget)) tray.classList.remove("is-hot");
+  });
+  tray.addEventListener("drop", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    tray.classList.remove("is-hot");
+    const payload = event.dataTransfer.getData("application/x-slide-asset") || event.dataTransfer.getData("text/plain") || state.draggingAssetId || "";
+    const assetId = payload.startsWith("asset:") ? payload.slice(6) : payload;
+    state.draggingAssetId = null;
+    if (assetId) deleteProjectAsset(assetId);
   });
 }
 

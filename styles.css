@@ -627,6 +627,34 @@ button,
   white-space: nowrap;
 }
 
+.asset-trash {
+  display: flex;
+  gap: 7px;
+  min-height: 38px;
+  margin: 0 12px 8px;
+  padding: 0 10px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #b7b4ab;
+  border-radius: 10px;
+  color: #7a7872;
+  background: #dddcd6;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.asset-trash svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.asset-trash.is-hot {
+  border-color: #5f5d57;
+  color: #2b2b2b;
+  background: #b8b6ae;
+}
+
 .workspace {
   position: relative;
   display: grid;
@@ -1822,6 +1850,16 @@ input[type="range"]::-webkit-slider-thumb {
 
   .asset-remove {
     opacity: 1;
+  }
+
+  .asset-trash {
+    min-height: 32px;
+    margin: 0 6px 8px;
+    padding: 0;
+  }
+
+  .asset-trash span {
+    display: none;
   }
 
   .slide-thumb {
