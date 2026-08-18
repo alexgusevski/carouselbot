@@ -6,9 +6,14 @@ const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
 const DEFAULT_OUTLINE_WIDTH = 14;
 const OUTLINE_RATIO = 0.22;
-const TEXT_WEIGHT = 700;
+const TEXT_WEIGHT = 500;
 const TEXT_LINE_HEIGHT = 1.12;
 const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
+const BOX_TEXT_LINE_HEIGHT = 1.18;
+const BOX_LINE_HEIGHT = 1.56;
+const BOX_HORIZONTAL_PADDING = 0.66;
+const BOX_CORNER_RADIUS = 0.33;
+const BOX_JUNCTION_RADIUS = 0.18;
 
 const state = {
   projects: [],
@@ -1358,7 +1363,9 @@ function measureFont(text) {
 
 function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - fontSize * 0.32);
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const horizontalInset = fontSize * (perLineBox ? BOX_HORIZONTAL_PADDING * 2 : 0.32);
+  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - horizontalInset);
   return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
 }
 
@@ -1372,15 +1379,107 @@ function lineCornerRadii(widths, index, radius) {
   return [top ? radius : 0, top ? radius : 0, bottom ? radius : 0, bottom ? radius : 0];
 }
 
+function lineJunctionCorners(widths, lineCenters, centerX, boxHeight, radius) {
+  const corners = [];
+  for (let index = 0; index < widths.length - 1; index += 1) {
+    const upperWidth = widths[index] || 0;
+    const lowerWidth = widths[index + 1] || 0;
+    const sideGap = Math.abs(upperWidth - lowerWidth) / 2;
+    if (sideGap <= Math.max(1, radius * 0.1)) continue;
+    const cornerRadius = Math.min(radius, sideGap);
+
+    if (upperWidth < lowerWidth) {
+      const boundaryY = lineCenters[index + 1] - boxHeight / 2;
+      corners.push(
+        { cx: centerX - upperWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "upper-left" },
+        { cx: centerX + upperWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "upper-right" },
+      );
+    } else {
+      const boundaryY = lineCenters[index] + boxHeight / 2;
+      corners.push(
+        { cx: centerX - lowerWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "lower-left" },
+        { cx: centerX + lowerWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "lower-right" },
+      );
+    }
+  }
+  return corners;
+}
+
+function roundedRectSvgPath(x, y, width, height, radii) {
+  const [tl, tr, br, bl] = radii.map((value) => Math.max(0, Math.min(value, width / 2, height / 2)));
+  return [
+    `M ${x + tl} ${y}`,
+    `H ${x + width - tr}`,
+    `Q ${x + width} ${y} ${x + width} ${y + tr}`,
+    `V ${y + height - br}`,
+    `Q ${x + width} ${y + height} ${x + width - br} ${y + height}`,
+    `H ${x + bl}`,
+    `Q ${x} ${y + height} ${x} ${y + height - bl}`,
+    `V ${y + tl}`,
+    `Q ${x} ${y} ${x + tl} ${y}`,
+    "Z",
+  ].join(" ");
+}
+
+function quarterCircleSvgPath({ cx, cy, radius, quadrant }) {
+  const points = {
+    "upper-left": [cx - radius, cy, cx, cy - radius],
+    "upper-right": [cx, cy - radius, cx + radius, cy],
+    "lower-right": [cx + radius, cy, cx, cy + radius],
+    "lower-left": [cx, cy + radius, cx - radius, cy],
+  }[quadrant];
+  return `M ${cx} ${cy} L ${points[0]} ${points[1]} A ${radius} ${radius} 0 0 1 ${points[2]} ${points[3]} Z`;
+}
+
+function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const boxHeight = fontSize * BOX_LINE_HEIGHT;
+  const radius = Math.min(fontSize * BOX_CORNER_RADIUS, boxHeight / 2);
+  const junctionRadius = Math.min(fontSize * BOX_JUNCTION_RADIUS, boxHeight / 2);
+  const height = (widths.length - 1) * lineHeight + boxHeight;
+  const lineCenters = widths.map((_, index) => index * lineHeight + boxHeight / 2);
+  const fill = text.background === "black" ? "#111111" : "#ffffff";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.setAttribute("class", "text-background");
+  svg.setAttribute("viewBox", `0 0 ${contentWidth} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.height = `${height}px`;
+  svg.style.top = `${(lineHeight - boxHeight) / 2}px`;
+
+  widths.forEach((width, index) => {
+    const path = document.createElementNS(namespace, "path");
+    path.setAttribute("d", roundedRectSvgPath(
+      (contentWidth - width) / 2,
+      index * lineHeight,
+      width,
+      boxHeight,
+      lineCornerRadii(widths, index, radius),
+    ));
+    path.setAttribute("fill", fill);
+    svg.appendChild(path);
+  });
+
+  lineJunctionCorners(widths, lineCenters, contentWidth / 2, boxHeight, junctionRadius).forEach((corner) => {
+    const path = document.createElementNS(namespace, "path");
+    path.setAttribute("d", quarterCircleSvgPath(corner));
+    path.setAttribute("fill", fill);
+    svg.appendChild(path);
+  });
+  return svg;
+}
+
 function paintTextContent(text, content, box) {
   const { lines, fontSize, context } = wrappedLinesForBox(text, box);
-  const lineHeight = fontSize * TEXT_LINE_HEIGHT;
   const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
-  const padX = fontSize * 0.28;
-  const radius = Math.min(fontSize * 0.22, lineHeight / 2);
+  const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
+  const padX = fontSize * BOX_HORIZONTAL_PADDING;
   const widths = lines.map((line) => context.measureText(line || " ").width + (perLineBox ? padX * 2 : 0));
+  const contentWidth = Math.max(1, content.clientWidth || box?.clientWidth || 1);
+  const nodes = [];
+  if (perLineBox) nodes.push(createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth));
 
-  content.replaceChildren(...lines.map((line, index) => {
+  nodes.push(...lines.map((line) => {
     if (text.style === "outline") {
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("class", "text-line outline-line");
@@ -1407,12 +1506,9 @@ function paintTextContent(text, content, box) {
     const span = document.createElement("span");
     span.className = "text-line";
     span.textContent = line || "\u00a0";
-    if (perLineBox) {
-      const [tl, tr, br, bl] = lineCornerRadii(widths, index, radius);
-      span.style.borderRadius = `${tl}px ${tr}px ${br}px ${bl}px`;
-    }
     return span;
   }));
+  content.replaceChildren(...nodes);
 }
 
 function updateOverlayBox(overlay) {
@@ -2547,8 +2643,9 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const height = text.height * imageHeight;
   const exportScale = imageWidth / DESIGN_WIDTH;
   const fontSize = text.size * exportScale;
-  const lineHeight = fontSize * TEXT_LINE_HEIGHT;
-  const horizontalPadding = fontSize * 0.28;
+  const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
+  const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
+  const horizontalPadding = fontSize * BOX_HORIZONTAL_PADDING;
   const verticalPadding = fontSize * 0.1;
   context.save();
   context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
@@ -2556,12 +2653,12 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   context.textBaseline = "middle";
   context.lineJoin = "round";
   context.lineCap = "round";
-  const lines = wrapText(context, text.text, Math.max(1, width - fontSize * 0.32));
+  const horizontalInset = fontSize * (perLineBox ? BOX_HORIZONTAL_PADDING * 2 : 0.32);
+  const lines = wrapText(context, text.text, Math.max(1, width - horizontalInset));
   const visibleLineCount = Math.max(1, Math.floor((height - verticalPadding * 2) / lineHeight));
   const visibleLines = lines.slice(0, visibleLineCount);
   const blockHeight = visibleLines.length * lineHeight;
   const startY = y + (height - blockHeight) / 2 + lineHeight / 2;
-  const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
   const pillWidths = visibleLines.map((line) => Math.min(width, context.measureText(line || " ").width + horizontalPadding * 2));
 
   if (text.style === "boxed" && text.backgroundShape === "full") {
@@ -2570,27 +2667,31 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
     context.fill();
   }
 
-  visibleLines.forEach((line, index) => {
-    const lineY = startY + index * lineHeight;
-    if (perLineBox && line) {
-      const metrics = context.measureText(line);
-      const padY = fontSize * 0.14;
-      const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.72;
-      const descent = metrics.actualBoundingBoxDescent || fontSize * 0.22;
+  if (perLineBox) {
+    const backgroundHeight = fontSize * BOX_LINE_HEIGHT;
+    const radius = Math.min(fontSize * BOX_CORNER_RADIUS, backgroundHeight / 2);
+    const junctionRadius = Math.min(fontSize * BOX_JUNCTION_RADIUS, backgroundHeight / 2);
+    const lineCenters = visibleLines.map((_, index) => startY + index * lineHeight);
+    context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
+    visibleLines.forEach((line, index) => {
+      if (!line) return;
       const backgroundWidth = pillWidths[index];
-      const backgroundHeight = ascent + descent + padY * 2 + 1;
-      const radius = Math.min(fontSize * 0.22, backgroundHeight / 2);
-      context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
       roundedRect(
         context,
         x + (width - backgroundWidth) / 2,
-        lineY - ascent - padY - 0.5,
+        lineCenters[index] - backgroundHeight / 2,
         backgroundWidth,
         backgroundHeight,
         lineCornerRadii(pillWidths, index, radius),
       );
       context.fill();
-    }
+    });
+    lineJunctionCorners(pillWidths, lineCenters, x + width / 2, backgroundHeight, junctionRadius)
+      .forEach((corner) => fillQuarterCircle(context, corner));
+  }
+
+  visibleLines.forEach((line, index) => {
+    const lineY = startY + index * lineHeight;
     if (text.style === "outline") {
       context.strokeStyle = "#111111";
       context.lineWidth = fontSize * OUTLINE_RATIO;
@@ -2644,6 +2745,20 @@ function wrapText(context, value, maxWidth) {
 function roundedRect(context, x, y, width, height, radius) {
   context.beginPath();
   context.roundRect(x, y, width, height, radius);
+}
+
+function fillQuarterCircle(context, { cx, cy, radius, quadrant }) {
+  const angles = {
+    "upper-left": [Math.PI, Math.PI * 1.5],
+    "upper-right": [Math.PI * 1.5, Math.PI * 2],
+    "lower-right": [0, Math.PI * 0.5],
+    "lower-left": [Math.PI * 0.5, Math.PI],
+  }[quadrant];
+  context.beginPath();
+  context.moveTo(cx, cy);
+  context.arc(cx, cy, radius, angles[0], angles[1]);
+  context.closePath();
+  context.fill();
 }
 
 function safeFilename(value) {

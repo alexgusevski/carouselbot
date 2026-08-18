@@ -1288,7 +1288,7 @@ button,
   overflow: hidden;
   color: #fff;
   font-family: "TikTok Sans", sans-serif;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.12;
   text-align: center;
   white-space: pre-wrap;
@@ -1297,6 +1297,7 @@ button,
 }
 
 .text-content {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1307,6 +1308,8 @@ button,
 }
 
 .text-line {
+  position: relative;
+  z-index: 1;
   display: block;
   flex: 0 0 auto;
   height: 1.12em;
@@ -1347,6 +1350,7 @@ button,
 }
 
 .text-box[data-style="boxed"] .text-content-wrap {
+  padding-inline: 0;
   overflow: visible;
 }
 
@@ -1360,20 +1364,26 @@ button,
   display: flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
-  height: 1.28em;
-  margin: -0.1em 0;
-  padding: 0.04em 0.28em 0.14em;
+  height: 1.18em;
+  margin: 0;
+  padding: 0;
   color: #111;
-  background: #fff;
-  box-shadow: 0 1px 0 #fff, 0 -1px 0 #fff;
-  line-height: 1;
+  background: transparent;
+  line-height: 1.18;
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
   color: #fff;
-  background: #111;
-  box-shadow: 0 1px 0 #111, 0 -1px 0 #111;
+}
+
+.text-background {
+  position: absolute;
+  left: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  overflow: visible;
+  pointer-events: none;
 }
 
 .text-box[data-style="boxed"][data-box-shape="full"] {
