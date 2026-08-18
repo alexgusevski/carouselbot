@@ -27,6 +27,7 @@ const state = {
   draggingAssetId: null,
   croppingOverlayId: null,
   pasteBusy: false,
+  fileDropBusy: false,
 };
 
 const history = {
@@ -568,7 +569,7 @@ function renderEditor() {
 function renderSlideRail(project) {
   return `
     <aside class="slide-rail">
-      <div class="rail-heading"><h2>Photos</h2><span>${project.slides.length}</span></div>
+      <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
         ${project.slides.map((slide, index) => `
           <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" aria-label="Open slide ${index + 1}">
@@ -577,7 +578,7 @@ function renderSlideRail(project) {
           </button>
         `).join("")}
       </div>
-      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+ Add photos</button></div>
+      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">+New slide</button></div>
     </aside>
   `;
 }
@@ -939,6 +940,7 @@ function bindEditorEvents() {
   app.querySelectorAll(".overlay-box").forEach(bindOverlayBox);
   bindAssetLibrary();
   bindStageAssetDrop();
+  bindImageFileDrops();
   bindInspectorControls();
 
   const workspace = app.querySelector(".workspace");
@@ -1525,14 +1527,103 @@ function bindStageAssetDrop() {
   });
 }
 
-function addOverlayFromAsset(assetId, point, { render = true } = {}) {
+function bindImageFileDrops() {
+  bindImageFileDropTarget(app.querySelector(".slide-rail"), async (files) => {
+    await addSlidesFromFiles(files, { activateFirstNew: true });
+  });
+  bindImageFileDropTarget(app.querySelector(".workspace"), async (files, event) => {
+    await addDroppedAssetsToSlide(files, event);
+  });
+}
+
+function bindImageFileDropTarget(target, onDrop) {
+  if (!target) return;
+  let dragDepth = 0;
+  const acceptsFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+  target.addEventListener("dragenter", (event) => {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    dragDepth += 1;
+    target.classList.add("is-file-drop-target");
+  });
+  target.addEventListener("dragover", (event) => {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  target.addEventListener("dragleave", (event) => {
+    if (!acceptsFiles(event)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) target.classList.remove("is-file-drop-target");
+  });
+  target.addEventListener("drop", async (event) => {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth = 0;
+    target.classList.remove("is-file-drop-target");
+    const files = imageFilesFromTransfer(event.dataTransfer);
+    if (!files.length) {
+      toast("Drop an image file here.");
+      return;
+    }
+    if (state.fileDropBusy) return;
+    state.fileDropBusy = true;
+    try {
+      await onDrop(files, event);
+    } finally {
+      state.fileDropBusy = false;
+    }
+  });
+}
+
+async function addDroppedAssetsToSlide(files, event) {
+  const slide = activeSlide();
+  if (!slide) {
+    toast("Create a slide before adding an asset to the canvas.");
+    return;
+  }
+  recordHistory();
+  const assets = [];
+  for (const [index, file] of files.entries()) {
+    try {
+      const asset = await createAssetFromFile(file, files.length > 1 ? `Dropped image ${index + 1}` : "Dropped image");
+      if (asset) assets.push(asset);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  if (!assets.length) {
+    toast("Those images couldn’t be added.");
+    return;
+  }
+  const stage = app.querySelector(".stage-frame");
+  const rect = stage?.getBoundingClientRect();
+  const droppedOnStage = rect
+    && event.clientX >= rect.left && event.clientX <= rect.right
+    && event.clientY >= rect.top && event.clientY <= rect.bottom;
+  const origin = droppedOnStage
+    ? { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height }
+    : { x: 0.5, y: 0.5 };
+  assets.forEach((asset, index) => {
+    addOverlayFromAsset(asset.id, {
+      x: origin.x + index * 0.03,
+      y: origin.y + index * 0.03,
+    }, { render: false, record: false });
+  });
+  scheduleSave();
+  renderEditor();
+  toast(`${assets.length} ${assets.length === 1 ? "image" : "images"} added to the slide`);
+}
+
+function addOverlayFromAsset(assetId, point, { render = true, record = true } = {}) {
   const slide = activeSlide();
   const asset = projectAsset(assetId);
   if (!slide || !asset) {
     toast(slide ? "That asset is missing." : "Open a photo first, then drop the asset on it.");
     return null;
   }
-  recordHistory();
+  if (record) recordHistory();
   if (!slide.overlays) slide.overlays = [];
   const overlay = constrainOverlay({
     id: uid(),
@@ -2138,7 +2229,16 @@ function clamp(value, min, max) {
 
 async function handleUpload(event) {
   const files = [...event.target.files];
-  if (!files.length) return;
+  event.target.value = "";
+  await addSlidesFromFiles(files);
+}
+
+async function addSlidesFromFiles(files, { activateFirstNew = false } = {}) {
+  const imageFiles = files.filter(isImageFile);
+  if (!imageFiles.length) {
+    if (files.length) toast("Drop an image file here.");
+    return;
+  }
   const project = activeProject();
   if (!project) return;
   recordHistory();
@@ -2147,31 +2247,44 @@ async function handleUpload(event) {
     button.disabled = true;
     button.textContent = "Adding…";
   }
+  const addedSlides = [];
   try {
-    for (const file of files) {
-      if (!file.type.startsWith("image/")) continue;
-      const imageData = await fileToDataUrl(file);
-      const dimensions = await getImageDimensions(imageData);
-      project.slides.push({
-        id: uid(),
-        name: file.name.replace(/\.[^.]+$/, ""),
-        imageData,
-        width: dimensions.width,
-        height: dimensions.height,
-        imageScale: 1,
-        imageX: 0,
-        imageY: 0,
-        texts: [],
-        overlays: [],
-      });
+    for (const file of imageFiles) {
+      try {
+        const imageData = await fileToDataUrl(file);
+        const dimensions = await getImageDimensions(imageData);
+        const slide = {
+          id: uid(),
+          name: file.name.replace(/\.[^.]+$/, "") || "Slide",
+          imageData,
+          width: dimensions.width,
+          height: dimensions.height,
+          imageScale: 1,
+          imageX: 0,
+          imageY: 0,
+          texts: [],
+          overlays: [],
+        };
+        project.slides.push(slide);
+        addedSlides.push(slide);
+      } catch (error) {
+        console.error(error);
+      }
     }
-    if (!state.activeSlideId) state.activeSlideId = project.slides[0]?.id || null;
-    await putProject(project);
-    toast(`${files.length} ${files.length === 1 ? "photo" : "photos"} added`);
+    if (!addedSlides.length) {
+      toast("Those images couldn’t be added as slides.");
+      renderEditor();
+      return;
+    }
+    if (!state.activeSlideId || activateFirstNew) state.activeSlideId = addedSlides[0].id;
+    clearLayerSelection();
+    scheduleSave();
+    toast(`${addedSlides.length} ${addedSlides.length === 1 ? "slide" : "slides"} added`);
     renderEditor();
   } catch (error) {
     console.error(error);
-    toast("One of those photos couldn’t be added.");
+    toast("One of those images couldn’t be added as a slide.");
+    renderEditor();
   }
 }
 
@@ -2456,6 +2569,17 @@ function clipboardImageFiles(clipboardData) {
     .filter(isImageFile);
 }
 
+function imageFilesFromTransfer(dataTransfer) {
+  if (!dataTransfer) return [];
+  const listed = dataTransfer.files ? [...dataTransfer.files].filter(isImageFile) : [];
+  if (listed.length) return listed;
+  if (!dataTransfer.items) return [];
+  return [...dataTransfer.items]
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter(isImageFile);
+}
+
 async function fingerprintData(value) {
   const bytes = new TextEncoder().encode(String(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -2510,7 +2634,7 @@ async function handleClipboardPaste(event) {
     const slide = activeSlide();
     if (slide) {
       assets.forEach((asset, index) => {
-        addOverlayFromAsset(asset.id, { x: 0.5 + index * 0.03, y: 0.5 + index * 0.03 }, { render: false });
+        addOverlayFromAsset(asset.id, { x: 0.5 + index * 0.03, y: 0.5 + index * 0.03 }, { render: false, record: false });
       });
     }
     scheduleSave();
