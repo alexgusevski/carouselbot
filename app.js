@@ -114,16 +114,23 @@ function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), { ful
   return { width, height };
 }
 
+function overlayPositionLimits(metrics) {
+  const minVisible = 0.06;
+  return {
+    minX: minVisible - metrics.width,
+    maxX: 1 - minVisible,
+    minY: minVisible - metrics.height,
+    maxY: 1 - minVisible,
+  };
+}
+
 function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
   if (!asset) return overlay;
-  overlay.width = clamp(Number(overlay.width) || 0.34, 0.06, 0.96);
-  let metrics = getOverlayMetrics(overlay, asset);
-  if (metrics.height > 0.94) {
-    overlay.width *= 0.94 / metrics.height;
-    metrics = getOverlayMetrics(overlay, asset);
-  }
-  overlay.x = clamp(overlay.x, 0, Math.max(0, 1 - metrics.width));
-  overlay.y = clamp(overlay.y, 0, Math.max(0, 1 - metrics.height));
+  overlay.width = clamp(Number(overlay.width) || 0.34, 0.04, 1.6);
+  const metrics = getOverlayMetrics(overlay, asset);
+  const limits = overlayPositionLimits(metrics);
+  overlay.x = clamp(overlay.x, limits.minX, limits.maxX);
+  overlay.y = clamp(overlay.y, limits.minY, limits.maxY);
   overlay.rotation = ((Number(overlay.rotation) || 0) % 360 + 360) % 360;
   return overlay;
 }
@@ -461,12 +468,14 @@ function renderEmptyStage() {
 function renderStage(slide) {
   return `
     <div class="stage-wrap">
-      <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
-        <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
+      <div class="stage-frame">
+        <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
+          <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
+          ${renderTikTokOverlay()}
+        </div>
         <div class="layer-stack">
           ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
         </div>
-        ${renderTikTokOverlay()}
       </div>
       <span class="stage-dimensions">${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
     </div>
@@ -1161,7 +1170,7 @@ function bindAssetLibrary() {
 }
 
 function bindStageAssetDrop() {
-  const stage = app.querySelector(".stage");
+  const stage = app.querySelector(".stage-frame") || app.querySelector(".stage");
   if (!stage) return;
   const hasAssetPayload = (event) => Boolean(state.draggingAssetId) || [...event.dataTransfer.types].includes("application/x-slide-asset");
   stage.addEventListener("dragover", (event) => {
@@ -1471,8 +1480,9 @@ function beginOverlayDrag(event, box) {
     const metrics = getOverlayMetrics(overlay, asset);
     overlay.x = start.x + (moveEvent.clientX - start.clientX) / state.stageWidth;
     overlay.y = start.y + (moveEvent.clientY - start.clientY) / state.stageHeight;
-    overlay.x = clamp(overlay.x, 0, Math.max(0, 1 - metrics.width));
-    overlay.y = clamp(overlay.y, 0, Math.max(0, 1 - metrics.height));
+    const limits = overlayPositionLimits(metrics);
+    overlay.x = clamp(overlay.x, limits.minX, limits.maxX);
+    overlay.y = clamp(overlay.y, limits.minY, limits.maxY);
     updateOverlayBox(overlay);
     scheduleSave();
   };

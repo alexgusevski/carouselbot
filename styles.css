@@ -632,7 +632,7 @@ button,
   display: grid;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   place-items: center;
   background:
     radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.88), rgba(238, 237, 231, 0.82) 45%, transparent 72%);
@@ -689,12 +689,17 @@ button,
   display: grid;
   min-width: 0;
   min-height: 0;
+  overflow: visible;
   place-items: center;
 }
 
 .stage-wrap {
   position: relative;
   filter: drop-shadow(0 24px 30px rgba(26, 24, 20, 0.18));
+}
+
+.stage-frame {
+  position: relative;
 }
 
 .stage {
@@ -739,7 +744,8 @@ button,
   display: none;
 }
 
-.stage.is-drop-target {
+.stage.is-drop-target,
+.stage-frame.is-drop-target .stage {
   outline: 3px solid var(--cyan);
   outline-offset: -3px;
   box-shadow: inset 0 0 0 2px var(--ink);
