@@ -987,12 +987,12 @@ function bindStageAssetDrop() {
   });
 }
 
-function addOverlayFromAsset(assetId, point) {
+function addOverlayFromAsset(assetId, point, { render = true } = {}) {
   const slide = activeSlide();
   const asset = projectAsset(assetId);
   if (!slide || !asset) {
     toast(slide ? "That asset is missing." : "Open a photo first, then drop the asset on it.");
-    return;
+    return null;
   }
   if (!slide.overlays) slide.overlays = [];
   const overlay = constrainOverlay({
@@ -1014,8 +1014,11 @@ function addOverlayFromAsset(assetId, point) {
   state.selectedTextId = null;
   state.selectedOverlayId = overlay.id;
   state.mobileInspectorOpen = true;
-  scheduleSave();
-  renderEditor();
+  if (render) {
+    scheduleSave();
+    renderEditor();
+  }
+  return overlay;
 }
 
 async function handleAssetUpload(event) {
@@ -1646,6 +1649,80 @@ function safeFilename(value) {
     .replace(/^-|-$/g, "") || "slide";
 }
 
+function isEditingTextTarget(target) {
+  return Boolean(target?.closest?.("input, textarea, [contenteditable='true'], [contenteditable='']"));
+}
+
+function clipboardImageFiles(clipboardData) {
+  if (!clipboardData) return [];
+  const seen = new Set();
+  const files = [];
+  const add = (file) => {
+    if (!file) return;
+    const isImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name || "");
+    if (!isImage) return;
+    const key = `${file.type}:${file.size}:${file.lastModified}:${file.name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+  if (clipboardData.files) [...clipboardData.files].forEach(add);
+  if (clipboardData.items) {
+    [...clipboardData.items].forEach((item) => {
+      if (item.kind === "file") add(item.getAsFile());
+    });
+  }
+  return files;
+}
+
+async function createAssetFromFile(file, fallbackName = "Pasted image") {
+  const project = activeProject();
+  if (!project) return null;
+  if (!project.assets) project.assets = [];
+  const imageData = await fileToDataUrl(file);
+  const dimensions = await getImageDimensions(imageData);
+  const asset = {
+    id: uid(),
+    name: String(file.name || fallbackName).replace(/\.[^.]+$/, "") || fallbackName,
+    imageData,
+    width: dimensions.width,
+    height: dimensions.height,
+  };
+  project.assets.push(asset);
+  return asset;
+}
+
+async function handleClipboardPaste(event) {
+  if (!activeProject() || isEditingTextTarget(event.target)) return;
+  const files = clipboardImageFiles(event.clipboardData);
+  if (!files.length) return;
+  event.preventDefault();
+  const assets = [];
+  for (const [index, file] of files.entries()) {
+    try {
+      const asset = await createAssetFromFile(file, files.length > 1 ? `Pasted image ${index + 1}` : "Pasted image");
+      if (asset) assets.push(asset);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  if (!assets.length) {
+    toast("That clipboard image couldn’t be added.");
+    return;
+  }
+  const slide = activeSlide();
+  if (slide) {
+    assets.forEach((asset, index) => {
+      addOverlayFromAsset(asset.id, { x: 0.5 + index * 0.03, y: 0.5 + index * 0.03 }, { render: false });
+    });
+  }
+  scheduleSave();
+  renderEditor();
+  toast(slide
+    ? `${assets.length} ${assets.length === 1 ? "image" : "images"} pasted onto the photo`
+    : `${assets.length} ${assets.length === 1 ? "asset" : "assets"} added`);
+}
+
 async function init() {
   try {
     state.db = await openDatabase();
@@ -1671,6 +1748,9 @@ async function init() {
   }
   renderDashboard();
   bindGlobalActions();
+  document.addEventListener("paste", (event) => {
+    handleClipboardPaste(event);
+  });
 }
 
 init();
