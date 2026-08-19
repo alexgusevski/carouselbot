@@ -13,6 +13,8 @@ const files = new Map([
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/assets/TikTokSans.ttf", ["assets/TikTokSans.ttf", "font/ttf"]],
+  ["/assets/airdrop.svg", ["assets/airdrop.svg", "image/svg+xml"]],
+  ["/assets/favicon.svg", ["assets/favicon.svg", "image/svg+xml"]],
 ]);
 
 const server = createServer(async (request, response) => {
