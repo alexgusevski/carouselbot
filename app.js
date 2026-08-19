@@ -19,7 +19,7 @@ const FONT_SIZE_MIN = 20;
 const FONT_SIZE_MAX = 180;
 const FONT_SIZE_SLIDER_MAX = 1000;
 const FONT_SIZE_SLIDER_STEP = 10;
-const CANVAS_ZOOM_MIN = 0.5;
+const CANVAS_ZOOM_MIN = 0.2;
 const CANVAS_ZOOM_MAX = 3;
 const FONT_SIZE_SLIDER_STOPS = [
   { position: 0, size: FONT_SIZE_MIN },
