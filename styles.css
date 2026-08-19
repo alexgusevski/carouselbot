@@ -633,102 +633,52 @@ button:disabled {
   border-radius: 7px;
   background: #dedcd5;
   aspect-ratio: 9 / 16;
-  container-type: inline-size;
   pointer-events: none;
 }
 
-.thumb-canvas,
-.thumb-layers {
-  position: absolute;
-  display: block;
-  inset: 0;
-  overflow: hidden;
-}
-
-.thumb-background {
-  position: absolute;
-  display: block;
-  max-width: none;
-  object-fit: fill;
-  user-select: none;
-}
-
-.thumb-layer {
-  position: absolute;
-  display: block;
-  transform-origin: center center;
-  pointer-events: none;
-}
-
-.thumb-overlay {
-  overflow: hidden;
-}
-
-.thumb-overlay img {
-  position: absolute;
-  display: block;
-  max-width: none;
-  object-fit: fill;
-  user-select: none;
-}
-
-.thumb-text {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  align-items: center;
-  color: var(--thumb-text-color, #fff);
-  font-family: "TikTok Sans", sans-serif;
-  font-weight: 550;
-  line-height: 1.12;
-}
-
-.thumb-text-content {
+.thumb-rendered {
   display: block;
   width: 100%;
-  max-height: 100%;
-  padding: 0.14em 0.3em;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+}
+
+.thumb-rendering-placeholder {
+  position: absolute;
+  display: grid;
+  inset: 0;
   overflow: hidden;
-  line-height: inherit;
-  text-align: inherit;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  place-items: center;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 78%, var(--ink)), var(--panel));
 }
 
-.thumb-text-content > span {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.thumb-rendering-placeholder span {
+  width: 22px;
+  height: 22px;
+  border: 2px solid color-mix(in srgb, var(--ink) 22%, transparent);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: thumb-spin 700ms linear infinite;
 }
 
-.thumb-text[data-style="outline"] .thumb-text-content {
-  overflow: visible;
-  -webkit-text-stroke: 0.17em var(--thumb-outline-color, #111);
-  paint-order: stroke fill;
+.slide-drag-ghost {
+  position: fixed;
+  z-index: 9999;
+  top: 0;
+  left: 0;
+  margin: 0;
+  border: 2px solid var(--ink);
+  border-radius: 9px;
+  box-shadow: 4px 4px 0 var(--cyan), 0 12px 28px rgba(0, 0, 0, 0.28);
+  opacity: 1;
+  pointer-events: none;
+  transform: translateX(-200vw);
 }
 
-.thumb-text[data-style="boxed"] .thumb-text-content {
-  color: var(--thumb-text-color, #111);
-}
-
-.thumb-text[data-style="boxed"][data-box-shape="full"] .thumb-text-content {
-  border-radius: 0.27em;
-  background: var(--thumb-background, #fff);
-  line-height: 1.12;
-}
-
-.thumb-text[data-style="boxed"][data-box-shape="lines"] .thumb-text-content {
-  padding-right: 0.3em;
-  padding-left: 0.3em;
-  overflow: visible;
-  line-height: 1.42;
-}
-
-.thumb-text[data-style="boxed"][data-box-shape="lines"] .thumb-text-content > span {
-  padding: 0.14em 0.3em;
-  border-radius: 0.27em;
-  background: var(--thumb-background, #fff);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+@keyframes thumb-spin {
+  to { transform: rotate(360deg); }
 }
 
 .rail-upload {

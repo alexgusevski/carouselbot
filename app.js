@@ -57,7 +57,11 @@ const state = {
   showTikTokOverlay: false,
   draggingAssetId: null,
   draggingSlideId: null,
-  thumbnailRefreshFrame: null,
+  slideDragGhost: null,
+  thumbnailRefreshTimer: null,
+  thumbnailUrls: new Map(),
+  thumbnailSignatures: new Map(),
+  thumbnailVersions: new Map(),
   croppingOverlayId: null,
   pasteBusy: false,
   fileDropBusy: false,
@@ -742,7 +746,10 @@ function renderEditor() {
     <input id="asset-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
   `;
   bindEditorEvents();
-  if (activeSlide()) requestAnimationFrame(sizeStage);
+  requestAnimationFrame(() => {
+    if (activeSlide()) sizeStage();
+    refreshAllSlideThumbnails(project.slides);
+  });
 }
 
 function renderSlideRail(project) {
@@ -762,58 +769,74 @@ function renderSlideRail(project) {
   `;
 }
 
-function thumbnailOverlayMetrics(overlay, asset) {
-  const crop = overlayCrop(overlay);
-  const aspect = ((asset?.height || 1) * crop.h) / ((asset?.width || 1) * crop.w);
-  const width = Number(overlay.width) || 0.34;
-  const naturalHeight = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
-  const height = Number.isFinite(Number(overlay.height)) ? Number(overlay.height) : naturalHeight;
-  return { width, height };
-}
-
-function renderThumbnailOverlay(overlay) {
-  const asset = projectAsset(overlay.assetId);
-  if (!asset) return "";
-  const crop = overlayCrop(overlay);
-  const metrics = thumbnailOverlayMetrics(overlay, asset);
-  return `
-    <span class="thumb-layer thumb-overlay" style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${overlay.rotation || 0}deg);">
-      <img src="${asset.imageData}" alt="" draggable="false" style="width:${100 / crop.w}%;height:${100 / crop.h}%;left:${(-crop.x / crop.w) * 100}%;top:${(-crop.y / crop.h) * 100}%;" />
-    </span>
-  `;
-}
-
-function renderThumbnailText(text) {
-  const color = textColor(text);
-  const background = text.background === "black" ? "#111111" : "#ffffff";
-  return `
-    <span
-      class="thumb-layer thumb-text"
-      data-style="${text.style}"
-      data-box-shape="${text.backgroundShape || "lines"}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);font-size:${text.size / 10.8}cqw;text-align:${textAlignment(text)};--thumb-text-color:${color};--thumb-outline-color:${outlineColorFor(color)};--thumb-background:${background};"
-    ><span class="thumb-text-content"><span>${escapeHtml(text.text)}</span></span></span>
-  `;
-}
-
 function renderSlideThumbnail(slide) {
-  const layout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
-  return `
-    <span class="thumb-canvas" aria-hidden="true">
-      <img class="thumb-background" src="${slide.imageData}" alt="" draggable="false" style="width:${(layout.width / OUTPUT_WIDTH) * 100}%;height:${(layout.height / OUTPUT_HEIGHT) * 100}%;left:${(layout.left / OUTPUT_WIDTH) * 100}%;top:${(layout.top / OUTPUT_HEIGHT) * 100}%;" />
-      <span class="thumb-layers">${slideItems(slide).map(({ kind, item }) => kind === "overlay" ? renderThumbnailOverlay(item) : renderThumbnailText(item)).join("")}</span>
-    </span>
-  `;
+  const source = state.thumbnailUrls.get(slide.id);
+  return source
+    ? `<img class="thumb-rendered" src="${source}" alt="" draggable="false" aria-hidden="true" />`
+    : `<span class="thumb-rendering-placeholder" aria-hidden="true"><span></span></span>`;
 }
 
 function scheduleThumbnailRefresh() {
-  if (state.thumbnailRefreshFrame) return;
-  state.thumbnailRefreshFrame = requestAnimationFrame(() => {
-    state.thumbnailRefreshFrame = null;
+  clearTimeout(state.thumbnailRefreshTimer);
+  state.thumbnailRefreshTimer = setTimeout(() => {
+    state.thumbnailRefreshTimer = null;
     const slide = activeSlide();
-    const thumbnail = slide && app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
-    if (thumbnail) thumbnail.innerHTML = renderSlideThumbnail(slide);
+    if (slide) refreshSlideThumbnail(slide);
+  }, 80);
+}
+
+function thumbnailSignature(slide) {
+  return JSON.stringify([
+    slide.imageScale || 1,
+    slide.imageX || 0,
+    slide.imageY || 0,
+    slide.texts || [],
+    slide.overlays || [],
+  ]);
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not render thumbnail")), "image/png", 1);
   });
+}
+
+async function refreshSlideThumbnail(slide) {
+  const target = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
+  if (!target) return;
+  const signature = thumbnailSignature(slide);
+  const cachedUrl = state.thumbnailUrls.get(slide.id);
+  if (cachedUrl && state.thumbnailSignatures.get(slide.id) === signature) {
+    const image = target.querySelector(".thumb-rendered");
+    if (image?.src !== cachedUrl) image.src = cachedUrl;
+    return;
+  }
+
+  const version = (state.thumbnailVersions.get(slide.id) || 0) + 1;
+  state.thumbnailVersions.set(slide.id, version);
+  target.classList.add("is-rendering");
+  try {
+    const canvas = await renderSlideCanvas(slide, 540, 960);
+    const blob = await canvasToBlob(canvas);
+    if (state.thumbnailVersions.get(slide.id) !== version) return;
+    const url = URL.createObjectURL(blob);
+    const previousUrl = state.thumbnailUrls.get(slide.id);
+    state.thumbnailUrls.set(slide.id, url);
+    state.thumbnailSignatures.set(slide.id, signature);
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    const currentTarget = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
+    if (currentTarget) {
+      currentTarget.innerHTML = renderSlideThumbnail(slide);
+      currentTarget.classList.remove("is-rendering");
+    }
+  } catch (error) {
+    console.error(error);
+    target.classList.remove("is-rendering");
+  }
+}
+
+function refreshAllSlideThumbnails(slides) {
+  slides.forEach((slide) => refreshSlideThumbnail(slide));
 }
 
 function renderAssetRail(project) {
@@ -2046,6 +2069,25 @@ function clearSlideDropIndicators() {
     .forEach((item) => item.classList.remove("is-drop-before", "is-drop-after"));
 }
 
+function clearSlideDragGhost() {
+  state.slideDragGhost?.remove();
+  state.slideDragGhost = null;
+}
+
+function setSlideDragGhost(event, button) {
+  clearSlideDragGhost();
+  const thumbnail = button.querySelector(".thumb-image");
+  if (!thumbnail || !event.dataTransfer) return;
+  const rect = thumbnail.getBoundingClientRect();
+  const ghost = thumbnail.cloneNode(true);
+  ghost.classList.add("slide-drag-ghost");
+  ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
+  document.body.appendChild(ghost);
+  event.dataTransfer.setDragImage(ghost, rect.width / 2, Math.min(32, rect.height / 2));
+  state.slideDragGhost = ghost;
+}
+
 function reorderSlide(sourceId, targetId, placement) {
   const project = activeProject();
   if (!project || !sourceId || sourceId === targetId) return;
@@ -2068,10 +2110,12 @@ function bindSlideReordering() {
   const buttons = [...app.querySelectorAll(".slide-thumb[data-slide-id]")];
   buttons.forEach((button) => {
     button.addEventListener("dragstart", (event) => {
+      event.stopPropagation();
       state.draggingSlideId = button.dataset.slideId;
       event.dataTransfer.setData(slideType, button.dataset.slideId);
       event.dataTransfer.setData("text/plain", `slide:${button.dataset.slideId}`);
       event.dataTransfer.effectAllowed = "move";
+      setSlideDragGhost(event, button);
       requestAnimationFrame(() => button.classList.add("is-dragging"));
     });
     button.addEventListener("dragover", (event) => {
@@ -2092,11 +2136,13 @@ function bindSlideReordering() {
       const rect = button.getBoundingClientRect();
       const placement = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
       state.draggingSlideId = null;
+      clearSlideDragGhost();
       clearSlideDropIndicators();
       reorderSlide(sourceId, button.dataset.slideId, placement);
     });
     button.addEventListener("dragend", () => {
       state.draggingSlideId = null;
+      clearSlideDragGhost();
       button.classList.remove("is-dragging");
       clearSlideDropIndicators();
     });
@@ -3075,17 +3121,22 @@ function loadImage(src) {
   });
 }
 
-async function renderSlideBlob(slide = activeSlide()) {
-  if (!slide) return null;
+async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT) {
   await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
   const image = await loadImage(slide.imageData);
   const canvas = document.createElement("canvas");
-  canvas.width = OUTPUT_WIDTH;
-  canvas.height = OUTPUT_HEIGHT;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d");
-  const imageLayout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
+  const imageLayout = getImageLayout(slide, width, height);
   context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-  await drawSlideLayers(context, slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
+  await drawSlideLayers(context, slide, width, height);
+  return canvas;
+}
+
+async function renderSlideBlob(slide = activeSlide()) {
+  if (!slide) return null;
+  const canvas = await renderSlideCanvas(slide);
   return new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
 }
 
