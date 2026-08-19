@@ -624,8 +624,8 @@ function icon(name) {
   const icons = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
-    share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
     airdrop: '<img class="airdrop-icon" src="assets/airdrop.svg" alt="" />',
+    github: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.3-.4 6.8-1.6 6.8-7A5.4 5.4 0 0 0 19.4 4 5 5 0 0 0 19.3.5S18.2.1 15 1.8a13.4 13.4 0 0 0-7 0C4.8.1 3.7.5 3.7.5A5 5 0 0 0 3.6 4a5.4 5.4 0 0 0-1.4 3.7c0 5.4 3.5 6.6 6.8 7A4.8 4.8 0 0 0 8 18v4"/><path d="M8 19c-3 .9-3-1.5-4-2"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
@@ -649,7 +649,7 @@ function icon(name) {
 function renderHeader({ editor = false } = {}) {
   const project = activeProject();
   return `
-    <header class="app-header">
+    <header class="app-header${editor ? " app-header--editor" : ""}">
       <button class="brand" type="button" data-action="home" aria-label="Go to projects">
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-copy"><strong>Slide Studio</strong><small>TikTok image maker</small></span>
@@ -662,16 +662,17 @@ function renderHeader({ editor = false } = {}) {
       <div class="header-actions">
         ${editor ? `
           <button class="icon-button mobile-edit-button" type="button" data-action="toggle-inspector" aria-label="Toggle text controls">${icon("edit")}</button>
-          <button class="button button--quiet share-button" type="button" data-action="share" aria-label="Share current slide" title="Share current slide" ${activeSlide() ? "" : "disabled"}>
-            ${icon("share")} <span>Share slide</span>
+          <button class="button button--quiet share-button" type="button" data-action="share" aria-label="AirDrop current slide" title="AirDrop current slide" ${activeSlide() ? "" : "disabled"}>
+            ${icon("airdrop")} <span>AirDrop</span>
           </button>
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop all</span>
           </button>
-          <button class="button button--primary" type="button" data-action="export" ${activeSlide() ? "" : "disabled"}>
+          <button class="button button--quiet" type="button" data-action="export" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>Download PNG</span>
           </button>
         ` : `<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
+        <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository">${icon("github")}</a>
       </div>
     </header>
   `;

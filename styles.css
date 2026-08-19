@@ -166,6 +166,12 @@ button:disabled {
   height: 18px;
 }
 
+.github-link {
+  flex: 0 0 auto;
+  color: inherit;
+  text-decoration: none;
+}
+
 .airdrop-icon {
   width: 18px;
   height: 18px;
@@ -2662,6 +2668,12 @@ input[type="range"]::-webkit-slider-thumb {
 @media (min-width: 781px) {
   .mobile-edit-button {
     display: none !important;
+  }
+}
+
+@media (max-width: 430px) {
+  .app-header--editor .brand-copy {
+    display: none;
   }
 }
 
