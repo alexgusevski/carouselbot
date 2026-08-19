@@ -56,6 +56,8 @@ const state = {
   photoAdjustMode: false,
   showTikTokOverlay: false,
   draggingAssetId: null,
+  draggingSlideId: null,
+  thumbnailRefreshFrame: null,
   croppingOverlayId: null,
   pasteBusy: false,
   fileDropBusy: false,
@@ -581,6 +583,7 @@ function scheduleSave() {
   const project = activeProject();
   if (!project) return;
   project.updatedAt = Date.now();
+  scheduleThumbnailRefresh();
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
     try {
@@ -742,15 +745,69 @@ function renderSlideRail(project) {
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
         ${project.slides.map((slide, index) => `
-          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" aria-label="Open slide ${index + 1}">
+          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-label="Open slide ${index + 1}. Drag to reorder." title="Drag to reorder">
             <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-            <span class="thumb-image"><img src="${slide.imageData}" alt="" /></span>
+            <span class="thumb-image" data-thumbnail-slide-id="${slide.id}">${renderSlideThumbnail(slide)}</span>
           </button>
         `).join("")}
       </div>
       <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">${icon("plus")}<span>New slide</span></button></div>
     </aside>
   `;
+}
+
+function thumbnailOverlayMetrics(overlay, asset) {
+  const crop = overlayCrop(overlay);
+  const aspect = ((asset?.height || 1) * crop.h) / ((asset?.width || 1) * crop.w);
+  const width = Number(overlay.width) || 0.34;
+  const naturalHeight = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
+  const height = Number.isFinite(Number(overlay.height)) ? Number(overlay.height) : naturalHeight;
+  return { width, height };
+}
+
+function renderThumbnailOverlay(overlay) {
+  const asset = projectAsset(overlay.assetId);
+  if (!asset) return "";
+  const crop = overlayCrop(overlay);
+  const metrics = thumbnailOverlayMetrics(overlay, asset);
+  return `
+    <span class="thumb-layer thumb-overlay" style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${overlay.rotation || 0}deg);">
+      <img src="${asset.imageData}" alt="" draggable="false" style="width:${100 / crop.w}%;height:${100 / crop.h}%;left:${(-crop.x / crop.w) * 100}%;top:${(-crop.y / crop.h) * 100}%;" />
+    </span>
+  `;
+}
+
+function renderThumbnailText(text) {
+  const color = textColor(text);
+  const background = text.background === "black" ? "#111111" : "#ffffff";
+  return `
+    <span
+      class="thumb-layer thumb-text"
+      data-style="${text.style}"
+      data-box-shape="${text.backgroundShape || "lines"}"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);font-size:${text.size / 10.8}cqw;text-align:${textAlignment(text)};--thumb-text-color:${color};--thumb-outline-color:${outlineColorFor(color)};--thumb-background:${background};"
+    ><span class="thumb-text-content"><span>${escapeHtml(text.text)}</span></span></span>
+  `;
+}
+
+function renderSlideThumbnail(slide) {
+  const layout = getImageLayout(slide, OUTPUT_WIDTH, OUTPUT_HEIGHT);
+  return `
+    <span class="thumb-canvas" aria-hidden="true">
+      <img class="thumb-background" src="${slide.imageData}" alt="" draggable="false" style="width:${(layout.width / OUTPUT_WIDTH) * 100}%;height:${(layout.height / OUTPUT_HEIGHT) * 100}%;left:${(layout.left / OUTPUT_WIDTH) * 100}%;top:${(layout.top / OUTPUT_HEIGHT) * 100}%;" />
+      <span class="thumb-layers">${slideItems(slide).map(({ kind, item }) => kind === "overlay" ? renderThumbnailOverlay(item) : renderThumbnailText(item)).join("")}</span>
+    </span>
+  `;
+}
+
+function scheduleThumbnailRefresh() {
+  if (state.thumbnailRefreshFrame) return;
+  state.thumbnailRefreshFrame = requestAnimationFrame(() => {
+    state.thumbnailRefreshFrame = null;
+    const slide = activeSlide();
+    const thumbnail = slide && app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
+    if (thumbnail) thumbnail.innerHTML = renderSlideThumbnail(slide);
+  });
 }
 
 function renderAssetRail(project) {
@@ -1157,6 +1214,7 @@ function bindEditorEvents() {
       renderEditor();
     });
   });
+  bindSlideReordering();
 
   app.querySelector('[data-action="add-text"]')?.addEventListener("click", () => addText());
   app.querySelector('[data-action="delete-text"]')?.addEventListener("click", deleteSelectedText);
@@ -1974,6 +2032,68 @@ async function deleteActiveSlide() {
   clearLayerSelection();
   scheduleSave();
   renderEditor();
+}
+
+function clearSlideDropIndicators() {
+  app.querySelectorAll(".slide-thumb.is-drop-before, .slide-thumb.is-drop-after")
+    .forEach((item) => item.classList.remove("is-drop-before", "is-drop-after"));
+}
+
+function reorderSlide(sourceId, targetId, placement) {
+  const project = activeProject();
+  if (!project || !sourceId || sourceId === targetId) return;
+  const sourceIndex = project.slides.findIndex((slide) => slide.id === sourceId);
+  if (sourceIndex < 0) return;
+  const target = project.slides.find((slide) => slide.id === targetId);
+  if (!target) return;
+
+  recordHistory();
+  const [movedSlide] = project.slides.splice(sourceIndex, 1);
+  let targetIndex = project.slides.findIndex((slide) => slide.id === targetId);
+  if (placement === "after") targetIndex += 1;
+  project.slides.splice(targetIndex, 0, movedSlide);
+  scheduleSave();
+  renderEditor();
+}
+
+function bindSlideReordering() {
+  const slideType = "application/x-slide-studio-slide";
+  const buttons = [...app.querySelectorAll(".slide-thumb[data-slide-id]")];
+  buttons.forEach((button) => {
+    button.addEventListener("dragstart", (event) => {
+      state.draggingSlideId = button.dataset.slideId;
+      event.dataTransfer.setData(slideType, button.dataset.slideId);
+      event.dataTransfer.setData("text/plain", `slide:${button.dataset.slideId}`);
+      event.dataTransfer.effectAllowed = "move";
+      requestAnimationFrame(() => button.classList.add("is-dragging"));
+    });
+    button.addEventListener("dragover", (event) => {
+      if (!state.draggingSlideId || state.draggingSlideId === button.dataset.slideId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      const rect = button.getBoundingClientRect();
+      const placement = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      clearSlideDropIndicators();
+      button.classList.add(placement === "before" ? "is-drop-before" : "is-drop-after");
+    });
+    button.addEventListener("drop", (event) => {
+      const sourceId = event.dataTransfer.getData(slideType) || state.draggingSlideId;
+      if (!sourceId || sourceId === button.dataset.slideId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = button.getBoundingClientRect();
+      const placement = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      state.draggingSlideId = null;
+      clearSlideDropIndicators();
+      reorderSlide(sourceId, button.dataset.slideId, placement);
+    });
+    button.addEventListener("dragend", () => {
+      state.draggingSlideId = null;
+      button.classList.remove("is-dragging");
+      clearSlideDropIndicators();
+    });
+  });
 }
 
 function bindAssetLibrary() {

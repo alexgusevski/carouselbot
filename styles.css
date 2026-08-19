@@ -567,6 +567,7 @@ button:disabled {
 }
 
 .slide-thumb {
+  position: relative;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 9px;
@@ -575,7 +576,7 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: 11px;
   background: transparent;
-  cursor: pointer;
+  cursor: grab;
   text-align: left;
 }
 
@@ -589,6 +590,33 @@ button:disabled {
   box-shadow: 3px 3px 0 var(--cyan);
 }
 
+.slide-thumb.is-dragging {
+  opacity: 0.42;
+  cursor: grabbing;
+}
+
+.slide-thumb.is-drop-before::before,
+.slide-thumb.is-drop-after::after {
+  position: absolute;
+  z-index: 5;
+  right: 4px;
+  left: 4px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--cyan);
+  box-shadow: 0 0 0 1px var(--ink);
+  content: "";
+  pointer-events: none;
+}
+
+.slide-thumb.is-drop-before::before {
+  top: -6px;
+}
+
+.slide-thumb.is-drop-after::after {
+  bottom: -6px;
+}
+
 .slide-number {
   padding-top: 3px;
   color: var(--muted);
@@ -599,17 +627,108 @@ button:disabled {
 
 .thumb-image {
   position: relative;
+  display: block;
   width: 100%;
   overflow: hidden;
   border-radius: 7px;
   background: #dedcd5;
-  aspect-ratio: 4 / 5;
+  aspect-ratio: 9 / 16;
+  container-type: inline-size;
+  pointer-events: none;
 }
 
-.thumb-image img {
+.thumb-canvas,
+.thumb-layers {
+  position: absolute;
+  display: block;
+  inset: 0;
+  overflow: hidden;
+}
+
+.thumb-background {
+  position: absolute;
+  display: block;
+  max-width: none;
+  object-fit: fill;
+  user-select: none;
+}
+
+.thumb-layer {
+  position: absolute;
+  display: block;
+  transform-origin: center center;
+  pointer-events: none;
+}
+
+.thumb-overlay {
+  overflow: hidden;
+}
+
+.thumb-overlay img {
+  position: absolute;
+  display: block;
+  max-width: none;
+  object-fit: fill;
+  user-select: none;
+}
+
+.thumb-text {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  color: var(--thumb-text-color, #fff);
+  font-family: "TikTok Sans", sans-serif;
+  font-weight: 550;
+  line-height: 1.12;
+}
+
+.thumb-text-content {
+  display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  max-height: 100%;
+  padding: 0.14em 0.3em;
+  overflow: hidden;
+  line-height: inherit;
+  text-align: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thumb-text-content > span {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thumb-text[data-style="outline"] .thumb-text-content {
+  overflow: visible;
+  -webkit-text-stroke: 0.17em var(--thumb-outline-color, #111);
+  paint-order: stroke fill;
+}
+
+.thumb-text[data-style="boxed"] .thumb-text-content {
+  color: var(--thumb-text-color, #111);
+}
+
+.thumb-text[data-style="boxed"][data-box-shape="full"] .thumb-text-content {
+  border-radius: 0.27em;
+  background: var(--thumb-background, #fff);
+  line-height: 1.12;
+}
+
+.thumb-text[data-style="boxed"][data-box-shape="lines"] .thumb-text-content {
+  padding-right: 0.3em;
+  padding-left: 0.3em;
+  overflow: visible;
+  line-height: 1.42;
+}
+
+.thumb-text[data-style="boxed"][data-box-shape="lines"] .thumb-text-content > span {
+  padding: 0.14em 0.3em;
+  border-radius: 0.27em;
+  background: var(--thumb-background, #fff);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .rail-upload {

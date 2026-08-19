@@ -11,6 +11,7 @@ Everything runs in the browser. Photos and projects stay in IndexedDB on your de
 - Creates projects that persist in the browser with IndexedDB
 - Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF photos
 - Crops every photo to TikTok's portrait 9:16 format with drag and zoom controls
+- Shows full slide compositions in the sidebar and supports drag-to-reorder
 - Keeps a project-wide asset library so extra photos can be reused on any slide
 - Adds photo overlays by dragging an uploaded asset onto the main image, then resizing (aspect ratio locked) or rotating
 - Adds multiline text layers that can be dragged and resized
