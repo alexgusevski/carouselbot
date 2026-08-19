@@ -20,6 +20,7 @@ Everything runs in the browser. Photos and projects stay in IndexedDB on your de
 - Offers white or black background treatments
 - Toggles a semi-transparent TikTok UI placement preview that is never exported
 - Uses the official open-source TikTok Sans font
+- Shares one slide or every slide at once as full-resolution PNGs, with text and image layers included
 - Downloads the selected slide as a 1080 × 1920 PNG
 
 ## Run it locally

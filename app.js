@@ -62,6 +62,7 @@ const state = {
   pasteBusy: false,
   fileDropBusy: false,
   copiedLayer: null,
+  shareAllCache: null,
 };
 
 const history = {
@@ -584,6 +585,7 @@ function scheduleSave() {
   if (!project) return;
   project.updatedAt = Date.now();
   scheduleThumbnailRefresh();
+  state.shareAllCache = null;
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
     try {
@@ -618,6 +620,7 @@ function icon(name) {
   const icons = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
     airdrop: '<img class="airdrop-icon" src="assets/airdrop.svg" alt="" />',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
@@ -655,8 +658,11 @@ function renderHeader({ editor = false } = {}) {
       <div class="header-actions">
         ${editor ? `
           <button class="icon-button mobile-edit-button" type="button" data-action="toggle-inspector" aria-label="Toggle text controls">${icon("edit")}</button>
-          <button class="button button--quiet" type="button" data-action="share" ${activeSlide() ? "" : "disabled"}>
-            ${icon("airdrop")} <span>AirDrop</span>
+          <button class="button button--quiet share-button" type="button" data-action="share" aria-label="Share current slide" title="Share current slide" ${activeSlide() ? "" : "disabled"}>
+            ${icon("share")} <span>Share slide</span>
+          </button>
+          <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
+            ${icon("airdrop")} <span>AirDrop all</span>
           </button>
           <button class="button button--primary" type="button" data-action="export" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>Download PNG</span>
@@ -1223,6 +1229,7 @@ function bindEditorEvents() {
   app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
   app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
   app.querySelector('[data-action="share"]')?.addEventListener("click", shareActiveSlide);
+  app.querySelector('[data-action="share-all"]')?.addEventListener("click", shareAllSlides);
   app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
     state.mobileInspectorOpen = !state.mobileInspectorOpen;
     app.querySelector(".inspector")?.classList.toggle("is-mobile-open", state.mobileInspectorOpen);
@@ -3068,8 +3075,7 @@ function loadImage(src) {
   });
 }
 
-async function renderSlideBlob() {
-  const slide = activeSlide();
+async function renderSlideBlob(slide = activeSlide()) {
   if (!slide) return null;
   await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
   const image = await loadImage(slide.imageData);
@@ -3083,8 +3089,9 @@ async function renderSlideBlob() {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
 }
 
-function slideExportName() {
-  return `${safeFilename(activeProject().name)}-${safeFilename(activeSlide().name)}.png`;
+function slideExportName(slide = activeSlide(), index = null) {
+  const order = index == null ? "" : `${String(index + 1).padStart(2, "0")}-`;
+  return `${order}${safeFilename(activeProject().name)}-${safeFilename(slide.name)}.png`;
 }
 
 async function exportActiveSlide() {
@@ -3151,6 +3158,58 @@ async function shareActiveSlide() {
       shareButton.disabled = false;
       shareButton.innerHTML = oldLabel;
     }
+  }
+}
+
+async function shareAllSlides() {
+  const project = activeProject();
+  if (!project?.slides.length) return;
+  const shareButton = app.querySelector('[data-action="share-all"]');
+  const shareButtons = [...app.querySelectorAll(".share-button")];
+  const oldLabel = shareButton?.innerHTML;
+  shareButtons.forEach((button) => { button.disabled = true; });
+  try {
+    let files = state.shareAllCache?.projectId === project.id
+      && state.shareAllCache?.projectUpdatedAt === project.updatedAt
+      ? state.shareAllCache.files
+      : null;
+    if (!files) {
+      files = [];
+      for (const [index, slide] of project.slides.entries()) {
+        if (shareButton) shareButton.textContent = `Preparing ${index + 1}/${project.slides.length}…`;
+        const blob = await renderSlideBlob(slide);
+        if (!blob) throw new Error(`Could not create PNG for slide ${index + 1}`);
+        files.push(new File([blob], slideExportName(slide, index), { type: "image/png" }));
+      }
+      state.shareAllCache = {
+        projectId: project.id,
+        projectUpdatedAt: project.updatedAt,
+        files,
+      };
+    }
+    if (navigator.canShare?.({ files })) {
+      if (navigator.userActivation && !navigator.userActivation.isActive) {
+        toast("Slides are ready — tap AirDrop all again.");
+        return;
+      }
+      await navigator.share({ files });
+      state.shareAllCache = null;
+    } else {
+      state.shareAllCache = null;
+      toast("This browser can’t share multiple images at once.");
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    if (error?.name === "NotAllowedError" && state.shareAllCache) {
+      toast("Slides are ready — tap AirDrop all again.");
+      return;
+    }
+    state.shareAllCache = null;
+    console.error(error);
+    toast("Couldn’t open the share menu for all slides.");
+  } finally {
+    shareButtons.forEach((button) => { button.disabled = false; });
+    if (shareButton) shareButton.innerHTML = oldLabel;
   }
 }
 
