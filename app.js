@@ -10,6 +10,7 @@ const OUTLINE_RATIO = 0.17;
 const TEXT_WEIGHT = 550;
 const TEXT_LINE_HEIGHT = 1.12;
 const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
+const HISTORY_LIMIT = 200;
 const BOX_TEXT_LINE_HEIGHT = 1.12;
 const BOX_LINE_HEIGHT = 1.42;
 const BOX_HORIZONTAL_PADDING = 0.52;
@@ -83,7 +84,7 @@ function recordHistory() {
   const project = activeProject();
   if (!project || history.applying) return;
   history.past.push(cloneProject(project));
-  if (history.past.length > 30) history.past.shift();
+  if (history.past.length > HISTORY_LIMIT) history.past.shift();
   history.future = [];
 }
 
