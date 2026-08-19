@@ -668,8 +668,8 @@ function renderHeader({ editor = false } = {}) {
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop all</span>
           </button>
-          <button class="button button--quiet" type="button" data-action="export" ${activeSlide() ? "" : "disabled"}>
-            ${icon("download")} <span>Download PNG</span>
+          <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide as PNG" title="Download PNG" ${activeSlide() ? "" : "disabled"}>
+            ${icon("download")} <span>PNG</span>
           </button>
         ` : `<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
         <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository">${icon("github")}</a>
@@ -3692,6 +3692,10 @@ async function init() {
   });
   document.addEventListener("copy", handleLayerCopy);
   document.addEventListener("pointerdown", (event) => {
+    const title = document.activeElement;
+    if (title?.classList?.contains("project-title-input") && !event.target.closest(".project-title-input")) {
+      title.blur();
+    }
     if (!event.target.closest(".layer-menu")) closeLayerMenu();
   }, true);
   document.addEventListener("keydown", (event) => {
