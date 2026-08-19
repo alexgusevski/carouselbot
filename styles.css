@@ -1501,7 +1501,7 @@ button:disabled {
   overflow: hidden;
   color: var(--text-color, #fff);
   font-family: "TikTok Sans", sans-serif;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1.12;
   text-align: center;
   white-space: pre-wrap;
