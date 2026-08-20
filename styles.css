@@ -172,6 +172,12 @@ button:disabled {
   text-decoration: none;
 }
 
+.github-mark {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
 .airdrop-icon {
   width: 18px;
   height: 18px;
@@ -2441,6 +2447,10 @@ input[type="range"]::-webkit-slider-thumb {
   .new-project-card:hover,
   .style-option:hover {
     border-color: #9a9d92;
+  }
+
+  .github-mark {
+    filter: invert(1);
   }
 
   .project-preview,

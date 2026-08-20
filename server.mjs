@@ -14,6 +14,7 @@ const files = new Map([
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/assets/TikTokSans.ttf", ["assets/TikTokSans.ttf", "font/ttf"]],
   ["/assets/airdrop.svg", ["assets/airdrop.svg", "image/svg+xml"]],
+  ["/assets/Octicons-mark-github.svg", ["assets/Octicons-mark-github.svg", "image/svg+xml"]],
   ["/assets/favicon.svg", ["assets/favicon.svg", "image/svg+xml"]],
 ]);
 

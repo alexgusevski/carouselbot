@@ -542,6 +542,39 @@ function showAssetDeleteMenu(event, assetId) {
   positionLayerMenu(menu, clientX, clientY);
 }
 
+function showSlideMenu(event, slideId) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeLayerMenu();
+
+  const slide = activeProject()?.slides.find((item) => item.id === slideId);
+  if (!slide) return;
+
+  const menu = document.createElement("div");
+  menu.className = "layer-menu layer-menu--confirm";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", `Actions for ${slide.name}`);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "layer-menu-item is-danger";
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", `Remove ${slide.name}`);
+  button.innerHTML = `${icon("trash")}<span>Remove</span>`;
+  button.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    closeLayerMenu();
+    removeSlide(slideId);
+  });
+  menu.appendChild(button);
+  document.body.appendChild(menu);
+
+  const triggerRect = event.currentTarget.getBoundingClientRect();
+  const clientX = event.clientX || triggerRect.left + triggerRect.width / 2;
+  const clientY = event.clientY || triggerRect.top + triggerRect.height / 2;
+  positionLayerMenu(menu, clientX, clientY);
+}
+
 function beginCrop(overlayId) {
   recordHistory();
   const overlay = (activeSlide()?.overlays || []).find((item) => item.id === overlayId);
@@ -625,7 +658,6 @@ function icon(name) {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
     airdrop: '<img class="airdrop-icon" src="assets/airdrop.svg" alt="" />',
-    github: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.3-.4 6.8-1.6 6.8-7A5.4 5.4 0 0 0 19.4 4 5 5 0 0 0 19.3.5S18.2.1 15 1.8a13.4 13.4 0 0 0-7 0C4.8.1 3.7.5 3.7.5A5 5 0 0 0 3.6 4a5.4 5.4 0 0 0-1.4 3.7c0 5.4 3.5 6.6 6.8 7A4.8 4.8 0 0 0 8 18v4"/><path d="M8 19c-3 .9-3-1.5-4-2"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
@@ -672,7 +704,7 @@ function renderHeader({ editor = false } = {}) {
             ${icon("download")} <span>PNG</span>
           </button>
         ` : `<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
-        <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository">${icon("github")}</a>
+        <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository"><img class="github-mark" src="assets/Octicons-mark-github.svg" alt="" /></a>
       </div>
     </header>
   `;
@@ -759,7 +791,7 @@ function renderSlideRail(project) {
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
         ${project.slides.map((slide, index) => `
-          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-label="Open slide ${index + 1}. Drag to reorder." title="Drag to reorder">
+          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
             <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
             <span class="thumb-image" data-thumbnail-slide-id="${slide.id}">${renderSlideThumbnail(slide)}</span>
           </button>
@@ -2050,17 +2082,25 @@ function deleteSelectedText() {
   deleteSelectedLayers();
 }
 
-async function deleteActiveSlide() {
+function removeSlide(slideId) {
   const project = activeProject();
-  const slide = activeSlide();
-  if (!project || !slide) return;
-  const confirmed = window.confirm(`Remove “${slide.name}” from this project?`);
-  if (!confirmed) return;
+  if (!project) return;
+  const index = project.slides.findIndex((item) => item.id === slideId);
+  if (index < 0) return;
+
   recordHistory();
-  const index = project.slides.findIndex((item) => item.id === slide.id);
   project.slides.splice(index, 1);
-  state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
-  clearLayerSelection();
+  const thumbnailUrl = state.thumbnailUrls.get(slideId);
+  if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
+  state.thumbnailUrls.delete(slideId);
+  state.thumbnailSignatures.delete(slideId);
+  state.thumbnailVersions.delete(slideId);
+
+  if (state.activeSlideId === slideId) {
+    state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
+    clearLayerSelection();
+    state.photoAdjustMode = false;
+  }
   scheduleSave();
   renderEditor();
 }
@@ -2110,6 +2150,9 @@ function bindSlideReordering() {
   const slideType = "application/x-slide-studio-slide";
   const buttons = [...app.querySelectorAll(".slide-thumb[data-slide-id]")];
   buttons.forEach((button) => {
+    button.addEventListener("contextmenu", (event) => {
+      showSlideMenu(event, button.dataset.slideId);
+    });
     button.addEventListener("dragstart", (event) => {
       event.stopPropagation();
       state.draggingSlideId = button.dataset.slideId;
