@@ -991,7 +991,7 @@ button:disabled {
 
 .stage {
   position: relative;
-  z-index: 1;
+  /* Keep the TikTok preview in the frame's stacking context, above .layer-stack. */
   overflow: hidden;
   background: #232323;
   user-select: none;
