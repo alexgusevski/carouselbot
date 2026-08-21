@@ -2,6 +2,9 @@
   "name": "slide-studio",
   "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "description": "Local-first web editor for TikTok slideshow images",
   "homepage": "https://slides-editor.pages.dev",
   "license": "MIT",
@@ -15,16 +18,19 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
-    "mcp:poc": "node mcp/server.mjs",
-    "test:mcp:poc": "node scripts/test-mcp-poc.mjs",
-    "test:mcp:browser": "node scripts/test-deployed-mcp-browser.mjs",
-    "test:mcp:browser-host": "node scripts/host-deployed-test-browser.mjs",
-    "test:mcp:browser-inspect": "node scripts/inspect-deployed-test-browser.mjs",
+    "mcp": "node packages/mcp/src/cli.mjs serve",
+    "mcp:doctor": "node packages/mcp/src/cli.mjs doctor",
+    "mcp:pack": "npm pack --workspace @alexgusevski/slide-studio-mcp",
+    "test:mcp": "node --test packages/mcp/test/*.test.mjs",
+    "test:mcp:browser": "node scripts/test-mcp-browser-local.mjs --deployed",
+    "test:mcp:browser:local": "node scripts/test-mcp-browser-local.mjs",
     "build": "node scripts/build.mjs",
     "preview:cloudflare": "npm run build && wrangler pages dev dist",
+    "deploy:test": "node scripts/deploy-test.mjs",
     "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "wrangler": "^4.123.0"
   }
 }

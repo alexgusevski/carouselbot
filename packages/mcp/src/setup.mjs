@@ -1,0 +1,86 @@
+import { spawnSync } from "node:child_process";
+import { cp, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
+import { PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION, TEST_EDITOR_URL } from "./config.mjs";
+
+const supported = ["claude", "codex", "hermes", "opencode", "openclaw"];
+
+function commandExists(command) {
+  return spawnSync(command, ["--version"], { stdio: "ignore" }).error?.code !== "ENOENT";
+}
+
+function shellCommand(client, specifier) {
+  if (client === "claude") return ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", "slide-studio", "--", "npx", "-y", specifier, "serve"];
+  if (client === "codex") return ["codex", "mcp", "add", "slide-studio", "--", "npx", "-y", specifier, "serve"];
+  if (client === "hermes") return ["hermes", "mcp", "add", "slide-studio", "--command", "npx", "--args", "-y", specifier, "serve"];
+  if (client === "openclaw") return ["openclaw", "mcp", "add", "slide-studio", "--command", "npx", "--arg", "-y", "--arg", specifier, "--arg", "serve"];
+  return null;
+}
+
+function quote(value) {
+  return /^[A-Za-z0-9_@./:-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function openCodeSnippet(specifier) {
+  return JSON.stringify({ mcp: { servers: { "slide-studio": { type: "local", command: ["npx", "-y", specifier, "serve"] } } } }, null, 2);
+}
+
+async function installSkill() {
+  const source = join(PACKAGE_ROOT, "skill", "slide-studio");
+  const targets = [
+    join(homedir(), ".agents", "skills", "slide-studio"),
+    join(homedir(), ".hermes", "skills", "slide-studio"),
+  ];
+  for (const target of targets) {
+    await mkdir(target, { recursive: true });
+    await cp(source, target, { recursive: true, force: true });
+  }
+  return targets;
+}
+
+export async function runSetup(arguments_) {
+  const flags = new Set(arguments_);
+  const clientArgument = arguments_.find((value) => value.startsWith("--client="))?.slice("--client=".length);
+  const requested = clientArgument ? clientArgument.split(",").map((value) => value.trim().toLowerCase()) : supported.filter(commandExists);
+  const clients = [...new Set(requested)].filter((client) => supported.includes(client));
+  const specifier = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
+  const dryRun = flags.has("--dry-run");
+  const assumeYes = flags.has("--yes") || flags.has("-y");
+  if (!clients.length) throw new Error("No supported agent CLI was detected. Use --client=claude,codex,hermes,opencode,openclaw or copy the generic stdio config below.");
+
+  process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\nDetected: ${clients.join(", ")}\nEditor: ${TEST_EDITOR_URL}\n\n`);
+  for (const client of clients) {
+    const command = shellCommand(client, specifier);
+    if (command) process.stdout.write(`${client}: ${command.map(quote).join(" ")}\n`);
+    else process.stdout.write(`opencode config:\n${openCodeSnippet(specifier)}\n`);
+  }
+  process.stdout.write(`\nGeneric stdio: npx -y ${specifier} serve\n`);
+  if (dryRun) return { clients, dryRun: true };
+
+  let approved = assumeYes;
+  if (!approved && process.stdin.isTTY) {
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await prompt.question("\nAdd Slide Studio to the detected agent configs and install its skill? [y/N] ");
+    prompt.close();
+    approved = /^y(?:es)?$/i.test(answer.trim());
+  }
+  if (!approved) {
+    process.stdout.write("\nNo configuration changed. Re-run with --yes when ready.\n");
+    return { clients, installed: false };
+  }
+
+  const configured = [];
+  for (const client of clients) {
+    const command = shellCommand(client, specifier);
+    if (!command) continue;
+    const result = spawnSync(command[0], command.slice(1), { stdio: "inherit" });
+    if (result.status === 0) configured.push(client);
+    else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);
+  }
+  const skillTargets = await installSkill();
+  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${TEST_EDITOR_URL}, click Connect AI, and restart the configured agent.\n`);
+  if (clients.includes("opencode")) process.stdout.write("OpenCode currently uses its JSON config; merge the snippet printed above into opencode.json.\n");
+  return { clients, configured, skillTargets };
+}

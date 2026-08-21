@@ -6,6 +6,18 @@ A focused, local-first web editor for creating TikTok slideshow images.
 
 Everything runs in the browser. Photos and projects stay in IndexedDB on your device — nothing is uploaded.
 
+## AI agent control (test deployment)
+
+The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the hosted browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
+
+```bash
+npx @alexgusevski/slide-studio-mcp@latest setup
+```
+
+For now, connect it to the isolated test editor at [slides-mcp-poc-0821.pages.dev](https://slides-mcp-poc-0821.pages.dev). Click **Connect AI** in the editor after the agent starts the companion. The MCP includes required visual-design guidance and can create projects/slides, edit every text and image property, manage assets/layers/history, return temporary rendered previews to the agent, and export PNG files locally.
+
+The npm package is only a distribution surface. Its complete source, skill, guidance, and tests live under `packages/mcp/` in this repository.
+
 ## What it does
 
 - Creates projects that persist in the browser with IndexedDB
@@ -40,6 +52,8 @@ npm run deploy
 ```
 
 The public site is [slides-editor.pages.dev](https://slides-editor.pages.dev).
+
+The production deploy command is intentionally main-only. The MCP branch has a separate `npm run deploy:test` command that can target only the isolated Pages test project.
 
 ## License
 

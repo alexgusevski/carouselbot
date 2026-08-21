@@ -13,6 +13,9 @@
 /app.js
   Cache-Control: no-cache
 
+/agent-commands.js
+  Cache-Control: no-cache
+
 /styles.css
   Cache-Control: no-cache
 
