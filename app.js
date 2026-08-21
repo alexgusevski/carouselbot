@@ -3994,4 +3994,106 @@ async function init() {
   });
 }
 
-init();
+function localMcpEditorState() {
+  const project = activeProject();
+  const slide = activeSlide();
+  return {
+    activeProjectId: project?.id || null,
+    activeProjectName: project?.name || null,
+    activeSlideId: slide?.id || null,
+    activeSlideName: slide?.name || null,
+    projectCount: state.projects.length,
+    slideCount: project?.slides.length || 0,
+    textCount: slide?.texts.length || 0,
+    projects: state.projects.map((item) => ({
+      id: item.id,
+      name: item.name,
+      slideCount: item.slides.length,
+    })),
+  };
+}
+
+function localMcpDemoBackground(color) {
+  const fill = normalizeHexColor(color, "#24262B");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${OUTPUT_WIDTH}" height="${OUTPUT_HEIGHT}" viewBox="0 0 ${OUTPUT_WIDTH} ${OUTPUT_HEIGHT}"><rect width="100%" height="100%" fill="${fill}"/><circle cx="850" cy="320" r="360" fill="#25F4EE" opacity=".16"/><circle cx="210" cy="1640" r="430" fill="#FE2C55" opacity=".14"/></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+async function executeLocalMcpOperation(operation) {
+  if (!operation || typeof operation.type !== "string") throw new Error("Operation type is required.");
+
+  if (operation.type === "editor.get_state") return localMcpEditorState();
+
+  if (operation.type === "slide.create_demo") {
+    const now = Date.now();
+    const project = {
+      id: uid(),
+      name: String(operation.projectName || "MCP Browser Test"),
+      createdAt: now,
+      updatedAt: now,
+      slides: [],
+      assets: [],
+    };
+    const slide = {
+      id: uid(),
+      name: String(operation.slideName || "Agent-created slide"),
+      imageData: localMcpDemoBackground(operation.backgroundColor),
+      width: OUTPUT_WIDTH,
+      height: OUTPUT_HEIGHT,
+      imageScale: 1,
+      imageX: 0,
+      imageY: 0,
+      texts: [],
+      overlays: [],
+    };
+    project.slides.push(slide);
+    state.projects.push(project);
+    state.activeProjectId = project.id;
+    state.activeSlideId = slide.id;
+    clearLayerSelection();
+    await putProject(project);
+    renderEditor();
+    toast("Local MCP created a test slide");
+    return { ...localMcpEditorState(), createdProjectId: project.id, createdSlideId: slide.id };
+  }
+
+  if (operation.type === "text.add") {
+    const slide = activeSlide();
+    if (!slide) throw new Error("No active slide. Call create_demo_slide first.");
+    recordHistory();
+    const width = clamp(Number(operation.width ?? 0.72), 0.1, 1);
+    const height = clamp(Number(operation.height ?? 0.12), 0.04, 1);
+    const text = {
+      id: uid(),
+      text: String(operation.text || "Added by a local MCP agent"),
+      x: clamp(Number(operation.x ?? 0.14), 0, 1 - width),
+      y: clamp(Number(operation.y ?? 0.42), 0, 1 - height),
+      width,
+      height,
+      size: clamp(Number(operation.size ?? 72), FONT_SIZE_MIN, FONT_SIZE_MAX),
+      style: operation.style === "boxed" ? "boxed" : operation.style === "outline" ? "outline" : "plain",
+      outlineWidth: DEFAULT_OUTLINE_WIDTH,
+      color: normalizeHexColor(operation.color, "#FFFFFF"),
+      background: operation.background === "black" ? "black" : "white",
+      backgroundShape: operation.backgroundShape === "full" ? "full" : "lines",
+      align: ["left", "right"].includes(operation.align) ? operation.align : "center",
+      rotation: clamp(Number(operation.rotation ?? 0), -180, 180),
+      z: nextLayerZ(slide),
+    };
+    ensureBoxedTextContrast(text);
+    slide.texts.push(text);
+    selectOnlyLayer("text", text.id);
+    scheduleSave();
+    renderEditor();
+    toast("Local MCP added text");
+    return { ...localMcpEditorState(), createdTextId: text.id, text: text.text };
+  }
+
+  throw new Error(`Unsupported local MCP operation: ${operation.type}`);
+}
+
+window.slideStudioLocalMcp = {
+  execute: executeLocalMcpOperation,
+  getState: localMcpEditorState,
+};
+window.slideStudioReady = init();

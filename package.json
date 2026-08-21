@@ -15,6 +15,11 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
+    "mcp:poc": "node mcp/server.mjs",
+    "test:mcp:poc": "node scripts/test-mcp-poc.mjs",
+    "test:mcp:browser": "node scripts/test-deployed-mcp-browser.mjs",
+    "test:mcp:browser-host": "node scripts/host-deployed-test-browser.mjs",
+    "test:mcp:browser-inspect": "node scripts/inspect-deployed-test-browser.mjs",
     "build": "node scripts/build.mjs",
     "preview:cloudflare": "npm run build && wrangler pages dev dist",
     "deploy": "node scripts/deploy.mjs"

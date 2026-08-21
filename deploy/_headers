@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; font-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; font-src 'self'; script-src 'self'; style-src 'self'; connect-src http://127.0.0.1:43117; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
