@@ -40,7 +40,7 @@ function createRpc(child) {
 }
 
 async function withServer(callback) {
-  const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-mcp-test-"));
+  const stateDirectory = await mkdtemp(join(tmpdir(), "slides-studio-mcp-test-"));
   const port = 44000 + Math.floor(Math.random() * 1000);
   const env = { ...process.env, SLIDE_STUDIO_BRIDGE_PORT: String(port), SLIDE_STUDIO_STATE_DIR: stateDirectory };
   const child = spawn(process.execPath, [cli.pathname, "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
@@ -62,7 +62,7 @@ async function withServer(callback) {
 test("serves a complete legacy-compatible stdio MCP surface", async () => {
   await withServer(async ({ rpc, errors }) => {
     const initialized = await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "protocol-test", version: "1" } });
-    assert.equal(initialized.result.serverInfo.name, "@alexgusevski/slide-studio-mcp");
+    assert.equal(initialized.result.serverInfo.name, "slides-studio-mcp");
     rpc.notify("notifications/initialized");
 
     const listed = await rpc.request("tools/list");

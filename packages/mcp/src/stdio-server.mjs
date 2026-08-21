@@ -6,7 +6,7 @@ export async function serveMcp() {
   const companion = await createCompanion();
   const handle = serveStdio(() => createSlideStudioMcpServer(companion), {
     legacy: "serve",
-    onerror: (error) => process.stderr.write(`[slide-studio-mcp] ${error.message}\n`),
+    onerror: (error) => process.stderr.write(`[slides-studio-mcp] ${error.message}\n`),
   });
   let closing = false;
   const close = async () => {

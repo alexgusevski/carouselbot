@@ -11,7 +11,7 @@ Everything runs in the browser. Photos and projects stay in IndexedDB on your de
 The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the hosted browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
 
 ```bash
-npx @alexgusevski/slide-studio-mcp@beta setup
+npx slides-studio-mcp@beta setup
 ```
 
 For now, connect it to the isolated test editor at [slides-mcp-poc-0821.pages.dev](https://slides-mcp-poc-0821.pages.dev). Click **Connect AI** in the editor after the agent starts the companion. The MCP includes required visual-design guidance and can create projects/slides, edit every text and image property, manage assets/layers/history, return temporary rendered previews to the agent, and export PNG files locally.

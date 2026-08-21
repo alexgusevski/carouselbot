@@ -23,7 +23,7 @@ function defaultStateDirectory() {
   if (process.env.SLIDE_STUDIO_STATE_DIR) return process.env.SLIDE_STUDIO_STATE_DIR;
   if (platform() === "win32") return join(process.env.LOCALAPPDATA || homedir(), "SlideStudioMCP");
   if (platform() === "darwin") return join(homedir(), "Library", "Caches", "SlideStudioMCP");
-  return join(process.env.XDG_RUNTIME_DIR || join(homedir(), ".cache"), "slide-studio-mcp");
+  return join(process.env.XDG_RUNTIME_DIR || join(homedir(), ".cache"), "slides-studio-mcp");
 }
 
 export const STATE_DIRECTORY = defaultStateDirectory();

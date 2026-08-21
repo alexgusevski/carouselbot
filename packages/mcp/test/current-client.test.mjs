@@ -23,7 +23,7 @@ test("negotiates the current protocol through the official MCP v2 client", async
   const client = new Client({ name: "official-v2-test", version: "1" });
   try {
     await client.connect(transport);
-    assert.equal(client.getServerVersion()?.name, "@alexgusevski/slide-studio-mcp");
+    assert.equal(client.getServerVersion()?.name, "slides-studio-mcp");
     const { tools } = await client.listTools();
     assert.ok(tools.some((tool) => tool.name === "render_slide"));
     const guidance = await client.callTool({ name: "get_design_guidance", arguments: {} });

@@ -51,7 +51,7 @@ async function ensureDaemon() {
     const state = await healthyState();
     if (state) return state;
   }
-  throw new Error("Could not start the local Slide Studio companion. Run `npx @alexgusevski/slide-studio-mcp doctor` for details.");
+  throw new Error("Could not start the local Slide Studio companion. Run `npx slides-studio-mcp doctor` for details.");
 }
 
 export async function createCompanion(initialName = "MCP agent", initialVersion = null) {
