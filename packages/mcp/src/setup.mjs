@@ -39,6 +39,7 @@ async function installSkill() {
   const source = join(PACKAGE_ROOT, "skill", "slide-studio");
   const targets = [
     join(homedir(), ".agents", "skills", "slide-studio"),
+    join(homedir(), ".claude", "skills", "slide-studio"),
     join(homedir(), ".hermes", "skills", "slide-studio"),
   ];
   for (const target of targets) {
