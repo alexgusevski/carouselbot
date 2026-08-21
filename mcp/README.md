@@ -14,8 +14,9 @@ The proof has no hosted API. The agent starts `mcp/server.mjs` over stdio, that 
    claude mcp add slide-studio-poc -- node /absolute/path/to/mcp/server.mjs
    ```
 
-2. Open the test deployment and grant the browser's local/loopback network permission.
-3. Ask the agent to call `create_demo_slide`, `add_text`, and `get_editor_state`.
+2. Open the test deployment, open an editor project, and click **Connect AI** to the right of **AirDrop all**.
+3. In the modal, click **Connect to running MCP**. That explicit click makes the first loopback request and triggers Chrome's local-network permission prompt when permission has not already been decided.
+4. Ask the agent to call `create_demo_slide`, `add_text`, and `get_editor_state`.
 
 Available proof tools:
 
@@ -31,7 +32,7 @@ npm run test:mcp:poc
 npm run test:mcp:browser
 ```
 
-The browser test launches Chrome against the deployed Pages URL, grants the test profile's loopback permission, creates a real slide through MCP, adds a real text layer, and reads the resulting state back from the deployed tab.
+The browser test launches Chrome against the deployed Pages URL, grants the test profile's loopback permission, clicks the same Connect UI a person uses, creates a real slide through MCP, adds a real text layer, and reads the resulting state back from the deployed tab.
 
 ## Proof-only limitations
 

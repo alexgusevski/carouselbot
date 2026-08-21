@@ -119,6 +119,32 @@ async function waitForEditor() {
   throw new Error(`The deployed page never connected to localhost. Chrome output:\n${chromeErrors.slice(-3000)}`);
 }
 
+async function connectEditorFromUi(cdp) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const result = await cdp.send("Runtime.evaluate", {
+      expression: `(async () => {
+        let trigger = document.querySelector('[data-action="connect-agent"]');
+        if (!trigger && window.slideStudioLocalMcp) {
+          await window.slideStudioLocalMcp.execute({ type: "slide.create_demo", projectName: "POC connection test", slideName: "Waiting for agent", backgroundColor: "#EEEDE7" });
+          trigger = document.querySelector('[data-action="connect-agent"]');
+        }
+        if (!trigger) return "waiting";
+        trigger.click();
+        const connect = document.querySelector('[data-local-mcp-connect]');
+        if (!connect) return "waiting";
+        connect.click();
+        return "clicked";
+      })()`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (result.result?.value === "clicked") return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error("The deployed page never rendered the Connect AI control.");
+}
+
 try {
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "browser-poc-test", version: "1" } });
   const protocol = await waitForJson("/json/protocol");
@@ -135,6 +161,7 @@ try {
     await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
   }
   await cdp.send("Page.navigate", { url: pageUrl });
+  await connectEditorFromUi(cdp);
   const editor = await waitForEditor();
   const created = await tool("create_demo_slide", {
     projectName: "Deployed Pages MCP proof",

@@ -710,6 +710,15 @@ function renderHeader({ editor = false } = {}) {
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop all</span>
           </button>
+          <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect an AI agent" title="Connect Claude, Codex, or Hermes">
+            <span class="agent-logo-stack" aria-hidden="true">
+              <img src="assets/claude-ai-symbol.svg" alt="" />
+              <img src="assets/codex-logo.svg" alt="" />
+              <img src="assets/hermes-agent-logo.svg" alt="" />
+            </span>
+            <span class="agent-connect-label">Connect AI</span>
+            <span class="agent-connect-dot" aria-hidden="true"></span>
+          </button>
           <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide as PNG" title="Download PNG" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>PNG</span>
           </button>
