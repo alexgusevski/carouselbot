@@ -10,6 +10,7 @@ const OUTLINE_RATIO = 0.17;
 const TEXT_WEIGHT = 500;
 const TEXT_LINE_HEIGHT = 1.12;
 const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
+const CLIPBOARD_STORAGE_KEY = "slide-studio-layer-clipboard";
 const HISTORY_LIMIT = 200;
 const BOX_TEXT_LINE_HEIGHT = 1.12;
 const BOX_LINE_HEIGHT = 1.42;
@@ -3502,6 +3503,50 @@ function isEditingTextTarget(target) {
   return Boolean(target?.closest?.("input, textarea, [contenteditable='true'], [contenteditable='']"));
 }
 
+function isCopiedLayer(value) {
+  return Boolean(
+    value
+    && typeof value.token === "string"
+    && value.token
+    && Array.isArray(value.layers)
+    && value.layers.length
+    && value.layers.every((layer) => (
+      layer
+      && (layer.kind === "text" || layer.kind === "overlay")
+      && layer.item
+      && typeof layer.item === "object"
+    )),
+  );
+}
+
+function parseCopiedLayer(value) {
+  if (!value || !String(value).trim().startsWith("{")) return null;
+  try {
+    const copied = JSON.parse(value);
+    return isCopiedLayer(copied) ? copied : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberCopiedLayer(copied) {
+  state.copiedLayer = copied;
+  try {
+    localStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(copied));
+  } catch (error) {
+    console.warn("Could not share the copied layer with other tabs.", error);
+  }
+}
+
+function storedCopiedLayer(token) {
+  try {
+    const copied = parseCopiedLayer(localStorage.getItem(CLIPBOARD_STORAGE_KEY));
+    return copied?.token === token ? copied : null;
+  } catch {
+    return null;
+  }
+}
+
 function handleLayerCopy(event) {
   if (!activeSlide() || isEditingTextTarget(event.target)) return;
   const layers = slideItems(activeSlide()).filter(({ kind, item }) => isLayerSelected(kind, item.id));
@@ -3513,9 +3558,10 @@ function handleLayerCopy(event) {
   });
   if (!copies.length) return;
   const token = uid();
-  state.copiedLayer = { token, layers: copies };
+  const copied = { token, layers: copies };
+  rememberCopiedLayer(copied);
   event.preventDefault();
-  event.clipboardData?.setData(CLIPBOARD_LAYER_TYPE, token);
+  event.clipboardData?.setData(CLIPBOARD_LAYER_TYPE, JSON.stringify(copied));
   event.clipboardData?.setData("text/plain", `slide-studio-layer:${token}`);
   toast(copies.length === 1
     ? `${copies[0].kind === "overlay" ? "Asset" : "Text"} copied`
@@ -3523,13 +3569,19 @@ function handleLayerCopy(event) {
 }
 
 function copiedLayerFromClipboard(clipboardData) {
-  if (!clipboardData || !state.copiedLayer) return null;
-  let token = clipboardData.getData(CLIPBOARD_LAYER_TYPE);
+  if (!clipboardData) return null;
+  const clipboardLayer = parseCopiedLayer(clipboardData.getData(CLIPBOARD_LAYER_TYPE));
+  let token = clipboardLayer?.token || clipboardData.getData(CLIPBOARD_LAYER_TYPE);
   if (!token) {
     const text = clipboardData.getData("text/plain");
     if (text.startsWith("slide-studio-layer:")) token = text.slice("slide-studio-layer:".length);
   }
-  return token === state.copiedLayer.token ? state.copiedLayer : null;
+  if (!token) return null;
+  if (token === state.copiedLayer?.token) return state.copiedLayer;
+  const copied = storedCopiedLayer(token) || clipboardLayer;
+  if (!copied || copied.token !== token) return null;
+  state.copiedLayer = copied;
+  return copied;
 }
 
 function pasteCopiedLayer(copied) {
