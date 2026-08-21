@@ -134,6 +134,26 @@ const app = document.querySelector("#app");
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
+function projectPath(projectId) {
+  return `/projects/${encodeURIComponent(projectId)}`;
+}
+
+function routeFromPathname(pathname = window.location.pathname) {
+  if (pathname === "/" || pathname === "/index.html") return { view: "dashboard" };
+  const match = pathname.match(/^\/projects\/([^/]+)\/?$/);
+  if (!match) return { view: "not-found" };
+  try {
+    return { view: "project", projectId: decodeURIComponent(match[1]) };
+  } catch {
+    return { view: "not-found" };
+  }
+}
+
+function updateBrowserRoute(path, historyMode) {
+  if (historyMode === "none" || window.location.pathname === path) return;
+  window.history[historyMode === "replace" ? "replaceState" : "pushState"]({}, "", path);
+}
+
 function escapeHtml(value = "") {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -761,7 +781,7 @@ function icon(name) {
   const icons = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
-    airdrop: '<img class="airdrop-icon" src="assets/airdrop.svg" alt="" />',
+    airdrop: '<img class="airdrop-icon" src="/assets/airdrop.svg" alt="" />',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
@@ -808,7 +828,7 @@ function renderHeader({ editor = false } = {}) {
             ${icon("download")} <span>PNG</span>
           </button>
         ` : `<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
-        <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository"><img class="github-mark" src="assets/Octicons-mark-github.svg" alt="" /></a>
+        <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
       </div>
     </header>
   `;
@@ -819,6 +839,7 @@ function renderDashboard() {
   state.activeProjectId = null;
   state.activeSlideId = null;
   clearLayerSelection();
+  document.title = "Slide Studio";
   const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
   app.innerHTML = `
     ${renderHeader()}
@@ -864,6 +885,7 @@ function renderDashboard() {
 function renderEditor() {
   const project = activeProject();
   if (!project) return renderDashboard();
+  document.title = `${project.name} · Slide Studio`;
   if (!activeSlide() && project.slides[0]) state.activeSlideId = project.slides[0].id;
   const previousSlideList = app.querySelector(".slide-list");
   if (previousSlideList) {
@@ -1336,14 +1358,30 @@ function renderInspector() {
   `;
 }
 
-function openProject(projectId) {
+function openProject(projectId, { historyMode = "push" } = {}) {
   const project = state.projects.find((item) => item.id === projectId);
-  if (!project) return;
+  if (!project) return false;
+  updateBrowserRoute(projectPath(projectId), historyMode);
   state.activeProjectId = projectId;
   state.activeSlideId = project.slides[0]?.id || null;
   clearLayerSelection();
   state.photoAdjustMode = false;
   renderEditor();
+  return true;
+}
+
+function openDashboard({ historyMode = "push" } = {}) {
+  updateBrowserRoute("/", historyMode);
+  renderDashboard();
+}
+
+function renderCurrentRoute() {
+  const route = routeFromPathname();
+  if (route.view === "project" && openProject(route.projectId, { historyMode: "none" })) return;
+  const missingProject = route.view === "project";
+  updateBrowserRoute("/", "replace");
+  renderDashboard();
+  if (missingProject) toast("This project isn’t available in this browser.");
 }
 
 function createProject() {
@@ -1366,7 +1404,7 @@ function bindDashboardEvents() {
 }
 
 function bindGlobalActions() {
-  app.querySelector('[data-action="home"]')?.addEventListener("click", renderDashboard);
+  app.querySelector('[data-action="home"]')?.addEventListener("click", () => openDashboard());
 }
 
 function bindEditorEvents() {
@@ -1374,6 +1412,7 @@ function bindEditorEvents() {
   const title = app.querySelector(".project-title-input");
   title?.addEventListener("input", () => {
     activeProject().name = title.value || "New Project";
+    document.title = `${activeProject().name} · Slide Studio`;
     scheduleSave();
   });
 
@@ -4038,8 +4077,8 @@ async function init() {
     state.projects = [];
     toast("Browser storage is unavailable. Projects won’t persist.");
   }
-  renderDashboard();
-  bindGlobalActions();
+  renderCurrentRoute();
+  window.addEventListener("popstate", renderCurrentRoute);
   document.addEventListener("paste", (event) => {
     handleClipboardPaste(event);
   });

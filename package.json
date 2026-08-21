@@ -17,6 +17,7 @@
     "dev": "node server.mjs",
     "build": "node scripts/build.mjs",
     "preview:cloudflare": "npm run build && wrangler pages dev dist",
+    "deploy:dev": "node scripts/deploy-dev.mjs",
     "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {
