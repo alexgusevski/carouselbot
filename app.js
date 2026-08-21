@@ -585,6 +585,100 @@ function showSlideMenu(event, slideId) {
   positionLayerMenu(menu, clientX, clientY);
 }
 
+function showProjectMenu(event, projectId) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeLayerMenu();
+
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) return;
+
+  const menu = document.createElement("div");
+  menu.className = "layer-menu layer-menu--confirm";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", `Actions for ${project.name}`);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "layer-menu-item is-danger";
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", `Remove ${project.name}`);
+  button.innerHTML = `${icon("trash")}<span>Remove</span>`;
+  button.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    closeLayerMenu();
+    showProjectDeleteConfirmation(projectId);
+  });
+  menu.appendChild(button);
+  document.body.appendChild(menu);
+
+  const triggerRect = event.currentTarget.getBoundingClientRect();
+  const clientX = event.clientX || triggerRect.left + triggerRect.width / 2;
+  const clientY = event.clientY || triggerRect.top + triggerRect.height / 2;
+  positionLayerMenu(menu, clientX, clientY);
+}
+
+function closeProjectDeleteConfirmation() {
+  document.querySelector(".project-delete-confirmation")?.remove();
+}
+
+function showProjectDeleteConfirmation(projectId) {
+  closeProjectDeleteConfirmation();
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) return;
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop project-delete-confirmation";
+  backdrop.innerHTML = `
+    <section class="modal modal--confirm" role="alertdialog" aria-modal="true" aria-labelledby="delete-project-title" aria-describedby="delete-project-description">
+      <h2 id="delete-project-title">Remove project?</h2>
+      <p id="delete-project-description"><strong>${escapeHtml(project.name)}</strong> and all of its slides will be permanently deleted. This can’t be undone.</p>
+      <div class="modal-actions">
+        <button class="button button--quiet" type="button" data-action="cancel-project-delete">Cancel</button>
+        <button class="button button--danger" type="button" data-action="confirm-project-delete">Remove project</button>
+      </div>
+    </section>
+  `;
+
+  const cancelButton = backdrop.querySelector('[data-action="cancel-project-delete"]');
+  const confirmButton = backdrop.querySelector('[data-action="confirm-project-delete"]');
+  const close = () => closeProjectDeleteConfirmation();
+
+  cancelButton.addEventListener("click", close);
+  backdrop.addEventListener("pointerdown", (event) => {
+    if (event.target === backdrop) close();
+  });
+  backdrop.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  });
+  confirmButton.addEventListener("click", async () => {
+    cancelButton.disabled = true;
+    confirmButton.disabled = true;
+    confirmButton.textContent = "Removing…";
+    try {
+      await deleteProjectFromDb(projectId);
+      project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
+      state.slideRailScrollPositions.delete(projectId);
+      state.projects = state.projects.filter((item) => item.id !== projectId);
+      close();
+      renderDashboard();
+      toast("Project removed");
+    } catch (error) {
+      console.error(error);
+      cancelButton.disabled = false;
+      confirmButton.disabled = false;
+      confirmButton.textContent = "Remove project";
+      toast("Couldn’t remove this project from your browser.");
+    }
+  });
+
+  document.body.appendChild(backdrop);
+  cancelButton.focus();
+}
+
 function beginCrop(overlayId) {
   recordHistory();
   const overlay = (activeSlide()?.overlays || []).find((item) => item.id === overlayId);
@@ -749,7 +843,7 @@ function renderDashboard() {
           ${sortedProjects.map((project) => {
             const cover = project.slides[0]?.imageData;
             return `
-              <button class="project-card" type="button" data-project-id="${project.id}">
+              <button class="project-card" type="button" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
                 <span class="project-preview">
                   ${cover ? `<img src="${cover}" alt="" />` : `<span class="project-preview-empty">No photos yet</span>`}
                 </span>
@@ -1267,6 +1361,7 @@ function bindDashboardEvents() {
   app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
   app.querySelectorAll("[data-project-id]").forEach((button) => {
     button.addEventListener("click", () => openProject(button.dataset.projectId));
+    button.addEventListener("contextmenu", (event) => showProjectMenu(event, button.dataset.projectId));
   });
 }
 

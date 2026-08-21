@@ -2333,6 +2333,14 @@ input[type="range"]::-webkit-slider-thumb {
   line-height: 1.5;
 }
 
+.modal--confirm {
+  width: min(400px, 100%);
+}
+
+.modal--confirm p strong {
+  color: var(--ink);
+}
+
 .modal input {
   width: 100%;
   height: 49px;
