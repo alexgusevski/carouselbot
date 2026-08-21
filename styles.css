@@ -1588,7 +1588,7 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   -webkit-text-fill-color: transparent;
-  caret-color: var(--text-color, #fff);
+  caret-color: var(--cyan);
 }
 
 .text-editor::selection {

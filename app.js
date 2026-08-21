@@ -2935,6 +2935,7 @@ function bindTextBox(box) {
       if (contentTarget && !corner && !edge && !rotate) return;
       endTextEditing(box);
     } else if (wasSelected && contentTarget && event.button === 0 && !(event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
       event.stopPropagation();
       startTextEditing(box, { clientX: event.clientX, clientY: event.clientY });
       return;
