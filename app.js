@@ -63,6 +63,8 @@ const state = {
   thumbnailUrls: new Map(),
   thumbnailSignatures: new Map(),
   thumbnailVersions: new Map(),
+  slideRailScrollPositions: new Map(),
+  pendingSlideBackgroundTarget: null,
   croppingOverlayId: null,
   pasteBusy: false,
   fileDropBusy: false,
@@ -556,18 +558,25 @@ function showSlideMenu(event, slideId) {
   menu.setAttribute("role", "menu");
   menu.setAttribute("aria-label", `Actions for ${slide.name}`);
 
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "layer-menu-item is-danger";
-  button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", `Remove ${slide.name}`);
-  button.innerHTML = `${icon("trash")}<span>Remove</span>`;
-  button.addEventListener("click", (clickEvent) => {
-    clickEvent.stopPropagation();
-    closeLayerMenu();
-    removeSlide(slideId);
+  [
+    ["change", "image", "Change"],
+    ["remove", "trash", "Remove"],
+  ].forEach(([action, iconName, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `layer-menu-item${action === "remove" ? " is-danger" : ""}`;
+    button.setAttribute("role", "menuitem");
+    button.setAttribute("aria-label", `${label} ${slide.name}`);
+    button.innerHTML = `${icon(iconName)}<span></span>`;
+    button.querySelector("span").textContent = label;
+    button.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      closeLayerMenu();
+      if (action === "change") beginSlideBackgroundChange(slideId);
+      else removeSlide(slideId);
+    });
+    menu.appendChild(button);
   });
-  menu.appendChild(button);
   document.body.appendChild(menu);
 
   const triggerRect = event.currentTarget.getBoundingClientRect();
@@ -762,6 +771,10 @@ function renderEditor() {
   const project = activeProject();
   if (!project) return renderDashboard();
   if (!activeSlide() && project.slides[0]) state.activeSlideId = project.slides[0].id;
+  const previousSlideList = app.querySelector(".slide-list");
+  if (previousSlideList) {
+    state.slideRailScrollPositions.set(project.id, previousSlideList.scrollTop);
+  }
   hideAssetPreview();
 
   app.innerHTML = `
@@ -777,9 +790,17 @@ function renderEditor() {
       ${renderInspector()}
     </main>
     <input id="photo-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
+    <input id="slide-background-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" />
     <input id="asset-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
   `;
   bindEditorEvents();
+  const slideList = app.querySelector(".slide-list");
+  if (slideList) {
+    slideList.scrollTop = state.slideRailScrollPositions.get(project.id) || 0;
+    slideList.addEventListener("scroll", () => {
+      state.slideRailScrollPositions.set(project.id, slideList.scrollTop);
+    }, { passive: true });
+  }
   requestAnimationFrame(() => {
     if (activeSlide()) sizeStage();
     refreshAllSlideThumbnails(project.slides);
@@ -821,6 +842,7 @@ function scheduleThumbnailRefresh() {
 
 function thumbnailSignature(slide) {
   return JSON.stringify([
+    slide.backgroundRevision || "",
     slide.imageScale || 1,
     slide.imageX || 0,
     slide.imageY || 0,
@@ -1264,6 +1286,7 @@ function bindEditorEvents() {
     button.addEventListener("click", () => app.querySelector("#photo-upload").click());
   });
   app.querySelector("#photo-upload")?.addEventListener("change", handleUpload);
+  app.querySelector("#slide-background-upload")?.addEventListener("change", handleSlideBackgroundChange);
   app.querySelectorAll('[data-action="upload-assets"]').forEach((button) => {
     button.addEventListener("click", () => app.querySelector("#asset-upload").click());
   });
@@ -2083,6 +2106,58 @@ function deleteSelectedText() {
   deleteSelectedLayers();
 }
 
+function clearSlideThumbnail(slideId) {
+  const thumbnailUrl = state.thumbnailUrls.get(slideId);
+  if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
+  state.thumbnailUrls.delete(slideId);
+  state.thumbnailSignatures.delete(slideId);
+  state.thumbnailVersions.delete(slideId);
+}
+
+function beginSlideBackgroundChange(slideId) {
+  const project = activeProject();
+  const slide = project?.slides.find((item) => item.id === slideId);
+  const input = app.querySelector("#slide-background-upload");
+  if (!project || !slide || !input) return;
+  state.pendingSlideBackgroundTarget = { projectId: project.id, slideId };
+  input.value = "";
+  input.click();
+}
+
+async function handleSlideBackgroundChange(event) {
+  const target = state.pendingSlideBackgroundTarget;
+  state.pendingSlideBackgroundTarget = null;
+  const files = [...event.target.files];
+  event.target.value = "";
+  const file = files.find(isImageFile);
+  if (!file) {
+    if (files.length) toast("Choose an image file.");
+    return;
+  }
+
+  const project = activeProject();
+  const slide = project?.slides.find((item) => item.id === target?.slideId);
+  if (!target || !project || project.id !== target.projectId || !slide) return;
+
+  try {
+    const imageData = await fileToDataUrl(file);
+    const dimensions = await getImageDimensions(imageData);
+    recordHistory();
+    slide.imageData = imageData;
+    slide.width = dimensions.width;
+    slide.height = dimensions.height;
+    slide.backgroundRevision = uid();
+    constrainImagePosition(slide);
+    clearSlideThumbnail(slide.id);
+    scheduleSave();
+    renderEditor();
+    toast("Slide background changed");
+  } catch (error) {
+    console.error(error);
+    toast("That image couldn’t be used as the slide background.");
+  }
+}
+
 function removeSlide(slideId) {
   const project = activeProject();
   if (!project) return;
@@ -2091,11 +2166,7 @@ function removeSlide(slideId) {
 
   recordHistory();
   project.slides.splice(index, 1);
-  const thumbnailUrl = state.thumbnailUrls.get(slideId);
-  if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
-  state.thumbnailUrls.delete(slideId);
-  state.thumbnailSignatures.delete(slideId);
-  state.thumbnailVersions.delete(slideId);
+  clearSlideThumbnail(slideId);
 
   if (state.activeSlideId === slideId) {
     state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
