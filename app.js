@@ -2921,10 +2921,21 @@ function beginOverlayRotate(event, box) {
 function bindTextBox(box) {
   const content = box.querySelector(".text-visual--inside .text-content");
   box.addEventListener("pointerdown", (event) => {
-    if (box.classList.contains("is-editing")) return;
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
     const edge = event.target.closest("[data-edge]")?.dataset.edge;
     const rotate = event.target.closest("[data-rotate]");
+    const contentTarget = event.target.closest(".text-content");
+    const wasSelected = isLayerSelected("text", box.dataset.textId);
+
+    if (box.classList.contains("is-editing")) {
+      if (contentTarget && !corner && !edge && !rotate) return;
+      endTextEditing(box);
+    } else if (wasSelected && contentTarget && event.button === 0 && !(event.metaKey || event.ctrlKey)) {
+      event.stopPropagation();
+      startTextEditing(box, { clientX: event.clientX, clientY: event.clientY });
+      return;
+    }
+
     if (!prepareLayerPointerSelection(event, "text", box.dataset.textId)) return;
     if (state.croppingOverlayId) {
       finishCrop();
@@ -2940,20 +2951,10 @@ function bindTextBox(box) {
     showLayerMenu(event, "text", box.dataset.textId);
   });
   box.addEventListener("dblclick", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
-    const text = activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
-    selectOnlyLayer("text", box.dataset.textId);
-    refreshSelection();
-    box.classList.add("is-editing", "is-selected");
-    content.replaceChildren();
-    content.textContent = text?.text || "";
-    content.contentEditable = "true";
-    content.focus();
-    const selection = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(content);
-    selection.removeAllRanges();
-    selection.addRange(range);
+    startTextEditing(box, { selectAll: true });
   });
   content.addEventListener("input", () => {
     const text = selectedText();
@@ -2967,10 +2968,7 @@ function bindTextBox(box) {
     scheduleSave();
   });
   content.addEventListener("blur", () => {
-    content.contentEditable = "false";
-    box.classList.remove("is-editing");
-    const text = selectedText() || activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
-    if (text) updateTextBox(text);
+    endTextEditing(box);
   });
   box.addEventListener("keydown", (event) => {
     if ((event.key === "Backspace" || event.key === "Delete") && !box.classList.contains("is-editing")) {
@@ -2982,6 +2980,84 @@ function bindTextBox(box) {
       box.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     }
   });
+}
+
+function activeTextEditingBox() {
+  return app.querySelector(".text-box.is-editing");
+}
+
+function isInlineTextEditing() {
+  return Boolean(activeTextEditingBox());
+}
+
+function placeTextCaret(content, clientX, clientY) {
+  const selection = window.getSelection();
+  if (!selection) return;
+  let range = null;
+  if (document.caretPositionFromPoint) {
+    const position = document.caretPositionFromPoint(clientX, clientY);
+    if (position && content.contains(position.offsetNode)) {
+      range = document.createRange();
+      range.setStart(position.offsetNode, position.offset);
+      range.collapse(true);
+    }
+  } else if (document.caretRangeFromPoint) {
+    const candidate = document.caretRangeFromPoint(clientX, clientY);
+    if (candidate && content.contains(candidate.startContainer)) range = candidate;
+  }
+  if (!range) {
+    range = document.createRange();
+    range.selectNodeContents(content);
+    range.collapse(false);
+  }
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function startTextEditing(box, { selectAll = false, clientX = null, clientY = null } = {}) {
+  const text = activeSlide()?.texts.find((item) => item.id === box?.dataset.textId);
+  const content = box?.querySelector(".text-visual--inside .text-content");
+  if (!box || !text || !content) return;
+
+  const otherEditingBox = activeTextEditingBox();
+  if (otherEditingBox && otherEditingBox !== box) endTextEditing(otherEditingBox);
+  if (!isLayerSelected("text", text.id) || selectedLayerKeys().length !== 1) {
+    selectOnlyLayer("text", text.id);
+    refreshSelection();
+  }
+
+  box.classList.add("is-editing", "is-selected");
+  content.replaceChildren();
+  content.textContent = text.text || "";
+  content.contentEditable = "true";
+  content.focus({ preventScroll: true });
+
+  const selection = window.getSelection();
+  if (selectAll && selection) {
+    const range = document.createRange();
+    range.selectNodeContents(content);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+    placeTextCaret(content, clientX, clientY);
+  }
+}
+
+function endTextEditing(box = activeTextEditingBox(), { deselect = false } = {}) {
+  if (!box) return;
+  const content = box.querySelector(".text-visual--inside .text-content");
+  const wasEditing = box.classList.contains("is-editing");
+  box.classList.remove("is-editing");
+  if (content) content.contentEditable = "false";
+  if (content && document.activeElement === content) content.blur();
+  window.getSelection()?.removeAllRanges();
+
+  const text = activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
+  if (wasEditing && text) updateTextBox(text);
+  if (deselect && isLayerSelected("text", box.dataset.textId)) {
+    clearLayerSelection();
+    refreshSelection();
+  }
 }
 
 function beginDrag(event, box) {
@@ -3619,7 +3695,7 @@ function storedCopiedLayer(token) {
 }
 
 function handleLayerCopy(event) {
-  if (!activeSlide() || isEditingTextTarget(event.target)) return;
+  if (!activeSlide() || isInlineTextEditing() || isEditingTextTarget(event.target)) return;
   const layers = slideItems(activeSlide()).filter(({ kind, item }) => isLayerSelected(kind, item.id));
   if (!layers.length) return;
   const copies = layers.flatMap(({ kind, item }) => {
@@ -3774,7 +3850,7 @@ async function createAssetFromFile(file, fallbackName = "Pasted image") {
 }
 
 async function handleClipboardPaste(event) {
-  if (!activeProject() || isEditingTextTarget(event.target) || state.pasteBusy) return;
+  if (!activeProject() || isInlineTextEditing() || isEditingTextTarget(event.target) || state.pasteBusy) return;
   const copiedLayer = copiedLayerFromClipboard(event.clipboardData);
   if (copiedLayer) {
     event.preventDefault();
@@ -3858,6 +3934,10 @@ async function init() {
   });
   document.addEventListener("copy", handleLayerCopy);
   document.addEventListener("pointerdown", (event) => {
+    const editingBox = activeTextEditingBox();
+    if (editingBox && event.target.closest(".text-box") !== editingBox) {
+      endTextEditing(editingBox, { deselect: !event.target.closest(".inspector") });
+    }
     const title = document.activeElement;
     if (title?.classList?.contains("project-title-input") && !event.target.closest(".project-title-input")) {
       title.blur();
@@ -3865,7 +3945,15 @@ async function init() {
     if (!event.target.closest(".layer-menu")) closeLayerMenu();
   }, true);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeLayerMenu();
+    if (event.key === "Escape") {
+      closeLayerMenu();
+      const editingBox = activeTextEditingBox();
+      if (editingBox) {
+        event.preventDefault();
+        endTextEditing(editingBox);
+        editingBox.focus({ preventScroll: true });
+      }
+    }
     const meta = event.metaKey || event.ctrlKey;
     if (meta && app.querySelector(".stage")) {
       if (event.key === "+" || event.key === "=") {

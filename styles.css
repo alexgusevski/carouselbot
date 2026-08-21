@@ -1544,6 +1544,11 @@ button:disabled {
   line-height: inherit;
 }
 
+.text-box.is-selected:not(.is-editing) .text-visual--inside .text-content {
+  cursor: text;
+  pointer-events: auto;
+}
+
 .text-line {
   position: relative;
   z-index: 1;
@@ -1556,13 +1561,17 @@ button:disabled {
 }
 
 .text-box.is-editing {
-  cursor: text;
+  cursor: grab;
 }
 
 .text-box.is-editing .text-content-wrap,
 .text-box.is-editing .text-content {
   pointer-events: auto;
   user-select: text;
+}
+
+.text-box.is-editing .text-content {
+  cursor: text;
 }
 
 .text-box.is-editing .text-content {
