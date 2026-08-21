@@ -21,6 +21,7 @@ The proof has no hosted API. The agent starts `mcp/server.mjs` over stdio, that 
 Available proof tools:
 
 - `list_editors`
+- `select_editor` (pin subsequent calls when more than one tab is connected)
 - `get_editor_state`
 - `create_demo_slide`
 - `add_text`
@@ -38,6 +39,7 @@ The browser test launches Chrome against the deployed Pages URL, grants the test
 
 - The browser tab must be open.
 - The bridge uses one fixed local port and supports one owning MCP process. A publishable package should use a shared daemon or forward secondary stdio processes to the current port owner.
+- More than one browser tab can connect; clients should call `list_editors`, then `select_editor` before editing when multiple IDs are returned.
 - Chrome presents a local-network permission. Safari and Firefox still need a manual compatibility matrix.
 - Only an exact origin allowlist can connect, and the listener binds only to `127.0.0.1`.
 - This is deliberately not deployed to the live `slides-editor` Pages project.

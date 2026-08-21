@@ -11,6 +11,7 @@ const allowedOrigins = new Set((process.env.SLIDE_STUDIO_ALLOWED_ORIGINS || [
 ].join(",")).split(",").map((value) => value.trim()).filter(Boolean));
 const editors = new Map();
 const inflight = new Map();
+let selectedEditorId = null;
 
 function log(message) {
   process.stderr.write(`[slide-studio-mcp] ${message}\n`);
@@ -143,7 +144,10 @@ bridge.listen(port, host, () => log(`Loopback bridge listening on http://${host}
 async function waitForBrowser(timeout = 10_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const editor = activeEditors().sort((a, b) => b.lastSeen - a.lastSeen)[0];
+    const connected = activeEditors();
+    const editor = selectedEditorId
+      ? connected.find((candidate) => candidate.id === selectedEditorId)
+      : connected.sort((a, b) => b.lastSeen - a.lastSeen)[0];
     if (editor) return editor;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
@@ -171,6 +175,16 @@ const tools = [
     description: "List Slide Studio browser tabs currently connected to this local companion.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: "select_editor",
+    description: "Pin subsequent tool calls to one connected Slide Studio editor ID.",
+    inputSchema: {
+      type: "object",
+      required: ["editorId"],
+      properties: { editorId: { type: "string" } },
+      additionalProperties: false,
+    },
   },
   {
     name: "get_editor_state",
@@ -218,7 +232,13 @@ const tools = [
 
 async function callTool(name, args) {
   if (name === "list_editors") {
-    return { editors: activeEditors().map((editor) => ({ id: editor.id, pageUrl: editor.pageUrl, state: editor.state })) };
+    return { selectedEditorId, editors: activeEditors().map((editor) => ({ id: editor.id, selected: editor.id === selectedEditorId, pageUrl: editor.pageUrl, state: editor.state })) };
+  }
+  if (name === "select_editor") {
+    const editor = activeEditors().find((candidate) => candidate.id === args.editorId);
+    if (!editor) throw new Error(`Editor is not connected: ${args.editorId}`);
+    selectedEditorId = editor.id;
+    return { selectedEditorId, pageUrl: editor.pageUrl, state: editor.state };
   }
   if (name === "get_editor_state") return callBrowser(name, { type: "editor.get_state" });
   if (name === "create_demo_slide") return callBrowser(name, { type: "slide.create_demo", ...args });

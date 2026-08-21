@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 
+const bridgePort = Number(process.env.SLIDE_STUDIO_TEST_BRIDGE_PORT) || 43118;
 const child = spawn(process.execPath, ["mcp/server.mjs"], {
   cwd: new URL("..", import.meta.url),
+  env: { ...process.env, SLIDE_STUDIO_BRIDGE_PORT: String(bridgePort) },
   stdio: ["pipe", "pipe", "pipe"],
 });
 child.stderr.setEncoding("utf8");
@@ -38,10 +40,10 @@ try {
   if (initialized.result?.serverInfo?.name !== "slide-studio-local-poc") throw new Error("MCP initialize failed");
   const listed = await request(2, "tools/list");
   const names = listed.result?.tools?.map((tool) => tool.name) || [];
-  for (const expected of ["list_editors", "get_editor_state", "create_demo_slide", "add_text"]) {
+  for (const expected of ["list_editors", "select_editor", "get_editor_state", "create_demo_slide", "add_text"]) {
     if (!names.includes(expected)) throw new Error(`Missing tool: ${expected}`);
   }
-  const health = await fetch("http://127.0.0.1:43117/health");
+  const health = await fetch(`http://127.0.0.1:${bridgePort}/health`);
   if (!health.ok || !(await health.json()).ok) throw new Error("Loopback health check failed");
   console.log(`MCP initialize, ${names.length} tools, and loopback bridge health all passed.`);
 } finally {
