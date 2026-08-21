@@ -1507,6 +1507,7 @@ button:disabled {
 }
 
 .text-content-wrap {
+  position: relative;
   width: 100%;
   max-height: 100%;
   padding: 0.14em 0.3em;
@@ -1565,28 +1566,44 @@ button:disabled {
 }
 
 .text-box.is-editing .text-content-wrap,
-.text-box.is-editing .text-content {
+.text-box.is-editing .text-editor {
   pointer-events: auto;
   user-select: text;
 }
 
 .text-box.is-editing .text-content {
-  cursor: text;
+  pointer-events: none;
 }
 
-.text-box.is-editing .text-content {
+.text-editor {
+  position: absolute;
+  z-index: 2;
+  inset: 0.14em 0.3em;
   display: block;
+  overflow: hidden;
+  color: transparent;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text-color, #fff);
+}
+
+.text-editor::selection {
+  color: transparent;
+  background: rgba(37, 244, 238, 0.42);
+  -webkit-text-fill-color: transparent;
+}
+
+.text-box.is-editing .text-editor {
+  cursor: text;
+  outline: 0;
 }
 
 .text-box[data-style="outline"] .text-content-wrap {
   overflow: visible;
-}
-
-.text-box[data-style="outline"].is-editing .text-content {
-  -webkit-text-stroke: 0.18em var(--outline-color, #111);
-  paint-order: stroke fill;
 }
 
 .outline-line {

@@ -1843,9 +1843,13 @@ function updateTextBox(text) {
     content.style.textAlign = textAlignment(text);
     content.style.alignItems = textAlignment(text) === "left" ? "flex-start" : textAlignment(text) === "right" ? "flex-end" : "center";
     content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    const editingThisContent = box.classList.contains("is-editing") && content.contentEditable === "true";
-    if (!editingThisContent) paintTextContent(text, content, box);
+    paintTextContent(text, content, box);
   });
+  const editor = box.querySelector(".text-editor");
+  if (editor) {
+    editor.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
+    editor.style.textAlign = textAlignment(text);
+  }
 }
 
 const measureCanvas = typeof document === "undefined" ? null : document.createElement("canvas");
@@ -2924,7 +2928,7 @@ function bindTextBox(box) {
     const corner = event.target.closest("[data-corner]")?.dataset.corner;
     const edge = event.target.closest("[data-edge]")?.dataset.edge;
     const rotate = event.target.closest("[data-rotate]");
-    const contentTarget = event.target.closest(".text-content");
+    const contentTarget = event.target.closest(".text-content, .text-editor");
     const wasSelected = isLayerSelected("text", box.dataset.textId);
 
     if (box.classList.contains("is-editing")) {
@@ -2951,24 +2955,11 @@ function bindTextBox(box) {
     showLayerMenu(event, "text", box.dataset.textId);
   });
   box.addEventListener("dblclick", (event) => {
+    if (box.classList.contains("is-editing")) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     startTextEditing(box, { selectAll: true });
-  });
-  content.addEventListener("input", () => {
-    const text = selectedText();
-    if (!text) return;
-    text.text = content.innerText.replace(/\n$/, "");
-    const outsideContent = box.querySelector(".text-visual--outside .text-content");
-    if (outsideContent) paintTextContent(text, outsideContent, box);
-    const textarea = app.querySelector("#text-value");
-    if (textarea) textarea.value = text.text;
-    ensureTextFits(text);
-    scheduleSave();
-  });
-  content.addEventListener("blur", () => {
-    endTextEditing(box);
   });
   box.addEventListener("keydown", (event) => {
     if ((event.key === "Backspace" || event.key === "Delete") && !box.classList.contains("is-editing")) {
@@ -3017,7 +3008,8 @@ function placeTextCaret(content, clientX, clientY) {
 function startTextEditing(box, { selectAll = false, clientX = null, clientY = null } = {}) {
   const text = activeSlide()?.texts.find((item) => item.id === box?.dataset.textId);
   const content = box?.querySelector(".text-visual--inside .text-content");
-  if (!box || !text || !content) return;
+  const contentWrap = content?.closest(".text-content-wrap");
+  if (!box || !text || !content || !contentWrap) return;
 
   const otherEditingBox = activeTextEditingBox();
   if (otherEditingBox && otherEditingBox !== box) endTextEditing(otherEditingBox);
@@ -3027,19 +3019,40 @@ function startTextEditing(box, { selectAll = false, clientX = null, clientY = nu
   }
 
   box.classList.add("is-editing", "is-selected");
-  content.replaceChildren();
-  content.textContent = text.text || "";
-  content.contentEditable = "true";
-  content.focus({ preventScroll: true });
+  const editor = document.createElement("span");
+  editor.className = "text-editor";
+  editor.contentEditable = "true";
+  editor.spellcheck = false;
+  editor.setAttribute("role", "textbox");
+  editor.setAttribute("aria-label", "Edit text layer");
+  editor.setAttribute("aria-multiline", "true");
+  editor.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
+  editor.style.textAlign = textAlignment(text);
+  editor.textContent = text.text || "";
+  content.setAttribute("aria-hidden", "true");
+  contentWrap.appendChild(editor);
+
+  editor.addEventListener("input", () => {
+    text.text = editor.innerText.replace(/\n$/, "");
+    box.querySelectorAll(".text-content").forEach((renderedContent) => {
+      paintTextContent(text, renderedContent, box);
+    });
+    const textarea = app.querySelector("#text-value");
+    if (textarea) textarea.value = text.text;
+    ensureTextFits(text);
+    scheduleSave();
+  });
+  editor.addEventListener("blur", () => endTextEditing(box));
+  editor.focus({ preventScroll: true });
 
   const selection = window.getSelection();
   if (selectAll && selection) {
     const range = document.createRange();
-    range.selectNodeContents(content);
+    range.selectNodeContents(editor);
     selection.removeAllRanges();
     selection.addRange(range);
   } else if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
-    placeTextCaret(content, clientX, clientY);
+    placeTextCaret(editor, clientX, clientY);
   }
 }
 
@@ -3047,9 +3060,11 @@ function endTextEditing(box = activeTextEditingBox(), { deselect = false } = {})
   if (!box) return;
   const content = box.querySelector(".text-visual--inside .text-content");
   const wasEditing = box.classList.contains("is-editing");
+  if (!wasEditing) return;
+  const editor = box.querySelector(".text-editor");
   box.classList.remove("is-editing");
-  if (content) content.contentEditable = "false";
-  if (content && document.activeElement === content) content.blur();
+  editor?.remove();
+  content?.removeAttribute("aria-hidden");
   window.getSelection()?.removeAllRanges();
 
   const text = activeSlide()?.texts.find((item) => item.id === box.dataset.textId);
@@ -3647,7 +3662,7 @@ function safeFilename(value) {
 }
 
 function isEditingTextTarget(target) {
-  return Boolean(target?.closest?.("input, textarea, [contenteditable='true'], [contenteditable='']"));
+  return Boolean(target?.closest?.("input, textarea, [contenteditable]"));
 }
 
 function isCopiedLayer(value) {
