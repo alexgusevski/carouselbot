@@ -174,12 +174,25 @@ async function localMcpHandshake() {
     editorId: localMcpBridgeState.editorId,
     pageUrl: location.href,
     pageOrigin: location.origin,
+    visibilityState: document.visibilityState,
+    hasFocus: document.hasFocus(),
     state: window.slideStudioLocalMcp.getState(),
   });
   if (!response.ok) throw new Error(`Bridge returned ${response.status}`);
   localMcpBridgeState.connected = true;
   localMcpAddEvent("Companion handshake completed");
   localMcpSetStatus("connected", `Connected locally · editor ${localMcpBridgeState.editorId.slice(0, 8)}`);
+  localMcpActivateVisibleEditor();
+}
+
+async function localMcpActivateVisibleEditor() {
+  if (!localMcpBridgeState.connected || document.visibilityState !== "visible" || !document.hasFocus()) return;
+  try {
+    const response = await localMcpSendJson("/activate", { editorId: localMcpBridgeState.editorId });
+    if (!response.ok) throw new Error(`Activate returned ${response.status}`);
+  } catch (error) {
+    localMcpAddEvent(`Could not activate this tab: ${error.message}`);
+  }
 }
 
 async function localMcpPollWithReconnect() {
@@ -234,6 +247,9 @@ window.addEventListener("beforeunload", () => {
   localMcpBridgeState.stopped = true;
   localMcpBridgeState.shouldReconnect = false;
 });
+
+window.addEventListener("focus", localMcpActivateVisibleEditor);
+document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);
 
 window.slideStudioLocalMcpBridge = {
   open: localMcpOpenModal,

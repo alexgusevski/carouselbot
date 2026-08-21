@@ -96,8 +96,18 @@ const bridge = createServer(async (request, response) => {
       editor.lastSeen = Date.now();
       editor.cors = cors;
       editors.set(editor.id, editor);
+      if (body.hasFocus && body.visibilityState === "visible") selectedEditorId = editor.id;
       log(`Browser editor connected from ${origin} (${editor.id.slice(0, 8)})`);
       return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
+    }
+    if (url.pathname === "/activate" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = editors.get(body.editorId);
+      if (!editor) return sendJson(response, 404, { error: "Unknown editor" }, cors);
+      editor.lastSeen = Date.now();
+      selectedEditorId = editor.id;
+      log(`Active browser editor selected (${editor.id.slice(0, 8)})`);
+      return sendJson(response, 200, { ok: true, selectedEditorId }, cors);
     }
     if (url.pathname === "/events" && request.method === "GET") {
       const editor = editors.get(url.searchParams.get("editorId"));
