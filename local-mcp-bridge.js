@@ -118,7 +118,7 @@ function localMcpEnsureModal() {
           <span class="agent-client-chip"><img src="assets/hermes-agent-logo.svg" alt="" />Hermes + any MCP client</span>
         </div>
         <ol class="agent-steps">
-          <li><span><strong>Install the local companion once</strong><code class="agent-command">npx @alexgusevski/slide-studio-mcp@latest setup</code></span></li>
+          <li><span><strong>Install the local companion once</strong><code class="agent-command">npx @alexgusevski/slide-studio-mcp@beta setup</code></span></li>
           <li><span><strong>Start or restart your agent</strong>The agent launches the companion automatically. It listens only on <code>127.0.0.1</code>.</span></li>
           <li><span><strong>Connect this tab</strong>Click below and approve Chrome’s local-network prompt. The active tab follows every edit live.</span></li>
         </ol>
