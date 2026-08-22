@@ -89,7 +89,10 @@ export async function runSetup(arguments_) {
     else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);
   }
   const skillTargets = await installSkill();
-  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${TEST_EDITOR_URL}, click Connect AI, and restart the configured agent.\n`);
+  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${TEST_EDITOR_URL} and click Connect AI.\n`);
+  process.stdout.write(`Current-session fallback (no restart): npx -y ${specifier} call list_editors\n`);
+  if (clients.includes("hermes")) process.stdout.write("Hermes can also refresh native tools in place with /reload-mcp and /reload-skills.\n");
+  if (clients.includes("claude")) process.stdout.write("Claude may require a new session for native MCP registration; use the CLI fallback immediately instead of stopping.\n");
   if (clients.includes("opencode")) process.stdout.write("OpenCode currently uses its JSON config; merge the snippet printed above into opencode.json.\n");
   return { clients, configured, skillTargets };
 }

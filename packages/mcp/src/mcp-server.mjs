@@ -33,7 +33,7 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["projectId", "slideId", "revision", "createdSlideId", "createdTextId", "createdImageId", "assetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "updatedImageIds", "applied", "path", "bytes"];
+  const keys = ["projectId", "slideId", "revision", "opened", "createdSlideId", "createdTextId", "createdImageId", "assetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "updatedImageIds", "applied", "path", "bytes"];
   return Object.fromEntries(keys.flatMap((key) => value?.[key] == null ? [] : [[key, value[key]]]));
 }
 
@@ -141,7 +141,7 @@ export async function createSlideStudioMcpServer(companion) {
   register("inspect_editor", "Inspect projects, slides, assets, and every text/image layer without returning image bytes.", z.object({ ...targetSlide, includeAllProjects: z.boolean().default(true) }).strict(), (args) => browserOperation(companion, "inspect_editor", args), { readOnlyHint: true });
   register("show_notification", "Show a short visual notification in the connected editor for status or marketing demos.", z.object({ message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), (args) => companion.call("notify", args), { destructiveHint: false, idempotentHint: false });
 
-  register("create_project", "Create and open an empty project.", z.object({ name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
+  register("create_project", "Create an empty project. If the dashboard is visible, its card appears live; adding the first slide opens the editor.", z.object({ name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
   register("open_project", "Open a project and optionally a specific slide without changing content.", z.object({ projectId: id, slideId: optionalId }).strict(), (args) => browserOperation(companion, "open_project", args), { destructiveHint: false, idempotentHint: true });
   register("update_project", "Rename a project.", z.object({ ...targetProject, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_project", args), { destructiveHint: true });
   register("delete_project", "Delete a project from browser storage.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "delete_project", args), { destructiveHint: true });

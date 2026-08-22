@@ -172,18 +172,24 @@ async function executeSlideStudioAgentOperation(operation) {
   }
 
   if (operation.type === "project.create") {
+    const dashboardVisible = !state.activeProjectId && Boolean(app.querySelector(".dashboard"));
     const now = Date.now();
     const project = {
       id: uid(), name: String(operation.name || "New Project").slice(0, 160), createdAt: now,
       updatedAt: now, revision: 1, slides: [], assets: [],
     };
     state.projects.push(project);
-    agentSelect(project);
     await putProject(project);
-    renderEditor();
+    if (dashboardVisible) {
+      renderDashboard();
+      bindGlobalActions();
+    } else {
+      agentSelect(project);
+      renderEditor();
+    }
     await agentNextFrame();
     toast("AI agent created a project");
-    return { projectId: project.id, name: project.name, revision: project.revision };
+    return { projectId: project.id, name: project.name, revision: project.revision, opened: !dashboardVisible };
   }
 
   if (operation.type === "project.open") {

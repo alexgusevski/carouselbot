@@ -145,8 +145,16 @@ try {
   await tool("get_design_guidance");
   await tool("show_notification", { message: "Hello from the full local MCP", tone: "success" });
 
+  await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
+  await waitFor(() => evaluate(cdp, "Boolean(document.querySelector('.dashboard'))"), "Dashboard did not open.");
   const createdProject = (await tool("create_project", { name: "Full MCP browser test" })).structuredContent;
+  const dashboardUpdated = await evaluate(cdp, `({
+    dashboardVisible: Boolean(document.querySelector('.dashboard')),
+    projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent)
+  })`);
+  if (!dashboardUpdated.dashboardVisible || !dashboardUpdated.projectNames.includes("Full MCP browser test")) throw new Error(`Dashboard did not update live: ${JSON.stringify(dashboardUpdated)}`);
   const addedSlide = (await tool("add_slide", { projectId: createdProject.projectId, name: "Live automation", backgroundColor: "#25282E" })).structuredContent;
+  await waitFor(() => evaluate(cdp, "document.querySelector('.project-title-input')?.value === 'Full MCP browser test'"), "Adding the first slide did not open the editor.");
   const addedText = (await tool("add_text", {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
     x: 0.1, y: 0.2, width: 0.8, height: 0.16, size: 82, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF",

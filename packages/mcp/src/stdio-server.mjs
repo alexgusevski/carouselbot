@@ -18,6 +18,6 @@ export async function serveMcp() {
   process.once("SIGINT", () => void close().finally(() => process.exit()));
   process.once("SIGTERM", () => void close().finally(() => process.exit()));
   process.once("SIGHUP", () => void close().finally(() => process.exit()));
-  process.stdin.once("end", () => void close());
+  process.stdin.once("end", () => void close().finally(() => process.exit()));
   return { handle, companion, close };
 }

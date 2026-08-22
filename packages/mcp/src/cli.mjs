@@ -15,6 +15,11 @@ async function main() {
     await runSetup(arguments_);
     return;
   }
+  if (command === "call") {
+    const { runCall } = await import("./call.mjs");
+    await runCall(arguments_);
+    return;
+  }
   if (command === "doctor") {
     const health = await companionDoctor();
     process.stdout.write(`${JSON.stringify({ package: PACKAGE_NAME, packageVersion: PACKAGE_VERSION, editor: TEST_EDITOR_URL, daemon: health }, null, 2)}\n`);
@@ -25,7 +30,7 @@ async function main() {
     return;
   }
   if (command === "help" || command === "--help" || command === "-h") {
-    process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\n\nUsage:\n  slides-studio-mcp serve\n  slides-studio-mcp setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  slides-studio-mcp doctor\n  slides-studio-mcp version\n`);
+    process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\n\nUsage:\n  slides-studio-mcp serve\n  slides-studio-mcp setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  slides-studio-mcp call <tool> [--json '{"key":"value"}'] [--stdin]\n  slides-studio-mcp doctor\n  slides-studio-mcp version\n`);
     return;
   }
   throw new Error(`Unknown command: ${command}`);

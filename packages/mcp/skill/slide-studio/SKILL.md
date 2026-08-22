@@ -7,6 +7,17 @@ description: Create, edit, visually inspect, and export Slide Studio carousel sl
 
 Use the Slide Studio MCP tools for all presentation changes. The hosted browser editor is the live visual surface; local files and rendered images pass only through the local companion.
 
+If the native MCP tools are not registered in the current session, do not stop or ask for a restart. Use the same validated tools through the local CLI fallback:
+
+```bash
+npx -y slides-studio-mcp@beta call get_design_guidance
+npx -y slides-studio-mcp@beta call list_editors
+npx -y slides-studio-mcp@beta call list_tools --json '{"names":["add_slide","add_text"]}'
+npx -y slides-studio-mcp@beta call create_project --json '{"name":"My presentation"}'
+```
+
+Every tool accepts the same JSON arguments as MCP. Use `list_tools` without arguments for compact discovery or pass `{"names":[...]}` to retrieve selected schemas. Prefer `apply_operations` for batches. `render_slide` writes its returned image to a temporary local `previewPath`; inspect that file and remove the temporary directory after the review. Hermes can load the native tools in place with `/reload-mcp` and refresh this skill with `/reload-skills`.
+
 Before the first mutation in a task, call `get_design_guidance`. The server intentionally rejects mutations until this guidance has been read.
 
 Inspect the editor before editing and keep the returned IDs. Work on the requested project and slide; do not infer targets when multiple editors or projects are ambiguous. Prefer `apply_operations` for compact related changes, while preserving logical edit order.
