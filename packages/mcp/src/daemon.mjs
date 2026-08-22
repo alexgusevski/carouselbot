@@ -10,7 +10,7 @@ import {
 
 const MAX_JSON_BYTES = 40 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
-const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 30 * 60_000;
+const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 15_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 90_000;
@@ -78,7 +78,8 @@ function broadcastEditSessions() {
 
 function activeEditSessions() {
   const cutoff = Date.now() - EDIT_SESSION_TTL_MS;
-  return [...editSessions.values()].filter((session) => session.lastSeen >= cutoff && editors.has(session.editorId));
+  const activeEditorIds = new Set(activeEditors().map((editor) => editor.id));
+  return [...editSessions.values()].filter((session) => session.lastSeen >= cutoff && activeEditorIds.has(session.editorId));
 }
 
 function releaseEditSession(sessionId, reason = "released") {
@@ -122,7 +123,7 @@ function requireEditSession(sessionId) {
     if (session) releaseEditSession(session.id, "lease expired");
     throw codedError("EDIT_SESSION_EXPIRED", "The edit session is missing or expired. Begin a new edit session and retry.");
   }
-  if (!editors.has(session.editorId)) {
+  if (!activeEditors().some((editor) => editor.id === session.editorId)) {
     releaseEditSession(session.id, "editor disconnected");
     throw codedError("EDITOR_DISCONNECTED", "The browser tab assigned to this edit session is no longer connected.");
   }

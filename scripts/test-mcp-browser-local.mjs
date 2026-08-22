@@ -14,7 +14,8 @@ const profile = await mkdtemp(join(tmpdir(), "slide-studio-browser-"));
 const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-daemon-"));
 const exportPath = join(profile, "agent-export.png");
 const projectExportDirectory = join(profile, "project-export");
-const env = { ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory };
+const sharedDaemon = process.argv.includes("--shared-daemon");
+const env = sharedDaemon ? process.env : { ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory };
 const web = new URL(pageUrl).hostname === "127.0.0.1"
   ? spawn(process.execPath, ["server.mjs"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] })
   : null;
@@ -141,10 +142,11 @@ try {
   await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.slideStudioAgent)"), "Editor scripts did not load.");
   const initialConnection = await evaluate(cdp, `({
     buttonStatus: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus || "idle",
-    remembered: localStorage.getItem("slide-studio:mcp-connected")
+    remembered: localStorage.getItem("slide-studio:mcp-connected"),
+    editorId: window.slideStudioLocalMcpBridge.getState().editorId
   })`);
   const initialEditors = (await tool("list_editors")).structuredContent.editors;
-  if (initialConnection.buttonStatus !== "idle" || initialConnection.remembered !== null || initialEditors.length) {
+  if (initialConnection.buttonStatus !== "idle" || initialConnection.remembered !== null || initialEditors.some((editor) => editor.id === initialConnection.editorId)) {
     throw new Error(`The browser contacted MCP before the user opted in: ${JSON.stringify({ initialConnection, initialEditors })}`);
   }
   await evaluate(cdp, `(async () => {
@@ -152,14 +154,15 @@ try {
     document.querySelector('[data-local-mcp-connect]').click();
     return true;
   })()`);
-  await waitFor(async () => (await tool("list_editors")).structuredContent.editors.length, "Editor did not connect.");
+  await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
   const remembered = await evaluate(cdp, `localStorage.getItem("slide-studio:mcp-connected")`);
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
   await tool("get_design_guidance");
   const connectedEditors = (await tool("list_editors")).structuredContent.editors;
-  const editSession = (await tool("begin_edit_session", { editorId: connectedEditors[0].id, purpose: "Full browser integration test" })).structuredContent;
+  const testEditor = connectedEditors.find((editor) => editor.id === initialConnection.editorId);
+  const editSession = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Full browser integration test" })).structuredContent;
   editSessionId = editSession.id;
   await tool("show_notification", { message: "Hello from the full local MCP", tone: "success" });
 
@@ -232,18 +235,18 @@ try {
   await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP verified" });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  editSessionId = (await tool("begin_edit_session", { editorId: connectedEditors[0].id, purpose: "Verify project deletion" })).structuredContent.id;
+  editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify project deletion" })).structuredContent.id;
   const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
   await tool("delete_project", { projectId: temporaryProject.projectId });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  editSessionId = (await tool("begin_edit_session", { editorId: connectedEditors[0].id, projectId: createdProject.projectId, purpose: "Finish browser integration test" })).structuredContent.id;
+  editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, projectId: createdProject.projectId, purpose: "Finish browser integration test" })).structuredContent.id;
   await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
 
   const inspected = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).structuredContent;
   if (inspected.project.name !== "Full MCP verified" || inspected.project.slides.length !== 1 || inspected.slide.texts.length !== 2 || inspected.slide.images.length !== 1 || inspected.slide.images[0].id !== image.createdImageId || inspected.view.showTikTokOverlay !== true) throw new Error(`Unexpected final state: ${JSON.stringify(inspected)}`);
-  await evaluate(cdp, `window.open(${JSON.stringify(pageUrl)}, "_blank") && true`);
-  const secondPage = await waitFor(async () => (await waitForJson("/json/list")).find((page) => page.id !== pages[0].id && page.url.startsWith(pageUrl)), "Second editor tab did not open.");
+  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: pageUrl });
+  const secondPage = await waitFor(async () => (await waitForJson("/json/list")).find((page) => page.id === secondTargetId), "Second editor tab did not open.");
   secondCdp = connectCdp(secondPage.webSocketDebuggerUrl);
   await secondCdp.ready;
   await secondCdp.send("Runtime.enable");
@@ -260,8 +263,10 @@ try {
   secondCdp?.close();
   cdp?.close();
   mcp.stdin.end();
-  const daemonState = await readFile(join(stateDirectory, "daemon-43117.json"), "utf8").then(JSON.parse).catch(() => null);
-  if (daemonState?.pid) try { process.kill(daemonState.pid, "SIGTERM"); } catch { /* Already exited. */ }
+  if (!sharedDaemon) {
+    const daemonState = await readFile(join(stateDirectory, "daemon-43117.json"), "utf8").then(JSON.parse).catch(() => null);
+    if (daemonState?.pid) try { process.kill(daemonState.pid, "SIGTERM"); } catch { /* Already exited. */ }
+  }
   const stopChild = async (child) => {
     if (!child || child.exitCode != null) return;
     child.kill("SIGTERM");

@@ -22,7 +22,7 @@
     "mcp:doctor": "node packages/mcp/src/cli.mjs doctor",
     "mcp:pack": "npm pack --workspace slides-studio-mcp",
     "test:mcp": "node --test packages/mcp/test/*.test.mjs",
-    "test:mcp:browser": "node scripts/test-mcp-browser-local.mjs --deployed",
+    "test:mcp:browser": "node scripts/test-mcp-browser-local.mjs --deployed --shared-daemon",
     "test:mcp:browser:local": "node scripts/test-mcp-browser-local.mjs",
     "build": "node scripts/build.mjs",
     "preview:cloudflare": "npm run build && wrangler pages dev dist",
