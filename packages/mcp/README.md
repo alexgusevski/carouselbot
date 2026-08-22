@@ -44,6 +44,9 @@ Useful commands:
 ```bash
 npx slides-studio-mcp@beta setup --dry-run
 npx slides-studio-mcp@beta doctor
+npx slides-studio-mcp@beta restart
 ```
+
+`restart` gracefully replaces an outdated local companion. Reload the real browser editor afterward; beta.6 MCP clients automatically recover their daemon registration.
 
 Open the test editor in the user's normal local browser, click **Connect AI**, and call `get_design_guidance` before editing. The server enforces that one-time read and provides `render_slide` so agents can inspect actual pixels without permanently storing previews.

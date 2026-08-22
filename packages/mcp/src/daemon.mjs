@@ -10,10 +10,11 @@ import {
 
 const MAX_JSON_BYTES = 40 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
-const EDITOR_TTL_MS = 45_000;
+const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 30 * 60_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 90_000;
+const EVENT_POLL_TIMEOUT_MS = Number(process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS) || 5 * 60_000;
 const daemonSecret = randomBytes(32).toString("base64url");
 const editors = new Map();
 const clients = new Map();
@@ -29,7 +30,10 @@ function log(message) {
 
 function activeEditors() {
   const cutoff = Date.now() - EDITOR_TTL_MS;
-  return [...editors.values()].filter((editor) => editor.lastSeen >= cutoff);
+  return [...editors.values()].filter((editor) => (
+    editor.lastSeen >= cutoff
+    || Boolean(editor.poll && !editor.poll.destroyed && !editor.poll.writableEnded)
+  ));
 }
 
 function activeClients() {
@@ -109,10 +113,39 @@ function queueEditorEvent(editor, event) {
   deliverNext(editor);
 }
 
+function endEditorPoll(editor) {
+  if (!editor?.poll) return;
+  const response = editor.poll;
+  editor.poll = null;
+  clearTimeout(editor.pollTimer);
+  editor.pollTimer = null;
+  if (!response.writableEnded && !response.destroyed) {
+    response.writeHead(204, editor.cors || {});
+    response.end();
+  }
+}
+
+function disconnectEditor(editorId, message = "Browser editor disconnected.") {
+  const editor = editors.get(editorId);
+  if (!editor) return false;
+  endEditorPoll(editor);
+  editors.delete(editorId);
+  if (focusedEditorId === editorId) focusedEditorId = null;
+  for (const [requestId, pending] of inflight) {
+    if (pending.editorId !== editorId) continue;
+    inflight.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.reject(new Error(message));
+  }
+  return true;
+}
+
 function deliverNext(editor) {
   if (!editor?.poll || !editor.queue.length) return;
   const response = editor.poll;
   editor.poll = null;
+  clearTimeout(editor.pollTimer);
+  editor.pollTimer = null;
   sendJson(response, 200, editor.queue.shift(), editor.cors);
 }
 
@@ -241,6 +274,11 @@ const server = createServer(async (request, response) => {
     if (url.pathname.startsWith("/internal/")) {
       if (!requireInternal(request, response)) return;
       if (url.pathname === "/internal/health" && request.method === "GET") return sendJson(response, 200, { ok: true, pid: process.pid, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION });
+      if (url.pathname === "/internal/shutdown" && request.method === "POST") {
+        sendJson(response, 202, { ok: true, pid: process.pid });
+        setImmediate(() => void shutdown());
+        return;
+      }
       const body = await readJson(request);
       if (url.pathname === "/internal/client/connect" && request.method === "POST") {
         const existing = clients.get(body.clientId) || { id: body.clientId };
@@ -269,15 +307,15 @@ const server = createServer(async (request, response) => {
       if (!body.editorId || typeof body.editorId !== "string") return sendJson(response, 400, { error: "editorId is required." }, cors);
       if (body.protocolVersion !== PROTOCOL_VERSION) return sendJson(response, 409, { error: `Protocol mismatch. Browser=${body.protocolVersion}; companion=${PROTOCOL_VERSION}.`, protocolVersion: PROTOCOL_VERSION }, cors);
       const previous = editors.get(body.editorId);
-      if (previous?.poll) { previous.poll.writeHead(204, previous.cors); previous.poll.end(); }
+      if (previous?.poll) endEditorPoll(previous);
       const editor = {
         id: body.editorId, queue: previous?.queue || [], poll: null, pageUrl: body.pageUrl,
-        state: body.state, lastSeen: Date.now(), cors, sessionToken: randomBytes(32).toString("base64url"),
+        pollTimer: null, state: body.state, lastSeen: Date.now(), cors, sessionToken: randomBytes(32).toString("base64url"),
       };
       editors.set(editor.id, editor);
       if (body.hasFocus && body.visibilityState === "visible") focusedEditorId = editor.id;
       log(`Editor connected (${editor.id.slice(0, 8)})`);
-      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, agents: activeClients().map(publicClient) }, cors);
+      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, agents: activeClients().map(publicClient) }, cors);
     }
     if (url.pathname === "/activate" && request.method === "POST") {
       const body = await readJson(request);
@@ -286,19 +324,32 @@ const server = createServer(async (request, response) => {
       focusedEditorId = editor.id;
       return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
     }
+    if (url.pathname === "/disconnect" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = requireEditor(request, response, body.editorId, cors);
+      if (!editor) return;
+      disconnectEditor(editor.id);
+      return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
+    }
     if (url.pathname === "/events" && request.method === "GET") {
       const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
       if (!editor) return;
       editor.cors = cors;
-      if (editor.poll) { editor.poll.writeHead(204, editor.cors); editor.poll.end(); }
+      if (editor.poll) endEditorPoll(editor);
       editor.poll = response;
-      deliverNext(editor);
-      if (editor.poll) setTimeout(() => {
+      response.once("close", () => {
         if (editor.poll !== response) return;
         editor.poll = null;
-        response.writeHead(204, cors);
-        response.end();
-      }, 20_000).unref();
+        clearTimeout(editor.pollTimer);
+        editor.pollTimer = null;
+        editor.lastSeen = Date.now();
+      });
+      deliverNext(editor);
+      if (editor.poll) editor.pollTimer = setTimeout(() => {
+        if (editor.poll !== response) return;
+        endEditorPoll(editor);
+      }, EVENT_POLL_TIMEOUT_MS);
+      editor.pollTimer?.unref();
       return;
     }
     if (url.pathname === "/result" && request.method === "POST") {
@@ -365,9 +416,7 @@ async function writeDaemonState() {
 }
 
 async function cleanup() {
-  for (const editor of editors.values()) {
-    if (editor.poll) { editor.poll.writeHead(204, editor.cors || {}); editor.poll.end(); }
-  }
+  for (const editor of editors.values()) endEditorPoll(editor);
   for (const pending of inflight.values()) { clearTimeout(pending.timer); pending.reject(new Error("Local companion is shutting down.")); }
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
@@ -382,6 +431,10 @@ setInterval(() => {
   for (const [id, item] of media) if (item.expiresAt < now) media.delete(id);
   let clientsChanged = false;
   for (const [id, client] of clients) if (client.lastSeen < now - CLIENT_TTL_MS) { clients.delete(id); clientsChanged = true; }
+  for (const [id, editor] of editors) {
+    if (editor.lastSeen >= now - EDITOR_TTL_MS || (editor.poll && !editor.poll.destroyed && !editor.poll.writableEnded)) continue;
+    disconnectEditor(id, "Browser editor connection expired.");
+  }
   if (clientsChanged) broadcastAgents();
   if (activeClients().length || activeEditors().length) idleSince = null;
   else if (!idleSince) idleSince = now;

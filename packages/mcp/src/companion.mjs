@@ -19,7 +19,11 @@ async function daemonRequest(state, path, init = {}) {
     headers: { "Authorization": `Bearer ${state.secret}`, "Content-Type": "application/json", ...(init.headers || {}) },
   });
   const value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(value.error || `Local companion returned ${response.status}.`);
+  if (!response.ok) {
+    const error = new Error(value.error || `Local companion returned ${response.status}.`);
+    error.status = response.status;
+    throw error;
+  }
   return value;
 }
 
@@ -28,10 +32,14 @@ async function healthyState() {
   if (!state?.secret || state.port == null) return null;
   try {
     const result = await daemonRequest(state, "/internal/health");
-    if (result.protocolVersion !== PROTOCOL_VERSION) throw new Error(`Local companion protocol ${result.protocolVersion} is incompatible with package protocol ${PROTOCOL_VERSION}. Restart all Slide Studio MCP clients.`);
+    if (result.protocolVersion !== PROTOCOL_VERSION) {
+      const error = new Error(`Local companion ${result.version || "unknown"} uses protocol ${result.protocolVersion}; ${PACKAGE_VERSION} requires protocol ${PROTOCOL_VERSION}. Run \`npx -y slides-studio-mcp@beta restart\`, then reload the editor.`);
+      error.code = "EPROTOCOL";
+      throw error;
+    }
     return state;
   } catch (error) {
-    if (String(error.message).includes("incompatible")) throw error;
+    if (error.code === "EPROTOCOL") throw error;
     return null;
   }
 }
@@ -55,14 +63,24 @@ async function ensureDaemon() {
 }
 
 export async function createCompanion(initialName = "MCP agent", initialVersion = null) {
-  const state = await ensureDaemon();
+  let state = await ensureDaemon();
   const clientId = randomUUID();
   let clientName = initialName;
   let clientVersion = initialVersion;
   let closed = false;
 
-  const post = (path, body) => daemonRequest(state, path, { method: "POST", body: JSON.stringify(body) });
-  const register = () => post("/internal/client/connect", { clientId, name: clientName, version: clientVersion });
+  const rawPost = (path, body) => daemonRequest(state, path, { method: "POST", body: JSON.stringify(body) });
+  const register = () => rawPost("/internal/client/connect", { clientId, name: clientName, version: clientVersion });
+  const post = async (path, body) => {
+    try {
+      return await rawPost(path, body);
+    } catch (error) {
+      if (closed || (error.status && error.status !== 401)) throw error;
+      state = await ensureDaemon();
+      await register();
+      return rawPost(path, body);
+    }
+  };
   await register();
   const heartbeat = setInterval(() => {
     if (!closed) void post("/internal/client/heartbeat", { clientId }).catch(() => {});
@@ -71,7 +89,7 @@ export async function createCompanion(initialName = "MCP agent", initialVersion 
 
   return {
     clientId,
-    daemon: { pid: state.pid, url: BRIDGE_URL, version: state.version, packageVersion: PACKAGE_VERSION },
+    get daemon() { return { pid: state.pid, url: BRIDGE_URL, version: state.version, packageVersion: PACKAGE_VERSION }; },
     async identify(name, version) {
       clientName = name || clientName;
       clientVersion = version || clientVersion;
@@ -85,7 +103,7 @@ export async function createCompanion(initialName = "MCP agent", initialVersion 
       if (closed) return;
       closed = true;
       clearInterval(heartbeat);
-      await post("/internal/client/disconnect", { clientId }).catch(() => {});
+      await rawPost("/internal/client/disconnect", { clientId }).catch(() => {});
     },
   };
 }
@@ -94,4 +112,28 @@ export async function companionDoctor() {
   const state = await ensureDaemon();
   const health = await daemonRequest(state, "/internal/health");
   return { ...health, url: BRIDGE_URL, stateFile: DAEMON_STATE_PATH };
+}
+
+export async function companionRestart() {
+  const previous = await readState();
+  if (previous?.secret && Number.isInteger(previous.pid) && previous.pid > 0) {
+    const health = await daemonRequest(previous, "/internal/health").catch(() => null);
+    if (health?.pid === previous.pid) {
+      await daemonRequest(previous, "/internal/shutdown", { method: "POST", body: "{}" }).catch(() => {
+        try { process.kill(previous.pid, "SIGTERM"); } catch { /* It already stopped. */ }
+      });
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(previous.pid, 0);
+          await wait(100);
+        } catch {
+          break;
+        }
+      }
+    }
+  }
+  const state = await ensureDaemon();
+  const health = await daemonRequest(state, "/internal/health");
+  return { ...health, url: BRIDGE_URL, stateFile: DAEMON_STATE_PATH, previousPid: previous?.pid || null };
 }

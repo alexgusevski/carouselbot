@@ -14,6 +14,8 @@ Before using any browser or making edits, call `list_editors`. A registered edit
 - If no editor is listed, ask the user to open the editor in their normal browser on the same computer, click **Connect AI**, and accept the browser permission. Then retry `list_editors`.
 - A loaded MCP server and a connected browser editor are different states. Determine browser connectivity only from `list_editors`, not from a sandbox browser or the agent's tool catalog.
 
+If the MCP reports an outdated companion protocol, run `npx -y slides-studio-mcp@beta restart` once, ask the user to reload their real editor tab, and retry `list_editors`.
+
 If the native MCP tools are not registered in the current session, do not stop or ask for a restart. Use the same validated tools through the local CLI fallback:
 
 ```bash

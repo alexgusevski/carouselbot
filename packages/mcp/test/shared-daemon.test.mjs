@@ -9,7 +9,9 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const port = 45000 + Math.floor(Math.random() * 1000);
   process.env.SLIDE_STUDIO_STATE_DIR = stateDirectory;
   process.env.SLIDE_STUDIO_BRIDGE_PORT = String(port);
-  const { createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
+  process.env.SLIDE_STUDIO_EDITOR_TTL_MS = "120";
+  process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS = "2000";
+  const { companionRestart, createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
   const first = await createCompanion("Claude Code", "test");
   const second = await createCompanion("Codex", "test");
   const origin = "https://slides-mcp-poc-0821.pages.dev";
@@ -19,7 +21,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const response = await fetch(`${base}/connect`, {
       method: "POST",
       headers: { Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify({ editorId, protocolVersion: 1, pageUrl: `${origin}/#${editorId}`, state: { activeProjectId: null } }),
+      body: JSON.stringify({ editorId, protocolVersion: 2, pageUrl: `${origin}/#${editorId}`, state: { activeProjectId: null } }),
     });
     assert.equal(response.status, 200);
     return response.json();
@@ -47,6 +49,24 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     assert.equal(eventA.agent.name, "Claude Code");
     assert.equal(eventB.message, "From Codex");
     assert.equal(eventB.agent.name, "Codex");
+
+    const controller = new AbortController();
+    const openPoll = fetch(`${base}/events?editorId=editor-a`, {
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` },
+      signal: controller.signal,
+    }).catch(() => null);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual((await first.call("list_editors")).editors.map((editor) => editor.id), ["editor-a"], "an open event request should keep a background editor active");
+    controller.abort();
+    await openPoll;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual((await first.call("list_editors")).editors, [], "a closed event request should expire after the configured grace period");
+
+    const previousPid = first.daemon.pid;
+    const restarted = await companionRestart();
+    assert.notEqual(restarted.pid, previousPid, "restart should replace the daemon process");
+    assert.deepEqual((await first.call("list_editors")).editors, [], "an existing client should recover against the replacement daemon");
+    assert.equal(first.daemon.pid, restarted.pid);
   } finally {
     await first.close();
     await second.close();
@@ -55,5 +75,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     await rm(stateDirectory, { recursive: true, force: true });
     delete process.env.SLIDE_STUDIO_STATE_DIR;
     delete process.env.SLIDE_STUDIO_BRIDGE_PORT;
+    delete process.env.SLIDE_STUDIO_EDITOR_TTL_MS;
+    delete process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS;
   }
 });

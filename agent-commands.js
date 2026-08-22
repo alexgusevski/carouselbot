@@ -1,4 +1,4 @@
-const SLIDE_STUDIO_AGENT_PROTOCOL = 1;
+const SLIDE_STUDIO_AGENT_PROTOCOL = 2;
 
 function agentProject(projectId = state.activeProjectId) {
   const project = state.projects.find((item) => item.id === projectId);

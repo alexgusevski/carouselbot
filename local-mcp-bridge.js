@@ -1,6 +1,7 @@
 const LOCAL_MCP_BRIDGE_URL = "http://127.0.0.1:43117";
 const LOCAL_MCP_RETRY_MS = 1200;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
+const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
 function localMcpConnectionWasRemembered() {
@@ -17,6 +18,18 @@ function localMcpRememberConnection() {
   } catch { /* The live connection still works when storage is unavailable. */ }
 }
 
+function localMcpEditorId() {
+  try {
+    const existing = sessionStorage.getItem(LOCAL_MCP_EDITOR_KEY);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    sessionStorage.setItem(LOCAL_MCP_EDITOR_KEY, created);
+    return created;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
 const localMcpBridgeState = {
   connected: false,
   connecting: false,
@@ -24,7 +37,7 @@ const localMcpBridgeState = {
   reconnectLoopRunning: false,
   connectionRemembered: localMcpConnectionWasRemembered(),
   stopped: false,
-  editorId: crypto.randomUUID(),
+  editorId: localMcpEditorId(),
   sessionToken: null,
   agents: [],
   events: [],
@@ -44,8 +57,13 @@ function localMcpRequest(path, init = {}) {
   }
 }
 
-function localMcpSendJson(path, value) {
-  return localMcpRequest(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) });
+function localMcpSendJson(path, value, init = {}) {
+  return localMcpRequest(path, {
+    ...init,
+    method: "POST",
+    headers: { ...init.headers, "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  });
 }
 
 function localMcpAgentLabel(agent) {
@@ -286,6 +304,11 @@ async function localMcpActivateVisibleEditor() {
     if (!response.ok) throw new Error(`Activate returned ${response.status}`);
   } catch (error) {
     localMcpAddEvent(`Could not activate this tab: ${error.message}`);
+    localMcpBridgeState.connected = false;
+    localMcpBridgeState.sessionToken = null;
+    localMcpBridgeState.shouldReconnect = true;
+    localMcpSetStatus("connecting", "Reconnecting to the local companion…");
+    void localMcpPollWithReconnect();
   }
 }
 
@@ -379,6 +402,7 @@ void localMcpResumeRememberedConnection();
 window.addEventListener("beforeunload", () => {
   localMcpBridgeState.stopped = true;
   localMcpBridgeState.shouldReconnect = false;
+  if (localMcpBridgeState.sessionToken) void localMcpSendJson("/disconnect", { editorId: localMcpBridgeState.editorId }, { keepalive: true });
 });
 window.addEventListener("focus", localMcpActivateVisibleEditor);
 document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);
