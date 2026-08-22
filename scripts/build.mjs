@@ -26,7 +26,6 @@ const assetVersion = createHash("sha256")
 
 await Promise.all([
   writeFile(join(output, "index.html"), indexHtml.replaceAll("?v=dev", `?v=${assetVersion}`)),
-  copyFile(join(root, "404.html"), join(output, "404.html")),
   copyFile(join(root, "app.js"), join(output, "app.js")),
   copyFile(join(root, "agent-commands.js"), join(output, "agent-commands.js")),
   copyFile(join(root, "local-mcp-bridge.js"), join(output, "local-mcp-bridge.js")),

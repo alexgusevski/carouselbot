@@ -25,7 +25,8 @@ const files = new Map([
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${host}:${port}`);
-  const entry = files.get(url.pathname);
+  const entry = files.get(url.pathname)
+    || (/^\/projects\/[^/]+\/?$/.test(url.pathname) ? files.get("/") : null);
 
   if (!entry || (request.method !== "GET" && request.method !== "HEAD")) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

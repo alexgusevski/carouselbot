@@ -13,6 +13,7 @@ function agentSlide(project, slideId = state.activeSlideId) {
 }
 
 function agentSelect(project, slide = null) {
+  updateBrowserRoute(projectPath(project.id), "push");
   state.activeProjectId = project.id;
   state.activeSlideId = slide?.id || project.slides[0]?.id || null;
   clearLayerSelection();
@@ -218,6 +219,7 @@ async function executeSlideStudioAgentOperation(operation) {
       state.activeSlideId = null;
       clearLayerSelection();
     }
+    updateBrowserRoute("/", "push");
     renderDashboard();
     bindGlobalActions();
     toast("AI agent deleted a project");
