@@ -1,6 +1,7 @@
 const DB_NAME = "slide-studio-db";
 const DB_VERSION = 1;
 const STORE_NAME = "projects";
+const PROJECT_CHANNEL_NAME = "slide-studio-projects-v1";
 const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
@@ -72,6 +73,9 @@ const state = {
   shareAllCache: null,
 };
 
+const projectChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel(PROJECT_CHANNEL_NAME) : null;
+const projectChannelSource = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+
 const history = {
   past: [],
   future: [],
@@ -98,11 +102,12 @@ function recordHistory() {
   history.future = [];
 }
 
-function applyHistorySnapshot(snapshot) {
+async function applyHistorySnapshot(snapshot) {
   const index = state.projects.findIndex((project) => project.id === snapshot.id);
   if (index < 0) return;
+  const expectedRevision = Number(state.projects[index].revision) || 0;
   history.applying = true;
-  state.projects[index] = cloneProject(snapshot);
+  state.projects[index] = { ...cloneProject(snapshot), revision: expectedRevision + 1, updatedAt: Date.now() };
   state.activeProjectId = snapshot.id;
   if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
     state.activeSlideId = state.projects[index].slides[0]?.id || null;
@@ -110,8 +115,15 @@ function applyHistorySnapshot(snapshot) {
   setLayerSelection(selectedLayerKeys());
   state.croppingOverlayId = null;
   renderEditor();
-  putProject(state.projects[index]).catch((error) => console.error(error));
-  history.applying = false;
+  try {
+    await putProject(state.projects[index], { expectedRevision });
+  } catch (error) {
+    console.error(error);
+    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(snapshot.id);
+    throw error;
+  } finally {
+    history.applying = false;
+  }
 }
 
 function undo() {
@@ -119,7 +131,7 @@ function undo() {
   const project = activeProject();
   if (!project) return;
   history.future.push(cloneProject(project));
-  applyHistorySnapshot(history.past.pop());
+  return applyHistorySnapshot(history.past.pop());
 }
 
 function redo() {
@@ -127,7 +139,7 @@ function redo() {
   const project = activeProject();
   if (!project) return;
   history.past.push(cloneProject(project));
-  applyHistorySnapshot(history.future.pop());
+  return applyHistorySnapshot(history.future.pop());
 }
 
 const app = document.querySelector("#app");
@@ -247,21 +259,104 @@ function getAllProjects() {
   });
 }
 
-function putProject(project) {
+function getProjectFromDb(projectId) {
   return new Promise((resolve, reject) => {
-    const request = state.db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(project);
-    request.onsuccess = () => resolve();
+    const request = state.db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(projectId);
+    request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
   });
 }
 
-function deleteProjectFromDb(projectId) {
+function staleProjectError(projectId, expectedRevision, actualRevision) {
+  const error = new Error(`Project ${projectId} changed in another tab (expected revision ${expectedRevision}, current ${actualRevision}). The latest project was reloaded; inspect it and retry with current IDs.`);
+  error.code = "STALE_PROJECT";
+  error.expectedRevision = expectedRevision;
+  error.actualRevision = actualRevision;
+  return error;
+}
+
+function announceProjectChange(type, project) {
+  projectChannel?.postMessage({ type, source: projectChannelSource, projectId: project.id, revision: Number(project.revision) || 0, updatedAt: Number(project.updatedAt) || 0 });
+}
+
+function putProject(project, { expectedRevision = null, broadcast = true } = {}) {
   return new Promise((resolve, reject) => {
-    const request = state.db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(projectId);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    let conflict = null;
+    const read = store.get(project.id);
+    read.onerror = () => reject(read.error);
+    read.onsuccess = () => {
+      const actualRevision = Number(read.result?.revision) || 0;
+      if (expectedRevision != null && actualRevision !== Number(expectedRevision)) {
+        conflict = staleProjectError(project.id, Number(expectedRevision), actualRevision);
+        transaction.abort();
+        return;
+      }
+      store.put(project);
+    };
+    transaction.oncomplete = () => {
+      if (broadcast) announceProjectChange("project.updated", project);
+      resolve();
+    };
+    transaction.onerror = () => { if (!conflict) reject(transaction.error); };
+    transaction.onabort = () => reject(conflict || transaction.error || new Error("Project save was aborted."));
   });
 }
+
+function deleteProjectFromDb(projectId, { expectedRevision = null, broadcast = true } = {}) {
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    let conflict = null;
+    const read = store.get(projectId);
+    read.onerror = () => reject(read.error);
+    read.onsuccess = () => {
+      const actualRevision = Number(read.result?.revision) || 0;
+      if (expectedRevision != null && actualRevision !== Number(expectedRevision)) {
+        conflict = staleProjectError(projectId, Number(expectedRevision), actualRevision);
+        transaction.abort();
+        return;
+      }
+      store.delete(projectId);
+    };
+    transaction.oncomplete = () => {
+      if (broadcast) projectChannel?.postMessage({ type: "project.deleted", source: projectChannelSource, projectId });
+      resolve();
+    };
+    transaction.onerror = () => { if (!conflict) reject(transaction.error); };
+    transaction.onabort = () => reject(conflict || transaction.error || new Error("Project deletion was aborted."));
+  });
+}
+
+async function reloadProjectFromDb(projectId, { render = true } = {}) {
+  const latest = await getProjectFromDb(projectId);
+  const index = state.projects.findIndex((project) => project.id === projectId);
+  if (!latest) {
+    if (index >= 0) state.projects.splice(index, 1);
+    if (state.activeProjectId === projectId) {
+      state.activeProjectId = null;
+      state.activeSlideId = null;
+      updateBrowserRoute("/", "replace");
+    }
+  } else if (index >= 0) {
+    state.projects[index] = latest;
+    if (state.activeProjectId === projectId && !latest.slides.some((slide) => slide.id === state.activeSlideId)) state.activeSlideId = latest.slides[0]?.id || null;
+  } else state.projects.push(latest);
+  if (render) {
+    if (!state.activeProjectId) renderDashboard();
+    else if (state.activeProjectId === projectId) renderEditor();
+  }
+  return latest;
+}
+
+projectChannel?.addEventListener("message", async ({ data }) => {
+  if (!data || data.source === projectChannelSource || !data.projectId || !state.db) return;
+  const local = state.projects.find((project) => project.id === data.projectId);
+  if (data.type === "project.deleted" || !local || Number(data.revision) > (Number(local.revision) || 0) || Number(data.updatedAt) > (Number(local.updatedAt) || 0)) {
+    await reloadProjectFromDb(data.projectId).catch((error) => console.error("Could not synchronize project", error));
+  }
+});
 
 function activeProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
@@ -679,7 +774,7 @@ function showProjectDeleteConfirmation(projectId) {
     confirmButton.disabled = true;
     confirmButton.textContent = "Removing…";
     try {
-      await deleteProjectFromDb(projectId);
+      await deleteProjectFromDb(projectId, { expectedRevision: Number(project.revision) || 0 });
       project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
       state.slideRailScrollPositions.delete(projectId);
       state.projects = state.projects.filter((item) => item.id !== projectId);
@@ -688,6 +783,7 @@ function showProjectDeleteConfirmation(projectId) {
       toast("Project removed");
     } catch (error) {
       console.error(error);
+      if (error.code === "STALE_PROJECT") await reloadProjectFromDb(projectId);
       cancelButton.disabled = false;
       confirmButton.disabled = false;
       confirmButton.textContent = "Remove project";
@@ -750,11 +846,15 @@ function scheduleSave() {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
     try {
-      project.revision = (Number(project.revision) || 0) + 1;
-      await putProject(project);
+      const baseRevision = Number(project.revision) || 0;
+      project.revision = baseRevision + 1;
+      await putProject(project, { expectedRevision: baseRevision });
     } catch (error) {
       console.error(error);
-      toast("Couldn’t save this project in your browser.");
+      if (error.code === "STALE_PROJECT") {
+        await reloadProjectFromDb(project.id);
+        toast("This project changed in another tab. Reloaded the latest version.");
+      } else toast("Couldn’t save this project in your browser.");
     }
   }, 180);
 }
@@ -1398,7 +1498,7 @@ function renderCurrentRoute() {
 
 function createProject() {
   const now = Date.now();
-  const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, slides: [], assets: [] };
+  const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [] };
   state.projects.push(project);
   openProject(project.id);
   putProject(project).catch((error) => {
@@ -2686,11 +2786,15 @@ async function handleAssetUpload(event) {
       renderEditor();
       return;
     }
-    await putProject(project);
+    const baseRevision = Number(project.revision) || 0;
+    project.updatedAt = Date.now();
+    project.revision = baseRevision + 1;
+    await putProject(project, { expectedRevision: baseRevision });
     toast(`${added} ${added === 1 ? "asset" : "assets"} uploaded`);
     renderEditor();
   } catch (error) {
     console.error(error);
+    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
     toast("One of those files couldn’t be added.");
     renderEditor();
   }

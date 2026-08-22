@@ -7,7 +7,7 @@ export const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const PACKAGE_JSON = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"));
 export const PACKAGE_NAME = PACKAGE_JSON.name;
 export const PACKAGE_VERSION = PACKAGE_JSON.version;
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const BRIDGE_HOST = "127.0.0.1";
 export const BRIDGE_PORT = Number(process.env.SLIDE_STUDIO_BRIDGE_PORT) || 43117;
 export const BRIDGE_URL = `http://${BRIDGE_HOST}:${BRIDGE_PORT}`;
@@ -29,3 +29,4 @@ function defaultStateDirectory() {
 export const STATE_DIRECTORY = defaultStateDirectory();
 export const DAEMON_STATE_PATH = join(STATE_DIRECTORY, `daemon-${BRIDGE_PORT}.json`);
 export const DAEMON_LOCK_PATH = join(STATE_DIRECTORY, `daemon-${BRIDGE_PORT}.lock`);
+export const AUDIT_LOG_PATH = join(STATE_DIRECTORY, `operations-${BRIDGE_PORT}.jsonl`);

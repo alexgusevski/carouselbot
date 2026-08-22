@@ -20,6 +20,7 @@ const web = new URL(pageUrl).hostname === "127.0.0.1"
   : null;
 const mcp = spawn(process.execPath, ["packages/mcp/src/cli.mjs", "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 let diagnostics = "";
+let editSessionId = null;
 for (const child of [web, mcp].filter(Boolean)) {
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { diagnostics += chunk; });
@@ -56,7 +57,9 @@ function rpc(method, params = {}, timeout = 100_000) {
 }
 
 async function tool(name, args = {}) {
-  const result = await rpc("tools/call", { name, arguments: args });
+  const sessionExempt = new Set(["get_design_guidance", "list_editors", "list_edit_sessions", "list_recent_operations", "begin_edit_session", "end_edit_session"]);
+  const arguments_ = editSessionId && !sessionExempt.has(name) ? { ...args, editSessionId } : args;
+  const result = await rpc("tools/call", { name, arguments: arguments_ });
   if (result.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
   return result;
 }
@@ -123,6 +126,7 @@ async function waitFor(predicate, message, timeout = 25_000) {
 }
 
 let cdp;
+let secondCdp;
 try {
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "Codex browser test", version: "1" } });
   mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`);
@@ -154,6 +158,9 @@ try {
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
   await tool("get_design_guidance");
+  const connectedEditors = (await tool("list_editors")).structuredContent.editors;
+  const editSession = (await tool("begin_edit_session", { editorId: connectedEditors[0].id, purpose: "Full browser integration test" })).structuredContent;
+  editSessionId = editSession.id;
   await tool("show_notification", { message: "Hello from the full local MCP", tone: "success" });
 
   await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
@@ -223,17 +230,34 @@ try {
   if (exportedProject.fileCount !== 2 || (await readdir(projectExportDirectory)).filter((name) => name.endsWith(".png")).length !== 2) throw new Error("Project export did not write both slides.");
   await tool("delete_slide", { projectId: createdProject.projectId, slideId: duplicatedSlide.createdSlideId });
   await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP verified" });
+  await tool("end_edit_session", { editSessionId });
+  editSessionId = null;
+  editSessionId = (await tool("begin_edit_session", { editorId: connectedEditors[0].id, purpose: "Verify project deletion" })).structuredContent.id;
   const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
   await tool("delete_project", { projectId: temporaryProject.projectId });
+  await tool("end_edit_session", { editSessionId });
+  editSessionId = null;
+  editSessionId = (await tool("begin_edit_session", { editorId: connectedEditors[0].id, projectId: createdProject.projectId, purpose: "Finish browser integration test" })).structuredContent.id;
   await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
 
   const inspected = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).structuredContent;
   if (inspected.project.name !== "Full MCP verified" || inspected.project.slides.length !== 1 || inspected.slide.texts.length !== 2 || inspected.slide.images.length !== 1 || inspected.slide.images[0].id !== image.createdImageId || inspected.view.showTikTokOverlay !== true) throw new Error(`Unexpected final state: ${JSON.stringify(inspected)}`);
+  await evaluate(cdp, `window.open(${JSON.stringify(pageUrl)}, "_blank") && true`);
+  const secondPage = await waitFor(async () => (await waitForJson("/json/list")).find((page) => page.id !== pages[0].id && page.url.startsWith(pageUrl)), "Second editor tab did not open.");
+  secondCdp = connectCdp(secondPage.webSocketDebuggerUrl);
+  await secondCdp.ready;
+  await secondCdp.send("Runtime.enable");
+  await waitFor(() => evaluate(secondCdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Second editor did not restore the remembered connection.");
+  await tool("update_project", { projectId: createdProject.projectId, name: "Cross-tab sync verified" });
+  await waitFor(() => evaluate(secondCdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === "Cross-tab sync verified")`), "The dashboard did not receive the cross-tab project update.");
   await tool("update_project", { projectId: createdProject.projectId, expectedRevision: 0, name: "Stale write" })
     .then(() => { throw new Error("A stale project revision unexpectedly succeeded."); })
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 25, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  await tool("end_edit_session", { editSessionId });
+  editSessionId = null;
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 26, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
+  secondCdp?.close();
   cdp?.close();
   mcp.stdin.end();
   const daemonState = await readFile(join(stateDirectory, "daemon-43117.json"), "utf8").then(JSON.parse).catch(() => null);

@@ -21,7 +21,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const response = await fetch(`${base}/connect`, {
       method: "POST",
       headers: { Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify({ editorId, protocolVersion: 2, pageUrl: `${origin}/#${editorId}`, state: { activeProjectId: null } }),
+      body: JSON.stringify({ editorId, protocolVersion: 3, pageUrl: `${origin}/#${editorId}`, state: { activeProjectId: null } }),
     });
     assert.equal(response.status, 200);
     return response.json();
@@ -50,11 +50,62 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     assert.equal(eventB.message, "From Codex");
     assert.equal(eventB.agent.name, "Codex");
 
+    const sessionA = await first.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a", purpose: "Build deck A" });
+    assert.equal(sessionA.editorId, "editor-a");
+    assert.equal(sessionA.projectId, "project-a");
+    await assert.rejects(
+      second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-b", purpose: "Competing worker" }),
+      /EDITOR_BUSY/,
+    );
+    await assert.rejects(
+      second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-a", purpose: "Same project elsewhere" }),
+      /PROJECT_BUSY/,
+    );
+    const sessionB = await second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-b", purpose: "Build deck B" });
+
+    async function nextCommand(editorId, token) {
+      for (;;) {
+        const event = await fetch(`${base}/events?editorId=${editorId}`, { headers: { Origin: origin, Authorization: `Bearer ${token}` } }).then((response) => response.json());
+        if (event.kind === "command") return event;
+      }
+    }
+
+    const browserCall = first.call("browser", {
+      toolName: "add_slide", mutating: true, editSessionId: sessionA.id,
+      operation: { type: "slide.add", projectId: "project-a" }, label: "Adding a slide…",
+    });
+    const command = await nextCommand("editor-a", editorA.sessionToken);
+    assert.equal(command.editSessionId, sessionA.id);
+    assert.equal(command.operation.projectId, "project-a");
+    await fetch(`${base}/result`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", requestId: command.requestId, ok: true, result: { projectId: "project-a", revision: 2 } }),
+    });
+    assert.equal((await browserCall).revision, 2);
+    const audit = await first.call("list_recent_operations", { projectId: "project-a", limit: 10 });
+    assert.ok(audit.events.some((event) => event.toolName === "add_slide" && event.status === "ok"));
+
+    await first.call("end_edit_session", { editSessionId: sessionA.id });
+    await second.call("end_edit_session", { editSessionId: sessionB.id });
+    const simultaneous = await Promise.allSettled([
+      first.call("begin_edit_session", { editorId: "editor-a", purpose: "Worker one" }),
+      second.call("begin_edit_session", { editorId: "editor-a", purpose: "Worker two" }),
+    ]);
+    assert.equal(simultaneous.filter((result) => result.status === "fulfilled").length, 1, "only one simultaneous claim may win");
+    assert.match(simultaneous.find((result) => result.status === "rejected").reason.message, /EDITOR_BUSY/);
+    const winning = simultaneous.find((result) => result.status === "fulfilled").value;
+    await first.call("end_edit_session", { editSessionId: winning.id });
+
     const controller = new AbortController();
-    const openPoll = fetch(`${base}/events?editorId=editor-a`, {
-      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` },
-      signal: controller.signal,
-    }).catch(() => null);
+    const openPoll = (async () => {
+      while (!controller.signal.aborted) {
+        await fetch(`${base}/events?editorId=editor-a`, {
+          headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` },
+          signal: controller.signal,
+        });
+      }
+    })().catch(() => null);
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.deepEqual((await first.call("list_editors")).editors.map((editor) => editor.id), ["editor-a"], "an open event request should keep a background editor active");
     controller.abort();

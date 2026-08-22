@@ -1,4 +1,4 @@
-const SLIDE_STUDIO_AGENT_PROTOCOL = 2;
+const SLIDE_STUDIO_AGENT_PROTOCOL = 3;
 
 function agentProject(projectId = state.activeProjectId) {
   const project = state.projects.find((item) => item.id === projectId);
@@ -87,15 +87,27 @@ async function agentMedia(mediaId) {
 }
 
 async function agentCommit(project, slide, mutate, message) {
+  const stored = await getProjectFromDb(project.id);
+  const baseRevision = Number(project.revision) || 0;
+  const storedRevision = Number(stored?.revision) || 0;
+  if (stored && (storedRevision !== baseRevision || Number(stored.updatedAt) > Number(project.updatedAt))) {
+    await reloadProjectFromDb(project.id);
+    throw staleProjectError(project.id, baseRevision, storedRevision);
+  }
   agentSelect(project, slide);
   recordHistory();
   const result = await mutate();
   project.updatedAt = Date.now();
-  project.revision = (Number(project.revision) || 0) + 1;
+  project.revision = baseRevision + 1;
   state.shareAllCache = null;
   renderEditor();
   await agentNextFrame();
-  await putProject(project);
+  try {
+    await putProject(project, { expectedRevision: baseRevision });
+  } catch (error) {
+    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
+    throw error;
+  }
   if (message) toast(message);
   return {
     projectId: project.id,
@@ -160,11 +172,16 @@ async function agentRender(slide, { width = 540, format = "png", quality = 0.9 }
 async function executeSlideStudioAgentOperation(operation) {
   if (!operation || typeof operation.type !== "string") throw new Error("Operation type is required.");
 
-  if (operation.type === "editor.inspect") return agentInspect(operation);
+  if (operation.type === "editor.inspect") {
+    if (operation.projectId) await reloadProjectFromDb(operation.projectId, { render: false });
+    return agentInspect(operation);
+  }
   if (operation.type === "ui.notify") {
     window.slideStudioLocalMcpBridge?.notify(operation.message, operation.tone);
     return { shown: true, message: String(operation.message) };
   }
+
+  if (operation.type !== "project.create" && operation.projectId) await reloadProjectFromDb(operation.projectId, { render: false });
 
   if (operation.expectedRevision != null && operation.type !== "project.create") {
     const project = agentProject(operation.projectId);
@@ -212,8 +229,9 @@ async function executeSlideStudioAgentOperation(operation) {
 
   if (operation.type === "project.delete") {
     const project = agentProject(operation.projectId);
+    const expectedRevision = Number(project.revision) || 0;
+    await deleteProjectFromDb(project.id, { expectedRevision });
     state.projects = state.projects.filter((item) => item.id !== project.id);
-    await deleteProjectFromDb(project.id);
     if (state.activeProjectId === project.id) {
       state.activeProjectId = null;
       state.activeSlideId = null;
@@ -440,10 +458,9 @@ async function executeSlideStudioAgentOperation(operation) {
     const slide = project.slides.find((item) => item.id === (operation.slideId || state.activeSlideId)) || project.slides[0] || null;
     agentSelect(project, slide);
     document.activeElement?.blur?.();
-    operation.type === "history.undo" ? undo() : redo();
+    await (operation.type === "history.undo" ? undo() : redo());
     await agentNextFrame();
     const updated = activeProject();
-    if (updated) await putProject(updated);
     return { projectId: updated?.id || null, slideId: state.activeSlideId, canUndo: history.past.length > 0, canRedo: history.future.length > 0 };
   }
 

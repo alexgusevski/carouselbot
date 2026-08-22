@@ -10,8 +10,9 @@ const color = z.string().regex(/^#?[0-9a-f]{3}(?:[0-9a-f]{3})?$/i, "Use a 3- or 
 const unit = z.number().min(-0.5).max(1.5);
 const positiveUnit = z.number().min(0.01).max(2.4);
 const expectedRevision = z.number().int().min(0).optional().describe("Optional optimistic-concurrency guard from inspect_editor.");
-const targetProject = { projectId: optionalId, expectedRevision };
-const targetSlide = { projectId: optionalId, slideId: optionalId, expectedRevision };
+const editSessionId = optionalId.describe("Edit session from begin_edit_session. Required for coordinated parallel editing.");
+const targetProject = { editSessionId, projectId: optionalId, expectedRevision };
+const targetSlide = { editSessionId, projectId: optionalId, slideId: optionalId, expectedRevision };
 const textFields = {
   text: z.string().max(4000).optional(), x: unit.optional(), y: unit.optional(), width: positiveUnit.optional(), height: positiveUnit.optional(),
   size: z.number().min(20).max(180).optional(), style: z.enum(["plain", "outline", "boxed"]).optional(),
@@ -33,7 +34,7 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["projectId", "slideId", "revision", "opened", "createdSlideId", "createdTextId", "createdImageId", "assetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "updatedImageIds", "applied", "path", "bytes"];
+  const keys = ["id", "editSessionId", "editorId", "projectId", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "createdImageId", "createdLayers", "assetId", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "updatedImageIds", "applied", "path", "bytes"];
   return Object.fromEntries(keys.flatMap((key) => value?.[key] == null ? [] : [[key, value[key]]]));
 }
 
@@ -63,8 +64,10 @@ function operationLabel(toolName) {
 }
 
 async function browserOperation(companion, toolName, args) {
-  const operation = await prepareOperation(companion, toolName, args);
-  return companion.call("browser", { toolName, operation, label: operationLabel(toolName) });
+  const { editSessionId: sessionId, ...toolArgs } = args;
+  const definition = definitions.get(toolName);
+  const operation = await prepareOperation(companion, toolName, toolArgs);
+  return companion.call("browser", { toolName, operation, label: operationLabel(toolName), editSessionId: sessionId, mutating: Boolean(definition?.mutating) });
 }
 
 async function prepareOperation(companion, toolName, args) {
@@ -95,7 +98,7 @@ export async function createSlideStudioMcpServer(companion) {
   let guidanceRead = false;
   let identifiedAs = null;
   const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION }, {
-    instructions: `First call list_editors and use the registered local browser tab. Never open or connect Slide Studio through a sandboxed agent browser. If no editor is listed, ask the user to open ${TEST_EDITOR_URL} in their normal browser and click Connect AI. Call get_design_guidance before editing and use render_slide to inspect actual pixels.`,
+    instructions: `First call list_editors and use the registered local browser tab. Never open or connect Slide Studio through a sandboxed agent browser. If no editor is listed, ask the user to open ${TEST_EDITOR_URL} in their normal browser and click Connect AI. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel editing workers require distinct editor sessions. Use render_slide to inspect actual pixels.`,
     capabilities: { tools: {}, resources: {} },
   });
 
@@ -110,7 +113,7 @@ export async function createSlideStudioMcpServer(companion) {
 
   function register(name, description, inputSchema, handler, annotations = {}) {
     const normalizedAnnotations = { openWorldHint: false, ...annotations };
-    const guidanceExempt = new Set(["select_editor", "open_project", "set_view", "show_notification"]);
+    const guidanceExempt = new Set(["select_editor", "begin_edit_session", "end_edit_session", "open_project", "set_view", "show_notification"]);
     definitions.set(name, { inputSchema, handler, mutating: !normalizedAnnotations.readOnlyHint && !guidanceExempt.has(name) });
     server.registerTool(name, { title: name.split("_").map((part) => part[0].toUpperCase() + part.slice(1)).join(" "), description, inputSchema, annotations: normalizedAnnotations }, async (args, context) => {
       await identify(context);
@@ -138,11 +141,15 @@ export async function createSlideStudioMcpServer(companion) {
 
   register("list_editors", "Check the user's real local browser connection and show which registered Slide Studio tab this session targets. Call this instead of opening a sandboxed browser.", z.object({}).strict(), () => companion.call("list_editors"), { readOnlyHint: true });
   register("select_editor", "Select a connected browser tab for this MCP session.", z.object({ editorId: id }).strict(), ({ editorId }) => companion.call("select_editor", { editorId }), { destructiveHint: false, idempotentHint: true });
+  register("begin_edit_session", "Atomically reserve one browser tab and optionally one project for an editing agent. Use one session per parallel editing worker and pass editSessionId to every edit.", z.object({ editorId: optionalId, projectId: optionalId, purpose: z.string().min(1).max(160).optional() }).strict(), (args) => companion.call("begin_edit_session", args), { destructiveHint: false });
+  register("end_edit_session", "Release a browser-tab/project reservation as soon as an editing task finishes or fails.", z.object({ editSessionId: id }).strict(), (args) => companion.call("end_edit_session", args), { destructiveHint: false, idempotentHint: true });
+  register("list_edit_sessions", "List active edit reservations, their owners, projects, and lease expirations.", z.object({}).strict(), () => companion.call("list_edit_sessions"), { readOnlyHint: true });
+  register("list_recent_operations", "Read the local sanitized operation audit. Text, prompts, paths, and image bytes are never logged.", z.object({ limit: z.number().int().min(1).max(200).default(50), projectId: optionalId, status: z.enum(["started", "ok", "error", "blocked"]).optional() }).strict(), (args) => companion.call("list_recent_operations", args), { readOnlyHint: true });
   register("inspect_editor", "Inspect projects, slides, assets, and every text/image layer without returning image bytes.", z.object({ ...targetSlide, includeAllProjects: z.boolean().default(true) }).strict(), (args) => browserOperation(companion, "inspect_editor", args), { readOnlyHint: true });
-  register("show_notification", "Show a short visual notification in the connected editor for status or marketing demos.", z.object({ message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), (args) => companion.call("notify", args), { destructiveHint: false, idempotentHint: false });
+  register("show_notification", "Show a short visual notification in a connected editor for status or marketing demos.", z.object({ editSessionId, message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), ({ editSessionId, ...args }) => companion.call("notify", { ...args, editSessionId }), { destructiveHint: false, idempotentHint: false });
 
-  register("create_project", "Create an empty project. If the dashboard is visible, its card appears live; adding the first slide opens the editor.", z.object({ name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
-  register("open_project", "Open a project and optionally a specific slide without changing content.", z.object({ projectId: id, slideId: optionalId }).strict(), (args) => browserOperation(companion, "open_project", args), { destructiveHint: false, idempotentHint: true });
+  register("create_project", "Create an empty project. If the dashboard is visible, its card appears live; adding the first slide opens the editor.", z.object({ editSessionId, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
+  register("open_project", "Open a project and optionally a specific slide without changing content.", z.object({ editSessionId, projectId: id, slideId: optionalId }).strict(), (args) => browserOperation(companion, "open_project", args), { destructiveHint: false, idempotentHint: true });
   register("update_project", "Rename a project.", z.object({ ...targetProject, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_project", args), { destructiveHint: true });
   register("delete_project", "Delete a project from browser storage.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "delete_project", args), { destructiveHint: true });
 
@@ -200,15 +207,16 @@ export async function createSlideStudioMcpServer(companion) {
   }, { destructiveHint: true });
 
   const batchTools = [...definitions.entries()].filter(([, definition]) => definition.mutating).map(([name]) => name).filter((name) => !["export_slide", "export_project"].includes(name));
-  register("apply_operations", "Apply many ordered editing operations in one compact tool call. Each edit still appears live in the browser.", z.object({ operations: z.array(z.object({ tool: z.enum(batchTools), arguments: z.record(z.string(), z.unknown()).default({}) }).strict()).min(1).max(100) }).strict(), async ({ operations }) => {
+  register("apply_operations", "Apply many ordered editing operations in one compact tool call. Each edit still appears live in the browser.", z.object({ editSessionId, operations: z.array(z.object({ tool: z.enum(batchTools), arguments: z.record(z.string(), z.unknown()).default({}) }).strict()).min(1).max(100) }).strict(), async ({ editSessionId: sessionId, operations }) => {
     const items = [];
     for (const item of operations) {
       const definition = definitions.get(item.tool);
       if (!definition?.mutating) throw new Error(`Tool cannot be batched: ${item.tool}`);
       const args = definition.inputSchema.parse(item.arguments);
-      items.push({ operation: await prepareOperation(companion, item.tool, args), label: operationLabel(item.tool) });
+      const { editSessionId: _ignored, ...toolArgs } = args;
+      items.push({ toolName: item.tool, operation: await prepareOperation(companion, item.tool, toolArgs), label: operationLabel(item.tool) });
     }
-    return companion.call("batch", { items });
+    return companion.call("batch", { items, editSessionId: sessionId });
   }, { destructiveHint: true });
 
   return server;

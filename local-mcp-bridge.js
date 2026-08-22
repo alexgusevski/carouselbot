@@ -18,6 +18,12 @@ function localMcpRememberConnection() {
   } catch { /* The live connection still works when storage is unavailable. */ }
 }
 
+function localMcpForgetConnection() {
+  try {
+    localStorage.removeItem(LOCAL_MCP_CONNECTION_KEY);
+  } catch { /* The live connection can still be stopped. */ }
+}
+
 function localMcpEditorId() {
   try {
     const existing = sessionStorage.getItem(LOCAL_MCP_EDITOR_KEY);
@@ -40,6 +46,7 @@ const localMcpBridgeState = {
   editorId: localMcpEditorId(),
   sessionToken: null,
   agents: [],
+  editSessions: [],
   events: [],
   status: "idle",
   statusMessage: "Not connected",
@@ -78,9 +85,11 @@ function localMcpAgentLabel(agent) {
 
 function localMcpConnectionMessage() {
   if (!localMcpBridgeState.connected) return localMcpBridgeState.statusMessage;
-  if (!localMcpBridgeState.agents.length) return `Local companion connected · editor ${localMcpBridgeState.editorId.slice(0, 8)}`;
+  const assignment = localMcpBridgeState.editSessions.find((session) => session.editorId === localMcpBridgeState.editorId);
+  const suffix = assignment ? ` · editing ${assignment.purpose}` : ` · editor ${localMcpBridgeState.editorId.slice(0, 8)}`;
+  if (!localMcpBridgeState.agents.length) return `Local companion connected${suffix}`;
   const labels = [...new Set(localMcpBridgeState.agents.map(localMcpAgentLabel))];
-  return `${labels.join(", ")} connected · editor ${localMcpBridgeState.editorId.slice(0, 8)}`;
+  return `${labels.join(", ")} connected${suffix}`;
 }
 
 function localMcpSetStatus(status, message = localMcpBridgeState.statusMessage) {
@@ -102,8 +111,9 @@ function localMcpSetStatus(status, message = localMcpBridgeState.statusMessage) 
   }
   const connectButton = document.querySelector("[data-local-mcp-connect]");
   if (connectButton) {
-    connectButton.disabled = status === "connecting" || status === "connected";
-    connectButton.textContent = status === "connecting" ? "Connecting…" : status === "connected" ? "Connected" : "Connect this browser";
+    connectButton.disabled = status === "connecting";
+    connectButton.dataset.connected = status === "connected" ? "true" : "false";
+    connectButton.textContent = status === "connecting" ? "Connecting…" : status === "connected" ? "Disconnect this browser" : "Connect this browser";
   }
 }
 
@@ -189,7 +199,7 @@ function localMcpEnsureModal() {
   document.body.appendChild(backdrop);
   backdrop.querySelector("[data-agent-install-prompt]").textContent = LOCAL_MCP_AGENT_PROMPT;
   backdrop.querySelector("[data-local-mcp-close]").addEventListener("click", localMcpCloseModal);
-  backdrop.querySelector("[data-local-mcp-connect]").addEventListener("click", localMcpConnectFromClick);
+  backdrop.querySelector("[data-local-mcp-connect]").addEventListener("click", localMcpToggleConnection);
   backdrop.querySelector("[data-copy-agent-prompt]").addEventListener("click", localMcpCopyAgentPrompt);
   backdrop.addEventListener("click", (event) => { if (event.target === backdrop) localMcpCloseModal(); });
   localMcpSetStatus(localMcpBridgeState.status, localMcpBridgeState.statusMessage);
@@ -225,7 +235,7 @@ function localMcpOpenModal(trigger) {
   localMcpBridgeState.lastFocusedElement = trigger || document.activeElement;
   backdrop.hidden = false;
   document.body.style.overflow = "hidden";
-  requestAnimationFrame(() => backdrop.querySelector(localMcpBridgeState.connected ? "[data-local-mcp-close]" : "[data-local-mcp-connect]")?.focus());
+  requestAnimationFrame(() => backdrop.querySelector("[data-local-mcp-connect]")?.focus());
 }
 
 function localMcpCloseModal() {
@@ -274,6 +284,28 @@ async function localMcpConnectFromClick() {
   }
 }
 
+async function localMcpDisconnectFromClick() {
+  if (!localMcpBridgeState.connected && !localMcpBridgeState.connecting) return;
+  localMcpBridgeState.shouldReconnect = false;
+  localMcpBridgeState.connectionRemembered = false;
+  localMcpForgetConnection();
+  const token = localMcpBridgeState.sessionToken;
+  try {
+    if (token) await localMcpSendJson("/disconnect", { editorId: localMcpBridgeState.editorId });
+  } catch { /* The companion may already be gone. */ }
+  localMcpBridgeState.connected = false;
+  localMcpBridgeState.connecting = false;
+  localMcpBridgeState.sessionToken = null;
+  localMcpBridgeState.agents = [];
+  localMcpBridgeState.editSessions = [];
+  localMcpSetStatus("idle", "Not connected");
+  localMcpAddEvent("Browser disconnected by user");
+}
+
+function localMcpToggleConnection() {
+  return localMcpBridgeState.connected ? localMcpDisconnectFromClick() : localMcpConnectFromClick();
+}
+
 async function localMcpHandshake() {
   localMcpBridgeState.sessionToken = null;
   const response = await localMcpSendJson("/connect", {
@@ -290,6 +322,7 @@ async function localMcpHandshake() {
   if (result.protocolVersion !== window.slideStudioAgent.protocolVersion) throw new Error("The website and local companion versions are incompatible. Update the npm package and reload this page.");
   localMcpBridgeState.sessionToken = result.sessionToken;
   localMcpBridgeState.agents = result.agents || [];
+  localMcpBridgeState.editSessions = result.editSessions || [];
   localMcpBridgeState.connected = true;
   localMcpAddEvent("Companion handshake completed");
   localMcpSetStatus("connected", "Connected locally");
@@ -320,6 +353,9 @@ function localMcpHandleSystemEvent(event) {
     for (const agent of localMcpBridgeState.agents) if (!previous.has(agent.id)) localMcpNotify("Connected and ready to edit", "success", agent);
   } else if (event.type === "notification") {
     localMcpNotify(event.message, event.tone, event.agent);
+  } else if (event.type === "edit-sessions.changed") {
+    localMcpBridgeState.editSessions = event.editSessions || [];
+    localMcpSetStatus("connected", "Connected locally");
   }
 }
 
@@ -370,10 +406,10 @@ async function localMcpPoll() {
     localMcpNotify(event.label || "Editing the current slide…", "agent", event.agent);
     try {
       const result = await window.slideStudioAgent.execute(event.operation);
-      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: true, result });
+      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: true, result, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Applied: ${event.toolName}`);
     } catch (error) {
-      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: false, error: error.message });
+      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: false, error: error.message, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Failed: ${event.toolName}`);
       localMcpNotify(error.message, "error", event.agent);
     }
@@ -402,7 +438,6 @@ void localMcpResumeRememberedConnection();
 window.addEventListener("beforeunload", () => {
   localMcpBridgeState.stopped = true;
   localMcpBridgeState.shouldReconnect = false;
-  if (localMcpBridgeState.sessionToken) void localMcpSendJson("/disconnect", { editorId: localMcpBridgeState.editorId }, { keepalive: true });
 });
 window.addEventListener("focus", localMcpActivateVisibleEditor);
 document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);
@@ -410,6 +445,7 @@ document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);
 window.slideStudioLocalMcpBridge = {
   open: localMcpOpenModal,
   connect: localMcpConnectFromClick,
+  disconnect: localMcpDisconnectFromClick,
   fetchMedia: localMcpFetchMedia,
   notify: localMcpNotify,
   getState: () => ({ ...localMcpBridgeState, lastFocusedElement: undefined }),

@@ -24,6 +24,12 @@ function shellCommand(client, specifier) {
   return null;
 }
 
+function removeCommand(client) {
+  if (client === "claude") return ["claude", "mcp", "remove", "--scope", "user", "slide-studio"];
+  if (["codex", "hermes", "openclaw"].includes(client)) return [client, "mcp", "remove", "slide-studio"];
+  return null;
+}
+
 function quote(value) {
   return /^[A-Za-z0-9_@./:-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -84,6 +90,8 @@ export async function runSetup(arguments_) {
   for (const client of clients) {
     const command = shellCommand(client, specifier);
     if (!command) continue;
+    const remove = removeCommand(client);
+    if (remove) spawnSync(remove[0], remove.slice(1), { stdio: "ignore" });
     const result = spawnSync(command[0], command.slice(1), { stdio: "inherit" });
     if (result.status === 0) configured.push(client);
     else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);

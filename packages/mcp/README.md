@@ -21,8 +21,8 @@ Some clients do not add a newly configured MCP server to the tool catalog of the
 ```bash
 npx -y slides-studio-mcp@beta call get_design_guidance
 npx -y slides-studio-mcp@beta call list_editors
-npx -y slides-studio-mcp@beta call list_tools --json '{"names":["add_slide","add_text"]}'
-npx -y slides-studio-mcp@beta call create_project --json '{"name":"My presentation"}'
+npx -y slides-studio-mcp@beta call begin_edit_session --json '{"editorId":"EDITOR_ID","purpose":"Build my deck"}'
+npx -y slides-studio-mcp@beta call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation"}'
 ```
 
 Every MCP tool name and JSON argument shape works with `call`. The CLI-only `list_tools` helper lists all names compactly, or returns schemas for the requested names. The CLI automatically applies the guidance gate for each invocation and prints compact JSON. `render_slide` writes image output to a temporary `previewPath` instead of dumping base64 into the terminal.
@@ -47,6 +47,14 @@ npx slides-studio-mcp@beta doctor
 npx slides-studio-mcp@beta restart
 ```
 
-`restart` gracefully replaces an outdated local companion. Reload the real browser editor afterward; beta.6 MCP clients automatically recover their daemon registration.
+`restart` gracefully replaces an outdated local companion. Reload the real browser editor afterward; current MCP clients automatically recover their daemon registration.
 
-Open the test editor in the user's normal local browser, click **Connect AI**, and call `get_design_guidance` before editing. The server enforces that one-time read and provides `render_slide` so agents can inspect actual pixels without permanently storing previews.
+## Parallel agents and browser tabs
+
+Call `begin_edit_session` before editing and pass its `editSessionId` to all operations. A session atomically reserves one browser tab and one project, follows that tab instead of global focus, and expires after inactivity. Always call `end_edit_session` when finished.
+
+For parallel editing, the parent agent must reserve a different connected editor for each editing worker and pass that worker its `editorId`, `editSessionId`, and `projectId`. The daemon rejects conflicting claims with `EDITOR_BUSY` or `PROJECT_BUSY`. It also records a sanitized local audit available through `list_recent_operations`; it never records slide text, prompts, file paths, or image bytes.
+
+Browser writes use revision-checked IndexedDB transactions and cross-tab synchronization. A stale tab cannot replace a newer project snapshot; it reloads the canonical copy and returns `STALE_PROJECT` so the agent can inspect and retry.
+
+Open the test editor in the user's normal local browser, click **Connect AI**, and call `get_design_guidance` before editing. The server provides `render_slide` so agents can inspect actual pixels without permanently storing previews.

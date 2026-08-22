@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import {
-  ALLOWED_ORIGINS, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_URL, DAEMON_LOCK_PATH,
+  ALLOWED_ORIGINS, AUDIT_LOG_PATH, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_URL, DAEMON_LOCK_PATH,
   DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION, PROTOCOL_VERSION, STATE_DIRECTORY,
 } from "./config.mjs";
 
@@ -14,15 +14,21 @@ const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 30 * 60_
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 90_000;
+const EDIT_SESSION_TTL_MS = Number(process.env.SLIDE_STUDIO_EDIT_SESSION_TTL_MS) || 5 * 60_000;
+const MAX_AUDIT_EVENTS = 500;
+const MAX_AUDIT_BYTES = 2 * 1024 * 1024;
 const EVENT_POLL_TIMEOUT_MS = Number(process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS) || 5 * 60_000;
 const daemonSecret = randomBytes(32).toString("base64url");
 const editors = new Map();
 const clients = new Map();
 const inflight = new Map();
 const media = new Map();
+const editSessions = new Map();
+const auditEvents = [];
 let focusedEditorId = null;
 let lockHandle = null;
 let idleSince = null;
+let auditWrite = Promise.resolve();
 
 function log(message) {
   process.stderr.write(`[slide-studio-daemon] ${message}\n`);
@@ -43,6 +49,130 @@ function activeClients() {
 
 function publicClient(client) {
   return { id: client.id, name: client.name || "MCP agent", version: client.version || null };
+}
+
+function codedError(code, message, details = {}) {
+  const error = new Error(`[${code}] ${message}`);
+  error.code = code;
+  error.details = details;
+  return error;
+}
+
+function publicSession(session) {
+  return {
+    id: session.id,
+    editSessionId: session.id,
+    editorId: session.editorId,
+    projectId: session.projectId || null,
+    purpose: session.purpose,
+    owner: session.owner,
+    createdAt: session.createdAt,
+    leaseExpiresAt: session.lastSeen + EDIT_SESSION_TTL_MS,
+  };
+}
+
+function broadcastEditSessions() {
+  const event = { kind: "system", type: "edit-sessions.changed", editSessions: activeEditSessions().map(publicSession) };
+  for (const editor of activeEditors()) queueEditorEvent(editor, event);
+}
+
+function activeEditSessions() {
+  const cutoff = Date.now() - EDIT_SESSION_TTL_MS;
+  return [...editSessions.values()].filter((session) => session.lastSeen >= cutoff && editors.has(session.editorId));
+}
+
+function releaseEditSession(sessionId, reason = "released") {
+  const session = editSessions.get(sessionId);
+  if (!session) return null;
+  editSessions.delete(sessionId);
+  for (const client of clients.values()) if (client.implicitSessionId === sessionId) client.implicitSessionId = null;
+  recordAudit({ action: "edit_session.end", status: "ok", session, message: reason });
+  broadcastEditSessions();
+  return session;
+}
+
+function recordAudit({ action, status = "ok", client = null, session = null, editorId = null, projectId = null, toolName = null, revision = null, message = null }) {
+  const event = {
+    id: randomUUID(), at: new Date().toISOString(), action, status,
+    ...(client ? { client: publicClient(client) } : {}),
+    ...(session ? { editSessionId: session.id, owner: session.owner } : {}),
+    ...(editorId || session?.editorId ? { editorId: editorId || session.editorId } : {}),
+    ...(projectId || session?.projectId ? { projectId: projectId || session.projectId } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(revision != null ? { revision } : {}),
+    ...(message ? { message: String(message).slice(0, 300) } : {}),
+  };
+  auditEvents.push(event);
+  if (auditEvents.length > MAX_AUDIT_EVENTS) auditEvents.splice(0, auditEvents.length - MAX_AUDIT_EVENTS);
+  auditWrite = auditWrite.then(() => appendFile(AUDIT_LOG_PATH, `${JSON.stringify(event)}\n`, { mode: 0o600 })).catch((error) => log(`Could not write operation audit: ${error.message}`));
+  return event;
+}
+
+function sessionForEditor(editorId) {
+  return activeEditSessions().find((session) => session.editorId === editorId) || null;
+}
+
+function sessionForProject(projectId) {
+  return projectId ? activeEditSessions().find((session) => session.projectId === projectId) || null : null;
+}
+
+function requireEditSession(sessionId) {
+  const session = editSessions.get(sessionId);
+  if (!session || session.lastSeen < Date.now() - EDIT_SESSION_TTL_MS) {
+    if (session) releaseEditSession(session.id, "lease expired");
+    throw codedError("EDIT_SESSION_EXPIRED", "The edit session is missing or expired. Begin a new edit session and retry.");
+  }
+  if (!editors.has(session.editorId)) {
+    releaseEditSession(session.id, "editor disconnected");
+    throw codedError("EDITOR_DISCONNECTED", "The browser tab assigned to this edit session is no longer connected.");
+  }
+  session.lastSeen = Date.now();
+  return session;
+}
+
+function claimProject(session, projectId) {
+  if (!projectId) return;
+  const conflict = sessionForProject(projectId);
+  if (conflict && conflict.id !== session.id) {
+    recordAudit({ action: "edit_session.conflict", status: "blocked", session, projectId, message: `Project held by ${conflict.owner.name}` });
+    throw codedError("PROJECT_BUSY", `Project ${projectId} is being edited by ${conflict.owner.name} (${conflict.purpose}). Use a different project or wait for edit session ${conflict.id} to end.`, { session: publicSession(conflict) });
+  }
+  if (session.projectId && session.projectId !== projectId) {
+    if (session.implicit) {
+      session.projectId = projectId;
+      return;
+    }
+    throw codedError("SESSION_PROJECT_MISMATCH", `This edit session is assigned to project ${session.projectId}. End it and begin another session for ${projectId}.`);
+  }
+  session.projectId = projectId;
+}
+
+function beginEditSession(client, { editorId, projectId, purpose }) {
+  const connected = activeEditors();
+  if (!connected.length) throw codedError("NO_EDITOR", "No Slide Studio editor is connected. Open the test editor in the user's normal browser and click Connect AI.");
+  let editor = editorId ? connected.find((item) => item.id === editorId) : null;
+  if (editorId && !editor) throw codedError("EDITOR_DISCONNECTED", `Editor is not connected: ${editorId}`);
+  if (!editor) {
+    const selected = client.selectedEditorId && connected.find((item) => item.id === client.selectedEditorId);
+    const available = connected.filter((item) => !sessionForEditor(item.id));
+    editor = selected && !sessionForEditor(selected.id) ? selected : available.length === 1 ? available[0] : null;
+    if (!editor) throw codedError("EDITOR_SELECTION_REQUIRED", "Multiple browser tabs are available. Call list_editors, choose an unassigned editor, then begin_edit_session with editorId.");
+  }
+  const editorConflict = sessionForEditor(editor.id);
+  if (editorConflict) throw codedError("EDITOR_BUSY", `Editor ${editor.id} is assigned to ${editorConflict.owner.name} (${editorConflict.purpose}) until ${new Date(editorConflict.lastSeen + EDIT_SESSION_TTL_MS).toISOString()}.`, { session: publicSession(editorConflict) });
+  const projectConflict = sessionForProject(projectId);
+  if (projectConflict) throw codedError("PROJECT_BUSY", `Project ${projectId} is being edited by ${projectConflict.owner.name} (${projectConflict.purpose}).`, { session: publicSession(projectConflict) });
+  const now = Date.now();
+  const session = {
+    id: randomUUID(), editorId: editor.id, projectId: projectId || null,
+    purpose: String(purpose || "Edit Slide Studio").slice(0, 160), owner: publicClient(client),
+    creatorClientId: client.id, lastClientId: client.id, implicit: false, createdAt: now, lastSeen: now,
+  };
+  editSessions.set(session.id, session);
+  client.selectedEditorId = editor.id;
+  recordAudit({ action: "edit_session.begin", client, session });
+  broadcastEditSessions();
+  return session;
 }
 
 function browserCors(origin) {
@@ -129,6 +259,7 @@ function disconnectEditor(editorId, message = "Browser editor disconnected.") {
   const editor = editors.get(editorId);
   if (!editor) return false;
   endEditorPoll(editor);
+  for (const session of editSessions.values()) if (session.editorId === editorId) releaseEditSession(session.id, "editor disconnected");
   editors.delete(editorId);
   if (focusedEditorId === editorId) focusedEditorId = null;
   for (const [requestId, pending] of inflight) {
@@ -166,17 +297,54 @@ function selectEditor(clientId) {
   throw new Error("Multiple editors are connected and none is selected. Call list_editors, then select_editor.");
 }
 
-function callBrowser(clientId, toolName, operation, label) {
-  const editor = selectEditor(clientId);
+function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) {
   const client = clients.get(clientId) || { id: clientId, name: "MCP agent" };
+  if (editSessionId) {
+    const session = requireEditSession(editSessionId);
+    session.lastClientId = clientId;
+    if (mutating) claimProject(session, projectId);
+    return { client, editor: editors.get(session.editorId), session };
+  }
+  if (!mutating) return { client, editor: selectEditor(clientId), session: null };
+  let session = client.implicitSessionId && editSessions.get(client.implicitSessionId);
+  if (session) {
+    session = requireEditSession(session.id);
+    claimProject(session, projectId);
+    return { client, editor: editors.get(session.editorId), session };
+  }
+  const editor = selectEditor(clientId);
+  const conflict = sessionForEditor(editor.id);
+  if (conflict) throw codedError("EDITOR_BUSY", `Editor ${editor.id} is assigned to ${conflict.owner.name} (${conflict.purpose}). Begin an edit session on another editor.`, { session: publicSession(conflict) });
+  const now = Date.now();
+  session = {
+    id: randomUUID(), editorId: editor.id, projectId: null, purpose: "Implicit single-agent edit",
+    owner: publicClient(client), creatorClientId: client.id, lastClientId: client.id,
+    implicit: true, createdAt: now, lastSeen: now,
+  };
+  claimProject(session, projectId);
+  editSessions.set(session.id, session);
+  client.implicitSessionId = session.id;
+  recordAudit({ action: "edit_session.begin", client, session, message: "implicit" });
+  broadcastEditSessions();
+  return { client, editor, session };
+}
+
+function callBrowser(clientId, toolName, operation, label, { editSessionId = null, mutating = false } = {}) {
+  const projectId = operation?.projectId || null;
+  const { client, editor, session } = resolveBrowserTarget(clientId, { editSessionId, mutating, projectId });
+  if (mutating && session && !session.implicit && !session.projectId && toolName !== "create_project") {
+    throw codedError("PROJECT_ID_REQUIRED", "This edit session is not bound to a project yet. Pass projectId, or create a project first so the daemon can bind it atomically.");
+  }
   const requestId = randomUUID();
+  recordAudit({ action: "tool.call", client, session, editorId: editor.id, projectId, toolName, status: "started" });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       inflight.delete(requestId);
-      reject(new Error("The browser did not answer within 90 seconds."));
+      recordAudit({ action: "tool.result", client, session, editorId: editor.id, projectId, toolName, status: "error", message: "Browser timeout" });
+      reject(codedError("BROWSER_TIMEOUT", "The browser did not answer within 90 seconds."));
     }, COMMAND_TIMEOUT_MS);
-    inflight.set(requestId, { resolve, reject, timer, editorId: editor.id });
-    queueEditorEvent(editor, { kind: "command", requestId, toolName, operation, label, agent: publicClient(client) });
+    inflight.set(requestId, { resolve, reject, timer, editorId: editor.id, client, session, projectId, toolName });
+    queueEditorEvent(editor, { kind: "command", requestId, toolName, operation, label, editSessionId: session?.id || null, agent: publicClient(client) });
   });
 }
 
@@ -225,9 +393,14 @@ async function handleInternalCall(body) {
     const selectedEditorId = connected.find((editor) => editor.id === client.selectedEditorId)?.id
       || connected.find((editor) => editor.id === focusedEditorId)?.id
       || (connected.length === 1 ? connected[0].id : null);
+    if (selectedEditorId) client.selectedEditorId = selectedEditorId;
     return {
       selectedEditorId,
-      editors: connected.map((editor) => ({ id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state })),
+      editors: connected.map((editor) => {
+        const assigned = sessionForEditor(editor.id);
+        return { id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state, editSession: assigned ? publicSession(assigned) : null };
+      }),
+      editSessions: activeEditSessions().map(publicSession),
     };
   }
   if (body.action === "select_editor") {
@@ -236,17 +409,30 @@ async function handleInternalCall(body) {
     client.selectedEditorId = editor.id;
     return { editorId: editor.id, pageUrl: editor.pageUrl, state: editor.state };
   }
+  if (body.action === "begin_edit_session") return publicSession(beginEditSession(client, body));
+  if (body.action === "end_edit_session") {
+    const session = editSessions.get(body.editSessionId);
+    if (!session) return { released: false, editSessionId: body.editSessionId };
+    releaseEditSession(session.id, "released by agent");
+    return { released: true, editSessionId: session.id, editorId: session.editorId, projectId: session.projectId || null };
+  }
+  if (body.action === "list_edit_sessions") return { editSessions: activeEditSessions().map(publicSession) };
+  if (body.action === "list_recent_operations") {
+    const limit = Math.max(1, Math.min(200, Number(body.limit) || 50));
+    const events = auditEvents.filter((event) => (!body.projectId || event.projectId === body.projectId) && (!body.status || event.status === body.status));
+    return { events: events.slice(-limit).reverse(), localLogPath: AUDIT_LOG_PATH };
+  }
   if (body.action === "prepare_media") return prepareMedia(body.path);
   if (body.action === "write_export") return writeExport(body.path, body.data, Boolean(body.overwrite));
   if (body.action === "notify") {
-    const editor = selectEditor(body.clientId);
+    const { editor } = resolveBrowserTarget(body.clientId, { editSessionId: body.editSessionId, mutating: false, projectId: null });
     queueEditorEvent(editor, { kind: "system", type: "notification", message: body.message, tone: body.tone, agent: publicClient(client) });
     return { shown: true, editorId: editor.id };
   }
-  if (body.action === "browser") return callBrowser(body.clientId, body.toolName, body.operation, body.label);
+  if (body.action === "browser") return callBrowser(body.clientId, body.toolName, body.operation, body.label, { editSessionId: body.editSessionId, mutating: Boolean(body.mutating) });
   if (body.action === "batch") {
     const results = [];
-    for (const item of body.items) results.push(await callBrowser(body.clientId, "apply_operations", item.operation, item.label));
+    for (const item of body.items) results.push(await callBrowser(body.clientId, item.toolName || "apply_operations", item.operation, item.label, { editSessionId: body.editSessionId, mutating: true }));
     return { applied: results.length, results };
   }
   throw new Error(`Unknown internal action: ${body.action}`);
@@ -288,13 +474,19 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 200, { ok: true, client: publicClient(existing) });
       }
       if (url.pathname === "/internal/client/disconnect" && request.method === "POST") {
+        const departing = clients.get(body.clientId);
+        if (departing?.implicitSessionId) releaseEditSession(departing.implicitSessionId, "implicit client disconnected");
         clients.delete(body.clientId);
         broadcastAgents();
         return sendJson(response, 200, { ok: true });
       }
       if (url.pathname === "/internal/client/heartbeat" && request.method === "POST") {
         const client = clients.get(body.clientId);
-        if (client) client.lastSeen = Date.now();
+        if (client) {
+          client.lastSeen = Date.now();
+          const session = client.implicitSessionId && editSessions.get(client.implicitSessionId);
+          if (session) session.lastSeen = Date.now();
+        }
         return sendJson(response, 200, { ok: Boolean(client) });
       }
       if (url.pathname === "/internal/call" && request.method === "POST") return sendJson(response, 200, { ok: true, result: await handleInternalCall(body) });
@@ -307,15 +499,23 @@ const server = createServer(async (request, response) => {
       if (!body.editorId || typeof body.editorId !== "string") return sendJson(response, 400, { error: "editorId is required." }, cors);
       if (body.protocolVersion !== PROTOCOL_VERSION) return sendJson(response, 409, { error: `Protocol mismatch. Browser=${body.protocolVersion}; companion=${PROTOCOL_VERSION}.`, protocolVersion: PROTOCOL_VERSION }, cors);
       const previous = editors.get(body.editorId);
-      if (previous?.poll) endEditorPoll(previous);
+      if (previous) {
+        endEditorPoll(previous);
+        for (const [requestId, pending] of inflight) {
+          if (pending.editorId !== body.editorId) continue;
+          inflight.delete(requestId);
+          clearTimeout(pending.timer);
+          pending.reject(codedError("EDITOR_RELOADED", "The assigned browser tab reloaded during this operation. Inspect the editor and retry."));
+        }
+      }
       const editor = {
-        id: body.editorId, queue: previous?.queue || [], poll: null, pageUrl: body.pageUrl,
+        id: body.editorId, queue: [], poll: null, pageUrl: body.pageUrl,
         pollTimer: null, state: body.state, lastSeen: Date.now(), cors, sessionToken: randomBytes(32).toString("base64url"),
       };
       editors.set(editor.id, editor);
       if (body.hasFocus && body.visibilityState === "visible") focusedEditorId = editor.id;
       log(`Editor connected (${editor.id.slice(0, 8)})`);
-      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, agents: activeClients().map(publicClient) }, cors);
+      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
     }
     if (url.pathname === "/activate" && request.method === "POST") {
       const body = await readJson(request);
@@ -360,10 +560,22 @@ const server = createServer(async (request, response) => {
       if (!pending || pending.editorId !== editor.id) return sendJson(response, 404, { error: "Unknown request." }, cors);
       inflight.delete(body.requestId);
       clearTimeout(pending.timer);
+      if (body.state) editor.state = body.state;
       if (body.ok) {
-        if (body.result?.project || body.result?.projects) editor.state = body.result;
+        try {
+          if (pending.session && body.result?.projectId) claimProject(pending.session, body.result.projectId);
+        } catch (error) {
+          recordAudit({ action: "tool.result", client: pending.client, session: pending.session, editorId: editor.id, projectId: body.result?.projectId, toolName: pending.toolName, status: "error", message: error.message });
+          pending.reject(error);
+          return sendJson(response, 200, { ok: true, accepted: false }, cors);
+        }
+        if (pending.session) pending.session.lastSeen = Date.now();
+        recordAudit({ action: "tool.result", client: pending.client, session: pending.session, editorId: editor.id, projectId: body.result?.projectId || pending.projectId, toolName: pending.toolName, status: "ok", revision: body.result?.revision });
         pending.resolve(body.result);
-      } else pending.reject(new Error(body.error || "Browser operation failed."));
+      } else {
+        recordAudit({ action: "tool.result", client: pending.client, session: pending.session, editorId: editor.id, projectId: pending.projectId, toolName: pending.toolName, status: "error", message: body.error || "Browser operation failed" });
+        pending.reject(new Error(body.error || "Browser operation failed."));
+      }
       return sendJson(response, 200, { ok: true }, cors);
     }
     if (url.pathname.startsWith("/media/") && request.method === "GET") {
@@ -429,8 +641,13 @@ async function cleanup() {
 setInterval(() => {
   const now = Date.now();
   for (const [id, item] of media) if (item.expiresAt < now) media.delete(id);
+  for (const session of editSessions.values()) if (session.lastSeen < now - EDIT_SESSION_TTL_MS) releaseEditSession(session.id, "lease expired");
   let clientsChanged = false;
-  for (const [id, client] of clients) if (client.lastSeen < now - CLIENT_TTL_MS) { clients.delete(id); clientsChanged = true; }
+  for (const [id, client] of clients) if (client.lastSeen < now - CLIENT_TTL_MS) {
+    if (client.implicitSessionId) releaseEditSession(client.implicitSessionId, "implicit client expired");
+    clients.delete(id);
+    clientsChanged = true;
+  }
   for (const [id, editor] of editors) {
     if (editor.lastSeen >= now - EDITOR_TTL_MS || (editor.poll && !editor.poll.destroyed && !editor.poll.writableEnded)) continue;
     disconnectEditor(id, "Browser editor connection expired.");
@@ -443,6 +660,12 @@ setInterval(() => {
 
 async function main() {
   await acquireDaemonLock();
+  const previousAudit = await readFile(AUDIT_LOG_PATH, "utf8").catch(() => "");
+  for (const line of previousAudit.trim().split("\n").slice(-MAX_AUDIT_EVENTS)) {
+    try { auditEvents.push(JSON.parse(line)); } catch { /* Ignore an interrupted final line. */ }
+  }
+  const auditMetadata = await stat(AUDIT_LOG_PATH).catch(() => null);
+  if (auditMetadata?.size > MAX_AUDIT_BYTES) await rename(AUDIT_LOG_PATH, `${AUDIT_LOG_PATH}.previous`).catch(() => {});
   server.on("error", (error) => { log(`Bridge failed: ${error.message}`); process.exitCode = 1; });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
