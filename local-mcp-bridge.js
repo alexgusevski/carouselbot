@@ -109,7 +109,14 @@ function localMcpEnsureModal() {
       <button class="icon-button agent-modal-close" type="button" data-local-mcp-close aria-label="Close connect dialog">×</button>
       <header class="agent-modal-header">
         <h2 id="agent-modal-title">Connect via MCP</h2>
-        <p class="agent-modal-lead" id="agent-modal-description">An MCP-compatible agent can create and edit this presentation.</p>
+        <div class="agent-modal-intro">
+          <p class="agent-modal-lead" id="agent-modal-description">An MCP-compatible agent can create and edit this presentation.</p>
+          <div class="agent-client-icons" aria-label="Compatible with Claude, Codex, Hermes, and other MCP clients">
+            <span title="Claude"><img src="assets/claude-ai-symbol.svg" alt="Claude" /></span>
+            <span title="Codex"><img src="assets/codex-logo.svg" alt="Codex" /></span>
+            <span title="Hermes"><img src="assets/hermes-agent-logo.svg" alt="Hermes" /></span>
+          </div>
+        </div>
       </header>
       <div class="agent-modal-body">
         <ol class="agent-steps">
@@ -126,11 +133,13 @@ function localMcpEnsureModal() {
             </div>
           </li>
           <li>
-            <div class="agent-step-content agent-connect-step">
+            <div class="agent-step-content">
               <strong>Connect this browser</strong>
-              <p>Click below and accept any browser prompts.</p>
-              <span class="agent-connection-status" data-local-mcp-status data-status="idle" role="status">Not connected</span>
-              <button class="button button--primary agent-modal-connect" type="button" data-local-mcp-connect>Connect this browser</button>
+              <p class="agent-step-description">Click below and accept any browser prompts.</p>
+              <div class="agent-connect-actions">
+                <span class="agent-connection-status" data-local-mcp-status data-status="idle" role="status">Not connected</span>
+                <button class="button button--primary agent-modal-connect" type="button" data-local-mcp-connect>Connect this browser</button>
+              </div>
             </div>
           </li>
         </ol>

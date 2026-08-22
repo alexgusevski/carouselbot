@@ -291,10 +291,52 @@ button:disabled {
 
 .agent-modal-lead {
   max-width: 440px;
-  margin: 10px 0 0;
+  margin: 0;
   color: var(--muted);
   font-size: 14px;
   line-height: 1.45;
+}
+
+.agent-modal-intro {
+  display: flex;
+  margin-top: 12px;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-client-icons {
+  display: flex;
+  flex: 0 0 auto;
+  padding-right: 2px;
+  align-items: center;
+}
+
+.agent-client-icons span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  margin-left: -8px;
+  overflow: hidden;
+  place-items: center;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: #f2f2ed;
+}
+
+.agent-client-icons span:first-child {
+  margin-left: 0;
+}
+
+.agent-client-icons img {
+  width: 100%;
+  height: 100%;
+  padding: 5px;
+  object-fit: contain;
+}
+
+.agent-client-icons span:nth-child(2) img {
+  padding: 0;
 }
 
 .agent-modal-close {
@@ -406,19 +448,20 @@ button:disabled {
   height: 15px;
 }
 
-.agent-connect-step {
-  display: grid;
-  justify-items: center;
-  text-align: center;
-}
-
-.agent-connect-step p {
+.agent-step-description {
   margin: 0;
 }
 
-.agent-connect-step .agent-connection-status {
+.agent-connect-actions {
+  display: flex;
   margin-top: 14px;
-  justify-content: center;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-connect-actions .agent-connection-status {
+  flex: 0 0 auto;
 }
 
 .agent-how-it-works {
@@ -544,7 +587,7 @@ button:disabled {
 
 .agent-modal-connect {
   min-width: 210px;
-  margin-top: 12px;
+  margin: 0;
   white-space: nowrap;
 }
 
@@ -3082,6 +3125,19 @@ input[type="range"]::-webkit-slider-thumb {
 
   .agent-how-it-works {
     margin-left: 0;
+  }
+
+  .agent-modal-intro {
+    align-items: flex-start;
+  }
+
+  .agent-connect-actions {
+    display: grid;
+    justify-items: stretch;
+  }
+
+  .agent-connect-actions .agent-connection-status {
+    justify-content: center;
   }
 
   .agent-modal-connect {
