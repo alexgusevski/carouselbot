@@ -188,9 +188,13 @@ async function handleInternalCall(body) {
   if (!client) throw new Error("MCP client session is not registered.");
   client.lastSeen = Date.now();
   if (body.action === "list_editors") {
+    const connected = activeEditors();
+    const selectedEditorId = connected.find((editor) => editor.id === client.selectedEditorId)?.id
+      || connected.find((editor) => editor.id === focusedEditorId)?.id
+      || (connected.length === 1 ? connected[0].id : null);
     return {
-      selectedEditorId: client.selectedEditorId || focusedEditorId || null,
-      editors: activeEditors().map((editor) => ({ id: editor.id, selected: editor.id === client.selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state })),
+      selectedEditorId,
+      editors: connected.map((editor) => ({ id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state })),
     };
   }
   if (body.action === "select_editor") {

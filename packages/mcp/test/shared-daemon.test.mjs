@@ -32,8 +32,12 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     assert.equal((await first.call("list_editors")).editors.length, 2);
     await first.call("select_editor", { editorId: "editor-a" });
     await second.call("select_editor", { editorId: "editor-b" });
-    assert.equal((await first.call("list_editors")).selectedEditorId, "editor-a");
-    assert.equal((await second.call("list_editors")).selectedEditorId, "editor-b");
+    const firstEditors = await first.call("list_editors");
+    const secondEditors = await second.call("list_editors");
+    assert.equal(firstEditors.selectedEditorId, "editor-a");
+    assert.equal(firstEditors.editors.find((editor) => editor.id === "editor-a").selected, true);
+    assert.equal(secondEditors.selectedEditorId, "editor-b");
+    assert.equal(secondEditors.editors.find((editor) => editor.id === "editor-b").selected, true);
 
     await first.call("notify", { message: "From Claude", tone: "success" });
     await second.call("notify", { message: "From Codex", tone: "info" });

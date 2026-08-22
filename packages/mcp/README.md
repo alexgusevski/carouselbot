@@ -27,6 +27,8 @@ npx -y slides-studio-mcp@beta call create_project --json '{"name":"My presentati
 
 Every MCP tool name and JSON argument shape works with `call`. The CLI-only `list_tools` helper lists all names compactly, or returns schemas for the requested names. The CLI automatically applies the guidance gate for each invocation and prints compact JSON. `render_slide` writes image output to a temporary `previewPath` instead of dumping base64 into the terminal.
 
+Always use `list_editors` to check the browser connection. Do not open Slide Studio or click **Connect AI** through a sandboxed, remote, or agent-controlled browser: that is a different browser session and may not have access to the user's local companion. If no editor is listed, ask the user to open the editor in their normal browser on the same computer and connect there, then retry `list_editors`.
+
 Hermes can refresh native tools without restarting by running `/reload-mcp`, then `/reload-skills`. Claude may still need a new session to register a newly added plain stdio server, but its current session can use the CLI fallback instead of stopping.
 
 The companion binds only to `127.0.0.1`. There is no hosted relay: projects remain in browser IndexedDB and local images remain on the user's computer.
@@ -44,4 +46,4 @@ npx slides-studio-mcp@beta setup --dry-run
 npx slides-studio-mcp@beta doctor
 ```
 
-Open the test editor, click **Connect AI**, and call `get_design_guidance` before editing. The server enforces that one-time read and provides `render_slide` so agents can inspect actual pixels without permanently storing previews.
+Open the test editor in the user's normal local browser, click **Connect AI**, and call `get_design_guidance` before editing. The server enforces that one-time read and provides `render_slide` so agents can inspect actual pixels without permanently storing previews.

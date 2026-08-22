@@ -131,9 +131,9 @@ function localMcpEnsureModal() {
         <div class="agent-modal-intro">
           <p class="agent-modal-lead" id="agent-modal-description">An MCP-compatible agent can create and edit this presentation.</p>
           <div class="agent-client-icons" aria-label="Compatible with Claude, Codex, Hermes, and other MCP clients">
-            <span title="Claude"><img src="assets/claude-ai-symbol.svg" alt="Claude" /></span>
-            <span title="Codex"><img src="assets/codex-logo.svg" alt="Codex" /></span>
-            <span title="Hermes"><img src="assets/hermes-agent-logo.svg" alt="Hermes" /></span>
+            <span title="Claude"><img src="/assets/claude-ai-symbol.svg" alt="Claude" /></span>
+            <span title="Codex"><img src="/assets/codex-logo.svg" alt="Codex" /></span>
+            <span title="Hermes"><img src="/assets/hermes-agent-logo.svg" alt="Hermes" /></span>
           </div>
         </div>
       </header>

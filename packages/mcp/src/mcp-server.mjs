@@ -95,7 +95,7 @@ export async function createSlideStudioMcpServer(companion) {
   let guidanceRead = false;
   let identifiedAs = null;
   const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION }, {
-    instructions: `Open ${TEST_EDITOR_URL}, click Connect AI, then call get_design_guidance before editing. Mutations are intentionally blocked until the design guidance is read. Use render_slide to inspect actual pixels.`,
+    instructions: `First call list_editors and use the registered local browser tab. Never open or connect Slide Studio through a sandboxed agent browser. If no editor is listed, ask the user to open ${TEST_EDITOR_URL} in their normal browser and click Connect AI. Call get_design_guidance before editing and use render_slide to inspect actual pixels.`,
     capabilities: { tools: {}, resources: {} },
   });
 
@@ -136,7 +136,7 @@ export async function createSlideStudioMcpServer(companion) {
     return { __rawMcpResult: true, content: [{ type: "text", text: guidance }], structuredContent: { read: true } };
   }, { readOnlyHint: true, idempotentHint: true });
 
-  register("list_editors", "List connected browser tabs and show which tab this MCP session targets.", z.object({}).strict(), () => companion.call("list_editors"), { readOnlyHint: true });
+  register("list_editors", "Check the user's real local browser connection and show which registered Slide Studio tab this session targets. Call this instead of opening a sandboxed browser.", z.object({}).strict(), () => companion.call("list_editors"), { readOnlyHint: true });
   register("select_editor", "Select a connected browser tab for this MCP session.", z.object({ editorId: id }).strict(), ({ editorId }) => companion.call("select_editor", { editorId }), { destructiveHint: false, idempotentHint: true });
   register("inspect_editor", "Inspect projects, slides, assets, and every text/image layer without returning image bytes.", z.object({ ...targetSlide, includeAllProjects: z.boolean().default(true) }).strict(), (args) => browserOperation(companion, "inspect_editor", args), { readOnlyHint: true });
   register("show_notification", "Show a short visual notification in the connected editor for status or marketing demos.", z.object({ message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), (args) => companion.call("notify", args), { destructiveHint: false, idempotentHint: false });
