@@ -805,6 +805,16 @@ function icon(name) {
 
 function renderHeader({ editor = false } = {}) {
   const project = activeProject();
+  const agentConnectButton = `
+    <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect via MCP" title="Connect via MCP">
+      <span class="agent-logo-stack" aria-hidden="true">
+        <img src="assets/claude-ai-symbol.svg" alt="" />
+        <img src="assets/codex-logo.svg" alt="" />
+        <img src="assets/hermes-agent-logo.svg" alt="" />
+      </span>
+      <span class="agent-connect-label">Connect AI</span>
+      <span class="agent-connect-dot" aria-hidden="true"></span>
+    </button>`;
   return `
     <header class="app-header${editor ? " app-header--editor" : ""}">
       <button class="brand" type="button" data-action="home" aria-label="Go to projects">
@@ -825,19 +835,11 @@ function renderHeader({ editor = false } = {}) {
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop all</span>
           </button>
-          <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect an AI agent" title="Connect Claude, Codex, or Hermes">
-            <span class="agent-logo-stack" aria-hidden="true">
-              <img src="assets/claude-ai-symbol.svg" alt="" />
-              <img src="assets/codex-logo.svg" alt="" />
-              <img src="assets/hermes-agent-logo.svg" alt="" />
-            </span>
-            <span class="agent-connect-label">Connect AI</span>
-            <span class="agent-connect-dot" aria-hidden="true"></span>
-          </button>
+          ${agentConnectButton}
           <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide as PNG" title="Download PNG" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>PNG</span>
           </button>
-        ` : `<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
+        ` : `${agentConnectButton}<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
         <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
       </div>
     </header>

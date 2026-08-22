@@ -1,11 +1,28 @@
 const LOCAL_MCP_BRIDGE_URL = "http://127.0.0.1:43117";
 const LOCAL_MCP_RETRY_MS = 1200;
+const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
+
+function localMcpConnectionWasRemembered() {
+  try {
+    return localStorage.getItem(LOCAL_MCP_CONNECTION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function localMcpRememberConnection() {
+  try {
+    localStorage.setItem(LOCAL_MCP_CONNECTION_KEY, "1");
+  } catch { /* The live connection still works when storage is unavailable. */ }
+}
 
 const localMcpBridgeState = {
   connected: false,
   connecting: false,
   shouldReconnect: false,
+  reconnectLoopRunning: false,
+  connectionRemembered: localMcpConnectionWasRemembered(),
   stopped: false,
   editorId: crypto.randomUUID(),
   sessionToken: null,
@@ -55,8 +72,10 @@ function localMcpSetStatus(status, message = localMcpBridgeState.statusMessage) 
   document.querySelectorAll('[data-action="connect-agent"]').forEach((button) => {
     button.dataset.mcpStatus = status;
     const label = button.querySelector(".agent-connect-label");
-    const labelText = status === "connected" ? "AI connected" : "Connect AI";
+    const labelText = status === "connected" ? "Connected" : status === "connecting" ? "Connecting" : "Connect AI";
     if (label && label.textContent !== labelText) label.textContent = labelText;
+    button.setAttribute("aria-label", status === "connected" ? displayMessage : status === "connecting" ? "Connecting via MCP" : "Connect via MCP");
+    button.title = status === "connected" ? displayMessage : status === "connecting" ? "Connecting via MCP" : "Connect via MCP";
   });
   const statusElement = document.querySelector("[data-local-mcp-status]");
   if (statusElement) {
@@ -212,7 +231,7 @@ async function localMcpPermissionWasDenied() {
 }
 
 async function localMcpConnectFromClick() {
-  if (localMcpBridgeState.connected || localMcpBridgeState.connecting) return;
+  if (localMcpBridgeState.connected || localMcpBridgeState.connecting || localMcpBridgeState.reconnectLoopRunning) return;
   localMcpBridgeState.connecting = true;
   localMcpSetStatus("connecting", "Requesting access to the local companion…");
   try {
@@ -221,6 +240,8 @@ async function localMcpConnectFromClick() {
     await window.slideStudioReady;
     localMcpBridgeState.shouldReconnect = true;
     await localMcpHandshake();
+    localMcpRememberConnection();
+    localMcpBridgeState.connectionRemembered = true;
     void localMcpPollWithReconnect();
   } catch (error) {
     localMcpBridgeState.connected = false;
@@ -280,18 +301,36 @@ function localMcpHandleSystemEvent(event) {
 }
 
 async function localMcpPollWithReconnect() {
-  while (!localMcpBridgeState.stopped && localMcpBridgeState.shouldReconnect) {
-    try {
-      if (!localMcpBridgeState.connected) await localMcpHandshake();
-      await localMcpPoll();
-    } catch (error) {
-      if (localMcpBridgeState.connected) localMcpAddEvent(`Disconnected: ${error.message}`);
-      localMcpBridgeState.connected = false;
-      localMcpBridgeState.sessionToken = null;
-      localMcpSetStatus("connecting", "Reconnecting to the local companion…");
-      await new Promise((resolve) => setTimeout(resolve, LOCAL_MCP_RETRY_MS));
+  if (localMcpBridgeState.reconnectLoopRunning) return;
+  localMcpBridgeState.reconnectLoopRunning = true;
+  try {
+    while (!localMcpBridgeState.stopped && localMcpBridgeState.shouldReconnect) {
+      try {
+        if (!localMcpBridgeState.connected) await localMcpHandshake();
+        localMcpBridgeState.connecting = false;
+        await localMcpPoll();
+      } catch (error) {
+        if (localMcpBridgeState.connected) localMcpAddEvent(`Disconnected: ${error.message}`);
+        localMcpBridgeState.connected = false;
+        localMcpBridgeState.connecting = false;
+        localMcpBridgeState.sessionToken = null;
+        localMcpSetStatus("connecting", "Reconnecting to the local companion…");
+        await new Promise((resolve) => setTimeout(resolve, LOCAL_MCP_RETRY_MS));
+      }
     }
+  } finally {
+    localMcpBridgeState.reconnectLoopRunning = false;
   }
+}
+
+async function localMcpResumeRememberedConnection() {
+  if (!localMcpBridgeState.connectionRemembered || localMcpBridgeState.connected || localMcpBridgeState.reconnectLoopRunning) return;
+  await window.slideStudioReady;
+  if (localMcpBridgeState.connected || localMcpBridgeState.connecting || localMcpBridgeState.reconnectLoopRunning) return;
+  localMcpBridgeState.shouldReconnect = true;
+  localMcpBridgeState.connecting = true;
+  localMcpSetStatus("connecting", "Reconnecting to the local companion…");
+  void localMcpPollWithReconnect();
 }
 
 async function localMcpPoll() {
@@ -334,6 +373,8 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape") lo
 
 const localMcpAppRoot = document.querySelector("#app");
 if (localMcpAppRoot) new MutationObserver(() => localMcpSetStatus(localMcpBridgeState.status, localMcpBridgeState.statusMessage)).observe(localMcpAppRoot, { childList: true, subtree: true });
+
+void localMcpResumeRememberedConnection();
 
 window.addEventListener("beforeunload", () => {
   localMcpBridgeState.stopped = true;

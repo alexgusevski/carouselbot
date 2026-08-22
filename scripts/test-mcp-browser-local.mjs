@@ -135,13 +135,24 @@ try {
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
   await cdp.send("Page.navigate", { url: pageUrl });
   await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.slideStudioAgent)"), "Editor scripts did not load.");
+  const initialConnection = await evaluate(cdp, `({
+    buttonStatus: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus || "idle",
+    remembered: localStorage.getItem("slide-studio:mcp-connected")
+  })`);
+  const initialEditors = (await tool("list_editors")).structuredContent.editors;
+  if (initialConnection.buttonStatus !== "idle" || initialConnection.remembered !== null || initialEditors.length) {
+    throw new Error(`The browser contacted MCP before the user opted in: ${JSON.stringify({ initialConnection, initialEditors })}`);
+  }
   await evaluate(cdp, `(async () => {
-    if (!document.querySelector('[data-action="connect-agent"]')) await window.slideStudioAgent.execute({ type: "project.create", name: "Connection shell" });
     document.querySelector('[data-action="connect-agent"]').click();
     document.querySelector('[data-local-mcp-connect]').click();
     return true;
   })()`);
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.length, "Editor did not connect.");
+  const remembered = await evaluate(cdp, `localStorage.getItem("slide-studio:mcp-connected")`);
+  if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
   await tool("get_design_guidance");
   await tool("show_notification", { message: "Hello from the full local MCP", tone: "success" });
 
@@ -221,7 +232,7 @@ try {
   await tool("update_project", { projectId: createdProject.projectId, expectedRevision: 0, name: "Stale write" })
     .then(() => { throw new Error("A stale project revision unexpectedly succeeded."); })
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
-  process.stdout.write(`${JSON.stringify({ connected: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 25, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 25, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   cdp?.close();
   mcp.stdin.end();

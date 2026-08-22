@@ -237,8 +237,12 @@ button:disabled {
 }
 
 .agent-connect-button[data-mcp-status="connected"] {
-  border-color: color-mix(in srgb, #24a148 48%, var(--line));
-  background: color-mix(in srgb, #24a148 9%, var(--quiet-bg));
+  border-color: color-mix(in srgb, #24a148 32%, var(--line));
+  background: color-mix(in srgb, #24a148 5%, var(--quiet-bg));
+}
+
+.agent-connect-button[data-mcp-status="connected"] .agent-connect-label {
+  color: color-mix(in srgb, #24a148 72%, var(--ink));
 }
 
 .agent-connect-button[data-mcp-status="connected"] .agent-connect-dot {
