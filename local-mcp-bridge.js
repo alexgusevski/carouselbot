@@ -1,5 +1,6 @@
 const LOCAL_MCP_BRIDGE_URL = "http://127.0.0.1:43117";
 const LOCAL_MCP_RETRY_MS = 1200;
+const LOCAL_MCP_AGENT_PROMPT = "Read https://github.com/alexgusevski/tiktokslideeditor/blob/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
 const localMcpBridgeState = {
   connected: false,
@@ -65,7 +66,7 @@ function localMcpSetStatus(status, message = localMcpBridgeState.statusMessage) 
   const connectButton = document.querySelector("[data-local-mcp-connect]");
   if (connectButton) {
     connectButton.disabled = status === "connecting" || status === "connected";
-    connectButton.textContent = status === "connecting" ? "Connecting…" : status === "connected" ? "Connected" : "Connect to local companion";
+    connectButton.textContent = status === "connecting" ? "Connecting…" : status === "connected" ? "Connected" : "Connect this browser";
   }
 }
 
@@ -107,37 +108,70 @@ function localMcpEnsureModal() {
     <section class="agent-modal" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" aria-describedby="agent-modal-description">
       <button class="icon-button agent-modal-close" type="button" data-local-mcp-close aria-label="Close connect dialog">×</button>
       <header class="agent-modal-header">
-        <p class="agent-modal-kicker">Local-first agent control</p>
-        <h2 id="agent-modal-title">Connect to an AI agent</h2>
-        <p class="agent-modal-lead" id="agent-modal-description">Watch Claude, Codex, Hermes, OpenCode, OpenClaw, or any MCP-compatible agent build and edit this presentation live.</p>
+        <h2 id="agent-modal-title">Connect via MCP</h2>
+        <p class="agent-modal-lead" id="agent-modal-description">An MCP-compatible agent can create and edit this presentation.</p>
       </header>
       <div class="agent-modal-body">
-        <div class="agent-client-row" aria-label="Compatible agent clients">
-          <span class="agent-client-chip"><img src="assets/claude-ai-symbol.svg" alt="" />Claude</span>
-          <span class="agent-client-chip"><img src="assets/codex-logo.svg" alt="" />Codex</span>
-          <span class="agent-client-chip"><img src="assets/hermes-agent-logo.svg" alt="" />Hermes + any MCP client</span>
-        </div>
         <ol class="agent-steps">
-          <li><span><strong>Install the local companion once</strong><code class="agent-command">npx slides-studio-mcp@beta setup</code></span></li>
-          <li><span><strong>Start or restart your agent</strong>The agent launches the companion automatically. It listens only on <code>127.0.0.1</code>.</span></li>
-          <li><span><strong>Connect this tab</strong>Click below and approve Chrome’s local-network prompt. The active tab follows every edit live.</span></li>
+          <li>
+            <div class="agent-step-content">
+              <strong>Send this to your agent</strong>
+              <div class="agent-prompt-box">
+                <p data-agent-install-prompt></p>
+                <button class="agent-copy-prompt" type="button" data-copy-agent-prompt>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>
+                  <span>Copy prompt</span>
+                </button>
+              </div>
+            </div>
+          </li>
+          <li>
+            <div class="agent-step-content agent-connect-step">
+              <strong>Connect this browser</strong>
+              <p>Click below and accept any browser prompts.</p>
+              <span class="agent-connection-status" data-local-mcp-status data-status="idle" role="status">Not connected</span>
+              <button class="button button--primary agent-modal-connect" type="button" data-local-mcp-connect>Connect this browser</button>
+            </div>
+          </li>
         </ol>
-        <p class="agent-privacy-note">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-          <span><strong>No hosted relay.</strong> The website talks directly to the companion on your computer. Prompts, screenshots, projects, and images do not pass through Slide Studio servers.</span>
-        </p>
+        <details class="agent-how-it-works">
+          <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>How it works</summary>
+          <p>The setup installs the local MCP and skill, and your agent runs it. After you approve browser access, its edits appear here live. Projects and media stay on your computer.</p>
+        </details>
       </div>
-      <footer class="agent-modal-footer">
-        <span class="agent-connection-status" data-local-mcp-status data-status="idle" role="status">Not connected</span>
-        <button class="button button--primary agent-modal-connect" type="button" data-local-mcp-connect>Connect to local companion</button>
-      </footer>
     </section>`;
   document.body.appendChild(backdrop);
+  backdrop.querySelector("[data-agent-install-prompt]").textContent = LOCAL_MCP_AGENT_PROMPT;
   backdrop.querySelector("[data-local-mcp-close]").addEventListener("click", localMcpCloseModal);
   backdrop.querySelector("[data-local-mcp-connect]").addEventListener("click", localMcpConnectFromClick);
+  backdrop.querySelector("[data-copy-agent-prompt]").addEventListener("click", localMcpCopyAgentPrompt);
   backdrop.addEventListener("click", (event) => { if (event.target === backdrop) localMcpCloseModal(); });
   localMcpSetStatus(localMcpBridgeState.status, localMcpBridgeState.statusMessage);
   return backdrop;
+}
+
+async function localMcpCopyAgentPrompt(event) {
+  const button = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText(LOCAL_MCP_AGENT_PROMPT);
+  } catch {
+    const input = document.createElement("textarea");
+    input.value = LOCAL_MCP_AGENT_PROMPT;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand("copy");
+    input.remove();
+  }
+  const label = button.querySelector("span");
+  label.textContent = "Copied";
+  button.dataset.copied = "true";
+  window.setTimeout(() => {
+    label.textContent = "Copy prompt";
+    delete button.dataset.copied;
+  }, 1800);
 }
 
 function localMcpOpenModal(trigger) {
