@@ -293,20 +293,19 @@ button:disabled {
   line-height: 0.96;
 }
 
-.agent-modal-lead {
-  max-width: 440px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.45;
-}
-
 .agent-modal-intro {
   display: flex;
-  margin-top: 12px;
-  gap: 18px;
+  margin-top: 14px;
+  gap: 10px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+}
+
+.agent-modal-agent-label {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 750;
 }
 
 .agent-client-icons {
@@ -392,7 +391,7 @@ button:disabled {
 
 .agent-steps strong {
   display: block;
-  margin-bottom: 5px;
+  margin: 0;
   color: var(--ink);
   font-size: 15px;
 }
@@ -401,12 +400,18 @@ button:disabled {
   min-width: 0;
 }
 
+.agent-step-heading {
+  display: flex;
+  min-height: 31px;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .agent-prompt-box {
-  display: grid;
   min-width: 0;
-  margin-top: 9px;
-  padding: 12px;
-  gap: 10px;
+  margin-top: 6px;
+  padding: 11px 12px;
   border: 1px solid var(--soft-line);
   border-radius: 10px;
   color: var(--ink);
@@ -457,15 +462,16 @@ button:disabled {
 }
 
 .agent-connect-actions {
-  display: flex;
-  margin-top: 14px;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  margin-top: 12px;
+  gap: 12px;
+  justify-items: center;
 }
 
 .agent-connect-actions .agent-connection-status {
-  flex: 0 0 auto;
+  max-width: 100%;
+  justify-content: center;
+  text-align: center;
 }
 
 .agent-how-it-works {
@@ -590,7 +596,8 @@ button:disabled {
 }
 
 .agent-modal-connect {
-  min-width: 210px;
+  width: min(100%, 280px);
+  min-width: 0;
   margin: 0;
   white-space: nowrap;
 }
@@ -841,6 +848,10 @@ button:disabled {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.project-preview.is-rendering img:not([data-composite-cover="true"]) {
+  opacity: 0.82;
 }
 
 .project-preview-empty {

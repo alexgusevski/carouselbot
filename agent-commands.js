@@ -232,6 +232,7 @@ async function executeSlideStudioAgentOperation(operation) {
     const expectedRevision = Number(project.revision) || 0;
     await deleteProjectFromDb(project.id, { expectedRevision });
     state.projects = state.projects.filter((item) => item.id !== project.id);
+    clearProjectCover(project.id);
     if (state.activeProjectId === project.id) {
       state.activeProjectId = null;
       state.activeSlideId = null;

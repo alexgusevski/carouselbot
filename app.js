@@ -2,6 +2,7 @@ const DB_NAME = "slide-studio-db";
 const DB_VERSION = 1;
 const STORE_NAME = "projects";
 const PROJECT_CHANNEL_NAME = "slide-studio-projects-v1";
+const PROJECT_SYNC_STORAGE_KEY = "slide-studio:project-change";
 const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
@@ -64,6 +65,9 @@ const state = {
   thumbnailUrls: new Map(),
   thumbnailSignatures: new Map(),
   thumbnailVersions: new Map(),
+  projectCoverUrls: new Map(),
+  projectCoverSignatures: new Map(),
+  projectCoverVersions: new Map(),
   slideRailScrollPositions: new Map(),
   pendingSlideBackgroundTarget: null,
   croppingOverlayId: null,
@@ -275,8 +279,15 @@ function staleProjectError(projectId, expectedRevision, actualRevision) {
   return error;
 }
 
+function announceProjectEvent(event) {
+  projectChannel?.postMessage(event);
+  try {
+    localStorage.setItem(PROJECT_SYNC_STORAGE_KEY, JSON.stringify({ ...event, nonce: uid() }));
+  } catch { /* BroadcastChannel remains the primary same-origin sync path. */ }
+}
+
 function announceProjectChange(type, project) {
-  projectChannel?.postMessage({ type, source: projectChannelSource, projectId: project.id, revision: Number(project.revision) || 0, updatedAt: Number(project.updatedAt) || 0 });
+  announceProjectEvent({ type, source: projectChannelSource, projectId: project.id, revision: Number(project.revision) || 0, updatedAt: Number(project.updatedAt) || 0 });
 }
 
 function putProject(project, { expectedRevision = null, broadcast = true } = {}) {
@@ -321,7 +332,7 @@ function deleteProjectFromDb(projectId, { expectedRevision = null, broadcast = t
       store.delete(projectId);
     };
     transaction.oncomplete = () => {
-      if (broadcast) projectChannel?.postMessage({ type: "project.deleted", source: projectChannelSource, projectId });
+      if (broadcast) announceProjectEvent({ type: "project.deleted", source: projectChannelSource, projectId });
       resolve();
     };
     transaction.onerror = () => { if (!conflict) reject(transaction.error); };
@@ -334,6 +345,7 @@ async function reloadProjectFromDb(projectId, { render = true } = {}) {
   const index = state.projects.findIndex((project) => project.id === projectId);
   if (!latest) {
     if (index >= 0) state.projects.splice(index, 1);
+    clearProjectCover(projectId);
     if (state.activeProjectId === projectId) {
       state.activeProjectId = null;
       state.activeSlideId = null;
@@ -350,11 +362,21 @@ async function reloadProjectFromDb(projectId, { render = true } = {}) {
   return latest;
 }
 
-projectChannel?.addEventListener("message", async ({ data }) => {
+async function handleExternalProjectEvent(data) {
   if (!data || data.source === projectChannelSource || !data.projectId || !state.db) return;
   const local = state.projects.find((project) => project.id === data.projectId);
   if (data.type === "project.deleted" || !local || Number(data.revision) > (Number(local.revision) || 0) || Number(data.updatedAt) > (Number(local.updatedAt) || 0)) {
     await reloadProjectFromDb(data.projectId).catch((error) => console.error("Could not synchronize project", error));
+  }
+}
+
+projectChannel?.addEventListener("message", ({ data }) => { void handleExternalProjectEvent(data); });
+window.addEventListener("storage", (event) => {
+  if (event.key !== PROJECT_SYNC_STORAGE_KEY || !event.newValue) return;
+  try {
+    void handleExternalProjectEvent(JSON.parse(event.newValue));
+  } catch (error) {
+    console.error("Could not read project synchronization event", error);
   }
 });
 
@@ -776,6 +798,7 @@ function showProjectDeleteConfirmation(projectId) {
     try {
       await deleteProjectFromDb(projectId, { expectedRevision: Number(project.revision) || 0 });
       project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
+      clearProjectCover(projectId);
       state.slideRailScrollPositions.delete(projectId);
       state.projects = state.projects.filter((item) => item.id !== projectId);
       close();
@@ -974,11 +997,12 @@ function renderDashboard() {
             <span><strong>Start a project</strong><small>Add photos when you’re ready</small></span>
           </button>
           ${sortedProjects.map((project) => {
-            const cover = project.slides[0]?.imageData;
+            const slide = project.slides[0];
+            const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
             return `
               <button class="project-card" type="button" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
-                <span class="project-preview">
-                  ${cover ? `<img src="${cover}" alt="" />` : `<span class="project-preview-empty">No photos yet</span>`}
+                <span class="project-preview" data-project-cover-id="${project.id}">
+                  ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
                 </span>
                 <span class="project-meta">
                   <strong>${escapeHtml(project.name)}</strong>
@@ -992,6 +1016,69 @@ function renderDashboard() {
     </main>
   `;
   bindDashboardEvents();
+  requestAnimationFrame(() => refreshAllProjectCovers(sortedProjects));
+}
+
+function projectCoverSignature(project) {
+  const slide = project.slides[0];
+  return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide)}` : "";
+}
+
+async function refreshProjectCover(project) {
+  const slide = project.slides[0];
+  const target = app.querySelector(`[data-project-cover-id="${project.id}"]`);
+  if (!target) return;
+  if (!slide) {
+    clearProjectCover(project.id);
+    target.innerHTML = `<span class="project-preview-empty">No slides yet</span>`;
+    return;
+  }
+  const signature = projectCoverSignature(project);
+  const cachedUrl = state.projectCoverUrls.get(project.id);
+  if (cachedUrl && state.projectCoverSignatures.get(project.id) === signature) {
+    const image = target.querySelector("img");
+    if (image?.src !== cachedUrl) image.src = cachedUrl;
+    image?.setAttribute("data-composite-cover", "true");
+    return;
+  }
+
+  const version = (state.projectCoverVersions.get(project.id) || 0) + 1;
+  state.projectCoverVersions.set(project.id, version);
+  target.classList.add("is-rendering");
+  try {
+    const canvas = await renderSlideCanvas(slide, 270, 480, project);
+    const blob = await canvasToBlob(canvas);
+    if (state.projectCoverVersions.get(project.id) !== version) return;
+    const url = URL.createObjectURL(blob);
+    const previousUrl = state.projectCoverUrls.get(project.id);
+    state.projectCoverUrls.set(project.id, url);
+    state.projectCoverSignatures.set(project.id, signature);
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    const currentTarget = app.querySelector(`[data-project-cover-id="${project.id}"]`);
+    if (currentTarget) {
+      const image = document.createElement("img");
+      image.src = url;
+      image.alt = "";
+      image.dataset.compositeCover = "true";
+      currentTarget.replaceChildren(image);
+      currentTarget.classList.remove("is-rendering");
+    }
+  } catch (error) {
+    console.error("Could not render project cover", error);
+    target.classList.remove("is-rendering");
+  }
+}
+
+function refreshAllProjectCovers(projects = state.projects) {
+  projects.forEach((project) => { void refreshProjectCover(project); });
+}
+
+function clearProjectCover(projectId) {
+  const url = state.projectCoverUrls.get(projectId);
+  if (url) URL.revokeObjectURL(url);
+  state.projectCoverUrls.delete(projectId);
+  state.projectCoverSignatures.delete(projectId);
+  state.projectCoverVersions.delete(projectId);
 }
 
 function renderEditor() {
@@ -3579,7 +3666,7 @@ function loadImage(src) {
   });
 }
 
-async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT) {
+async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT, project = activeProject()) {
   await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
   const image = await loadImage(slide.imageData);
   const canvas = document.createElement("canvas");
@@ -3588,7 +3675,7 @@ async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HE
   const context = canvas.getContext("2d");
   const imageLayout = getImageLayout(slide, width, height);
   context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-  await drawSlideLayers(context, slide, width, height);
+  await drawSlideLayers(context, slide, width, height, project);
   return canvas;
 }
 
@@ -3722,15 +3809,15 @@ async function shareAllSlides() {
   }
 }
 
-async function drawSlideLayers(context, slide, canvasWidth, canvasHeight) {
+async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject()) {
   for (const { kind, item } of slideItems(slide)) {
-    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight);
+    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project);
     else drawTextLayer(context, item, canvasWidth, canvasHeight);
   }
 }
 
-async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight) {
-  const asset = projectAsset(overlay.assetId);
+async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject()) {
+  const asset = project?.assets?.find((item) => item.id === overlay.assetId);
   if (!asset) return;
   const image = await loadImage(asset.imageData);
   const metrics = getOverlayMetrics(overlay, asset);
@@ -4197,6 +4284,12 @@ async function init() {
   }
   renderCurrentRoute();
   window.addEventListener("popstate", renderCurrentRoute);
+  window.addEventListener("pageshow", () => {
+    if (!state.activeProjectId) void refreshDashboardProjects();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !state.activeProjectId) void refreshDashboardProjects();
+  });
   document.addEventListener("paste", (event) => {
     handleClipboardPaste(event);
   });
@@ -4260,6 +4353,23 @@ async function init() {
       }
     }
   });
+}
+
+let dashboardRefreshPromise = null;
+
+function refreshDashboardProjects() {
+  if (!state.db || state.activeProjectId) return Promise.resolve();
+  if (dashboardRefreshPromise) return dashboardRefreshPromise;
+  dashboardRefreshPromise = getAllProjects()
+    .then((projects) => {
+      if (state.activeProjectId) return;
+      state.projects = projects;
+      renderDashboard();
+      bindGlobalActions();
+    })
+    .catch((error) => console.error("Could not refresh dashboard projects", error))
+    .finally(() => { dashboardRefreshPromise = null; });
+  return dashboardRefreshPromise;
 }
 
 window.slideStudioReady = init();

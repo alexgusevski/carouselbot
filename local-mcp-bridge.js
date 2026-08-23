@@ -152,30 +152,32 @@ function localMcpEnsureModal() {
   backdrop.className = "agent-modal-backdrop";
   backdrop.hidden = true;
   backdrop.innerHTML = `
-    <section class="agent-modal" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title" aria-describedby="agent-modal-description">
+    <section class="agent-modal" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title">
       <button class="icon-button agent-modal-close" type="button" data-local-mcp-close aria-label="Close connect dialog">×</button>
       <header class="agent-modal-header">
         <h2 id="agent-modal-title">Connect via MCP</h2>
         <div class="agent-modal-intro">
-          <p class="agent-modal-lead" id="agent-modal-description">An MCP-compatible agent can create and edit this presentation.</p>
           <div class="agent-client-icons" aria-label="Compatible with Claude, Codex, Hermes, and other MCP clients">
             <span title="Claude"><img src="/assets/claude-ai-symbol.svg" alt="Claude" /></span>
             <span title="Codex"><img src="/assets/codex-logo.svg" alt="Codex" /></span>
             <span title="Hermes"><img src="/assets/hermes-agent-logo.svg" alt="Hermes" /></span>
           </div>
+          <p class="agent-modal-agent-label">Use with an agent</p>
         </div>
       </header>
       <div class="agent-modal-body">
         <ol class="agent-steps">
           <li>
             <div class="agent-step-content">
-              <strong>Send this to your agent</strong>
-              <div class="agent-prompt-box">
-                <p data-agent-install-prompt></p>
+              <div class="agent-step-heading">
+                <strong>Send this to your agent</strong>
                 <button class="agent-copy-prompt" type="button" data-copy-agent-prompt>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>
                   <span>Copy prompt</span>
                 </button>
+              </div>
+              <div class="agent-prompt-box">
+                <p data-agent-install-prompt></p>
               </div>
             </div>
           </li>
