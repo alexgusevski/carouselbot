@@ -21,7 +21,7 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 ## Working method
 
 1. Inspect the editor and use the returned project, slide, asset, and layer IDs.
-2. Create or update one slide at a time. The editor automatically switches to the most recently changed slide.
+2. Create or update one slide at a time. If that project is already visible, the editor follows its most recently changed slide. Work on another project never takes over the user's current view.
 3. Use `apply_operations` when several related edits can be expressed compactly; the browser still shows each operation live.
 4. Call `render_slide` after a meaningful composition change and look at the returned image.
 5. Correct clipping, collisions, weak contrast, unsafe placement, inconsistent spacing, and visual imbalance before continuing.
@@ -42,3 +42,4 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Keep tool responses and progress messages concise.
 - Prefer IDs returned by tools over guessed names or array positions.
 - Do not claim a slide looks good until you have inspected a rendered image.
+- Do not call `open_project` merely to edit or render another project. It intentionally changes the user's browser view; use it only when the user asks to see that project.

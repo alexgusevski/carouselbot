@@ -48,4 +48,4 @@ Inspect the assigned editor before editing and keep the returned IDs and revisio
 
 After each meaningful composition or after a short batch, call `render_slide` and inspect the returned image. Fix clipping, spacing, contrast, unsafe TikTok-overlay placement, and weak hierarchy before claiming the slide is finished. Use `export_slide` or `export_project` only when local files are requested; do not overwrite existing files unless authorized.
 
-Each assigned browser tab automatically opens the latest slide changed through its session. Other tabs synchronize project cards and project state through local browser storage. Use `show_notification` only for short, useful status messages.
+Edits follow the latest changed slide only when their project is already visible. Creating or editing another project must not take over the user's current browser view. `open_project` and `set_view` intentionally navigate, so call them only when the user asks to see that project. Other tabs synchronize project cards and project state through local browser storage. Use `show_notification` only for short, useful status messages.

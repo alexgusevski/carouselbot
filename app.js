@@ -98,12 +98,16 @@ function cloneProject(project) {
   };
 }
 
-function recordHistory() {
-  const project = activeProject();
+function recordHistory(project = activeProject()) {
   if (!project || history.applying) return;
   history.past.push(cloneProject(project));
   if (history.past.length > HISTORY_LIMIT) history.past.shift();
-  history.future = [];
+  history.future = history.future.filter((snapshot) => snapshot.id !== project.id);
+}
+
+function takeProjectHistorySnapshot(stack, projectId) {
+  const index = stack.findLastIndex((snapshot) => snapshot.id === projectId);
+  return index < 0 ? null : stack.splice(index, 1)[0];
 }
 
 async function applyHistorySnapshot(snapshot) {
@@ -131,19 +135,23 @@ async function applyHistorySnapshot(snapshot) {
 }
 
 function undo() {
-  if (!history.past.length || isEditingTextTarget(document.activeElement)) return;
+  if (isEditingTextTarget(document.activeElement)) return;
   const project = activeProject();
   if (!project) return;
+  const snapshot = takeProjectHistorySnapshot(history.past, project.id);
+  if (!snapshot) return;
   history.future.push(cloneProject(project));
-  return applyHistorySnapshot(history.past.pop());
+  return applyHistorySnapshot(snapshot);
 }
 
 function redo() {
-  if (!history.future.length || isEditingTextTarget(document.activeElement)) return;
+  if (isEditingTextTarget(document.activeElement)) return;
   const project = activeProject();
   if (!project) return;
+  const snapshot = takeProjectHistorySnapshot(history.future, project.id);
+  if (!snapshot) return;
   history.past.push(cloneProject(project));
-  return applyHistorySnapshot(history.future.pop());
+  return applyHistorySnapshot(snapshot);
 }
 
 const app = document.querySelector("#app");

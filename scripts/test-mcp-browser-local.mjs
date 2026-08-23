@@ -189,7 +189,10 @@ try {
   })`);
   if (!dashboardUpdated.dashboardVisible || !dashboardUpdated.projectNames.includes("Full MCP browser test")) throw new Error(`Dashboard did not update live: ${JSON.stringify(dashboardUpdated)}`);
   const addedSlide = (await tool("add_slide", { projectId: createdProject.projectId, name: "Live automation", backgroundColor: "#25282E" })).structuredContent;
-  await waitFor(() => evaluate(cdp, "document.querySelector('.project-title-input')?.value === 'Full MCP browser test'"), "Adding the first slide did not open the editor.");
+  const dashboardAfterSlide = await evaluate(cdp, `({ pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), slideCount: [...document.querySelectorAll('.project-card')].find((card) => card.querySelector('.project-meta strong')?.textContent === 'Full MCP browser test')?.querySelector('.project-meta span')?.textContent })`);
+  if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.slideCount?.startsWith("1 slide")) throw new Error(`Adding a slide changed the dashboard view: ${JSON.stringify(dashboardAfterSlide)}`);
+  await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+  await waitFor(() => evaluate(cdp, "document.querySelector('.project-title-input')?.value === 'Full MCP browser test'"), "Explicitly opening the project did not show the editor.");
   const addedText = (await tool("add_text", {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
     x: 0.1, y: 0.2, width: 0.8, height: 0.16, size: 82, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF",
@@ -249,9 +252,16 @@ try {
   await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP verified" });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify project deletion" })).structuredContent.id;
+  const pinnedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
+  editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify background project edits preserve the current view" })).structuredContent.id;
   const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
+  const temporarySlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Background edit", backgroundColor: "#18181B" })).structuredContent;
+  await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Edited without taking over", x: 0.1, y: 0.4, width: 0.8, height: 0.14, size: 72, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF" });
+  const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
+  if (JSON.stringify(preservedView) !== JSON.stringify(pinnedView)) throw new Error(`Background project edits changed the user's view: ${JSON.stringify({ pinnedView, preservedView })}`);
   await tool("delete_project", { projectId: temporaryProject.projectId });
+  const viewAfterBackgroundDelete = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
+  if (JSON.stringify(viewAfterBackgroundDelete) !== JSON.stringify(pinnedView)) throw new Error(`Deleting a background project changed the user's view: ${JSON.stringify({ pinnedView, viewAfterBackgroundDelete })}`);
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
   editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, projectId: createdProject.projectId, purpose: "Finish browser integration test" })).structuredContent.id;
@@ -290,7 +300,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 26, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 28, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   secondCdp?.close();
   cdp?.close();

@@ -105,13 +105,32 @@ async function agentCommit(project, slide, mutate, message) {
     await reloadProjectFromDb(project.id);
     throw staleProjectError(project.id, baseRevision, storedRevision);
   }
-  agentSelect(project, slide);
-  recordHistory();
+  const visibleView = {
+    projectId: state.activeProjectId,
+    slideId: state.activeSlideId,
+    layerKeys: selectedLayerKeys(),
+    photoAdjustMode: state.photoAdjustMode,
+    croppingOverlayId: state.croppingOverlayId,
+  };
+  const targetIsVisible = visibleView.projectId === project.id;
+  if (targetIsVisible) agentSelect(project, slide);
+  recordHistory(project);
   const result = await mutate();
+  if (!targetIsVisible) {
+    state.activeProjectId = visibleView.projectId;
+    state.activeSlideId = visibleView.slideId;
+    setLayerSelection(visibleView.layerKeys);
+    state.photoAdjustMode = visibleView.photoAdjustMode;
+    state.croppingOverlayId = visibleView.croppingOverlayId;
+  }
   project.updatedAt = Date.now();
   project.revision = baseRevision + 1;
   state.shareAllCache = null;
-  renderEditor();
+  if (targetIsVisible) renderEditor();
+  else if (!visibleView.projectId) {
+    renderDashboard();
+    bindGlobalActions();
+  }
   await agentNextFrame();
   try {
     await putProject(project, { expectedRevision: baseRevision });
@@ -122,8 +141,10 @@ async function agentCommit(project, slide, mutate, message) {
   if (message) toast(message);
   return {
     projectId: project.id,
-    slideId: state.activeSlideId,
+    slideId: slide?.id || null,
     revision: project.revision,
+    visibleProjectId: state.activeProjectId,
+    viewChanged: targetIsVisible,
     ...result,
   };
 }
@@ -165,10 +186,10 @@ function agentFindLayer(slide, layerId) {
   throw new Error(`Layer not found: ${layerId}`);
 }
 
-async function agentRender(slide, { width = 540, format = "png", quality = 0.9 } = {}) {
+async function agentRender(project, slide, { width = 540, format = "png", quality = 0.9 } = {}) {
   const safeWidth = Math.round(clamp(Number(width) || 540, 180, OUTPUT_WIDTH));
   const safeHeight = Math.round(safeWidth * OUTPUT_HEIGHT / OUTPUT_WIDTH);
-  const canvas = await renderSlideCanvas(slide, safeWidth, safeHeight);
+  const canvas = await renderSlideCanvas(slide, safeWidth, safeHeight, project);
   const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
   const dataUrl = canvas.toDataURL(mimeType, clamp(Number(quality) || 0.9, 0.4, 1));
   return {
@@ -209,16 +230,13 @@ async function executeSlideStudioAgentOperation(operation) {
     };
     state.projects.push(project);
     await putProject(project);
-    if (dashboardVisible) {
+    if (dashboardVisible || !state.activeProjectId) {
       renderDashboard();
       bindGlobalActions();
-    } else {
-      agentSelect(project);
-      renderEditor();
     }
     await agentNextFrame();
     toast("AI agent created a project");
-    return { projectId: project.id, name: project.name, revision: project.revision, opened: !dashboardVisible };
+    return { projectId: project.id, name: project.name, revision: project.revision, opened: false, visibleProjectId: state.activeProjectId };
   }
 
   if (operation.type === "project.open") {
@@ -240,20 +258,24 @@ async function executeSlideStudioAgentOperation(operation) {
 
   if (operation.type === "project.delete") {
     const project = agentProject(operation.projectId);
+    const targetIsVisible = state.activeProjectId === project.id;
     const expectedRevision = Number(project.revision) || 0;
     await deleteProjectFromDb(project.id, { expectedRevision });
     state.projects = state.projects.filter((item) => item.id !== project.id);
     clearProjectCover(project.id);
-    if (state.activeProjectId === project.id) {
+    if (targetIsVisible) {
       state.activeProjectId = null;
       state.activeSlideId = null;
       clearLayerSelection();
+      updateBrowserRoute("/", "push");
+      renderDashboard();
+      bindGlobalActions();
+    } else if (!state.activeProjectId) {
+      renderDashboard();
+      bindGlobalActions();
     }
-    updateBrowserRoute("/", "push");
-    renderDashboard();
-    bindGlobalActions();
     toast("AI agent deleted a project");
-    return { deletedProjectId: project.id };
+    return { deletedProjectId: project.id, visibleProjectId: state.activeProjectId, viewChanged: targetIsVisible };
   }
 
   if (operation.type === "slide.add") {
@@ -416,7 +438,8 @@ async function executeSlideStudioAgentOperation(operation) {
       const updated = operation.updates.map(({ id, ...patch }) => {
         const image = (slide.overlays || []).find((item) => item.id === id);
         if (!image) throw new Error(`Image layer not found: ${id}`);
-        agentApplyImagePatch(image, patch);
+        const asset = (project.assets || []).find((item) => item.id === image.assetId);
+        agentApplyImagePatch(image, patch, asset);
         return id;
       });
       if (updated.length === 1) selectOnlyLayer("overlay", updated[0]);
@@ -490,10 +513,7 @@ async function executeSlideStudioAgentOperation(operation) {
   if (operation.type === "slide.render") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    agentSelect(project, slide);
-    renderEditor();
-    await agentNextFrame();
-    return agentRender(slide, operation);
+    return agentRender(project, slide, operation);
   }
 
   throw new Error(`Unsupported agent operation: ${operation.type}`);
