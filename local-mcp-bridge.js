@@ -1,4 +1,9 @@
-const LOCAL_MCP_BRIDGE_URL = "http://127.0.0.1:43117";
+const LOCAL_MCP_BRIDGE_URL = (() => {
+  if (window.__SLIDE_STUDIO_MCP_BRIDGE_URL) return window.__SLIDE_STUDIO_MCP_BRIDGE_URL;
+  const localPort = new URLSearchParams(location.search).get("__mcpBridgePort");
+  if (["127.0.0.1", "localhost"].includes(location.hostname) && /^\d{2,5}$/.test(localPort || "")) return `http://127.0.0.1:${localPort}`;
+  return "http://127.0.0.1:43117";
+})();
 const LOCAL_MCP_RETRY_MS = 1200;
 const LOCAL_MCP_HEARTBEAT_MS = 10_000;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";

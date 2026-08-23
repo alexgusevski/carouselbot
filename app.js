@@ -176,7 +176,7 @@ function routeFromPathname(pathname = window.location.pathname) {
 
 function updateBrowserRoute(path, historyMode) {
   if (historyMode === "none" || window.location.pathname === path) return;
-  window.history[historyMode === "replace" ? "replaceState" : "pushState"]({}, "", path);
+  window.history[historyMode === "replace" ? "replaceState" : "pushState"]({}, "", `${path}${window.location.search}${window.location.hash}`);
 }
 
 function escapeHtml(value = "") {

@@ -15,7 +15,9 @@ const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-daemon-"));
 const exportPath = join(profile, "agent-export.png");
 const projectExportDirectory = join(profile, "project-export");
 const sharedDaemon = process.argv.includes("--shared-daemon");
-const env = sharedDaemon ? process.env : { ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory };
+const bridgePort = sharedDaemon ? 43117 : 48000 + Math.floor(Math.random() * 1000);
+const env = sharedDaemon ? process.env : { ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory, SLIDE_STUDIO_BRIDGE_PORT: String(bridgePort) };
+const browserPageUrl = sharedDaemon ? pageUrl : `${pageUrl}${pageUrl.includes("?") ? "&" : "?"}__mcpBridgePort=${bridgePort}`;
 const web = new URL(pageUrl).hostname === "127.0.0.1"
   ? spawn(process.execPath, ["server.mjs"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] })
   : null;
@@ -112,7 +114,7 @@ function connectCdp(webSocketDebuggerUrl) {
 
 async function evaluate(cdp, expression) {
   const result = await cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "Browser evaluation failed");
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || "Browser evaluation failed");
   return result.result?.value;
 }
 
@@ -183,7 +185,7 @@ try {
   await cdp.ready;
   await cdp.send("Runtime.enable");
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
-  await cdp.send("Page.navigate", { url: pageUrl });
+  await cdp.send("Page.navigate", { url: browserPageUrl });
   await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.slideStudioAgent)"), "Editor scripts did not load.");
   const initialConnection = await evaluate(cdp, `({
     buttonStatus: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus || "idle",
@@ -208,6 +210,12 @@ try {
   const editSession = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Full browser integration test" })).structuredContent;
   editSessionId = editSession.id;
   await tool("show_notification", { message: "Hello from the full local MCP", tone: "success" });
+  const agentNotification = await evaluate(cdp, `(() => {
+    window.slideStudioLocalMcpBridge.notify("Identity icon regression", "success", { name: "Codex browser test" });
+    const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity")].find((entry) => entry.textContent.includes("Identity icon regression"));
+    return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
+  })()`);
+  if (agentNotification.label !== "Codex" || !agentNotification.icon?.includes("codex-logo-colored")) throw new Error(`MCP notification used the wrong client identity: ${JSON.stringify(agentNotification)}`);
 
   await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
   await waitFor(() => evaluate(cdp, "Boolean(document.querySelector('.dashboard'))"), "Dashboard did not open.");
@@ -255,9 +263,31 @@ try {
     imageCount: document.querySelectorAll('.overlay-box').length
   })`);
   if (visible.title !== "Full MCP browser test" || !visible.texts.includes("Built live through MCP") || visible.connected !== "connected" || visible.imageCount !== 1) throw new Error(`Live DOM did not match: ${JSON.stringify(visible)}`);
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 700, height: 900, deviceScaleFactor: 1, mobile: false });
+  const compactToolbar = await waitFor(() => evaluate(cdp, `(() => {
+    const projectIdentity = document.querySelector(".project-identity");
+    const airdrop = document.querySelector(".airdrop-icon");
+    const github = document.querySelector(".github-mark");
+    if (!projectIdentity || !airdrop || !github) return null;
+    return {
+      projectTitleDisplay: getComputedStyle(projectIdentity).display,
+      hasMobileEditButton: Boolean(document.querySelector(".mobile-edit-button")),
+      airdropWidth: getComputedStyle(airdrop).width,
+      airdropRadius: getComputedStyle(airdrop).borderRadius,
+      githubWidth: getComputedStyle(github).width,
+    };
+  })()`), "Compact editor toolbar did not render.");
+  if (compactToolbar.projectTitleDisplay !== "none" || compactToolbar.hasMobileEditButton || compactToolbar.airdropWidth !== "25px" || compactToolbar.airdropRadius !== "50%" || compactToolbar.githubWidth !== "25px") throw new Error(`Compact toolbar regression: ${JSON.stringify(compactToolbar)}`);
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1800, deviceScaleFactor: 1, mobile: false });
 
   for (const [align, expectedAlignItems] of [["left", "flex-start"], ["right", "flex-end"]]) {
-    await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, updates: [{ id: addedText.createdTextId, align }] });
+    try {
+      await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, updates: [{ id: addedText.createdTextId, align }] });
+    } catch (error) {
+      const browserState = await evaluate(cdp, `({ bridge: window.slideStudioLocalMcpBridge?.getState(), ready: document.readyState, visible: document.visibilityState })`).catch(() => null);
+      const audit = await tool("list_recent_operations", { limit: 10 }).then((result) => result.structuredContent).catch(() => null);
+      throw new Error(`${error.message}\nBrowser state: ${JSON.stringify(browserState)}\nRecent operations: ${JSON.stringify(audit)}`);
+    }
     await cdp.send("Page.reload", { ignoreCache: true });
     await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('.project-title-input')?.value === "Full MCP browser test" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), `Editor did not restore after the ${align}-alignment reload.`);
     let latestGeometry = null;
@@ -321,12 +351,17 @@ try {
   const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
   const temporarySlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Background edit", backgroundColor: "#18181B" })).structuredContent;
   const perLineText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Edited without taking over", role: "subtitle", x: 0.1, y: 0.2, width: 0.8, height: 0.16, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
+  const autoFitText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Short body copy.", role: "body", x: 0.14, y: 0.5, width: 0.72, height: 0.045, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
+  const autoFitBefore = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide.texts.find((text) => text.id === autoFitText.createdTextId);
+  const autoFitUpdate = (await tool("update_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, updates: [{ id: autoFitText.createdTextId, text: "Most chatbots make you paste the thread, name the project, and fake your own voice. This private memory layer already understands what you have been working on across apps, tabs, documents, and meetings. Press a shortcut in any text field to write a reply, summarize messy work, recall something you saw, or rewrite a highlight without touching the rest." }] })).structuredContent;
   const fullBoxText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "A full box should fit this body copy instead of leaving a huge empty rectangle around it.", role: "body", x: 0.1, y: 0.42, width: 0.8, height: 0.48, style: "boxed", background: "black", backgroundShape: "full", align: "left", color: "#FFFFFF" })).structuredContent;
   const fitted = (await tool("fit_text_boxes", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, textIds: [fullBoxText.createdTextId] })).structuredContent;
   const backgroundSlide = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide;
   const perLineLayer = backgroundSlide.texts.find((text) => text.id === perLineText.createdTextId);
+  const autoFitLayer = backgroundSlide.texts.find((text) => text.id === autoFitText.createdTextId);
   const fullBoxLayer = backgroundSlide.texts.find((text) => text.id === fullBoxText.createdTextId);
   if (perLineLayer?.role !== "subtitle" || perLineLayer.size !== 76 || perLineLayer.backgroundShape !== "lines") throw new Error(`Role defaults or per-line preference failed: ${JSON.stringify(perLineLayer)}`);
+  if (!autoFitText.fittedTextBox?.automatic || !autoFitUpdate.fittedTextBoxes?.[0]?.automatic || autoFitLayer.height <= autoFitBefore.height || autoFitLayer.y + autoFitLayer.height > 1.0001) throw new Error(`Automatic MCP text-height fitting failed: ${JSON.stringify({ autoFitText, autoFitBefore, autoFitUpdate, autoFitLayer })}`);
   if (fullBoxLayer?.role !== "body" || fullBoxLayer.size !== 60 || fullBoxLayer.height >= 0.48 || fitted.fittedTextBoxes?.[0]?.id !== fullBoxText.createdTextId) throw new Error(`Full-box content fitting failed: ${JSON.stringify({ fullBoxLayer, fitted })}`);
   const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   if (JSON.stringify(preservedView) !== JSON.stringify(pinnedView)) throw new Error(`Background project edits changed the user's view: ${JSON.stringify({ pinnedView, preservedView })}`);
@@ -340,7 +375,7 @@ try {
 
   const inspected = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).structuredContent;
   if (inspected.project.name !== "Full MCP verified" || inspected.project.slides.length !== 1 || inspected.slide.texts.length !== 2 || inspected.slide.images.length !== 1 || inspected.slide.images[0].id !== image.createdImageId || inspected.view.showTikTokOverlay !== true) throw new Error(`Unexpected final state: ${JSON.stringify(inspected)}`);
-  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: pageUrl });
+  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: browserPageUrl });
   const secondPage = await waitFor(async () => (await waitForJson("/json/list")).find((page) => page.id === secondTargetId), "Second editor tab did not open.");
   secondCdp = connectCdp(secondPage.webSocketDebuggerUrl);
   await secondCdp.ready;
@@ -371,13 +406,13 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 32, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   secondCdp?.close();
   cdp?.close();
   mcp.stdin.end();
   if (!sharedDaemon) {
-    const daemonState = await readFile(join(stateDirectory, "daemon-43117.json"), "utf8").then(JSON.parse).catch(() => null);
+    const daemonState = await readFile(join(stateDirectory, `daemon-${bridgePort}.json`), "utf8").then(JSON.parse).catch(() => null);
     if (daemonState?.pid) try { process.kill(daemonState.pid, "SIGTERM"); } catch { /* Already exited. */ }
   }
   const stopChild = async (child) => {
