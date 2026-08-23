@@ -9,6 +9,7 @@ const LOCAL_MCP_HEARTBEAT_MS = 10_000;
 const LOCAL_MCP_REQUEST_TIMEOUT_MS = 8_000;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
+const LOCAL_MCP_ACTIVITY_CHANNEL = "slide-studio:mcp-activity";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
 function localMcpConnectionWasRemembered() {
@@ -60,6 +61,7 @@ const localMcpBridgeState = {
   statusMessage: "Not connected",
   lastFocusedElement: null,
 };
+const localMcpActivityChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel(LOCAL_MCP_ACTIVITY_CHANNEL) : null;
 
 async function localMcpRequest(path, init = {}) {
   const { timeoutMs = path.startsWith("/events?") ? 0 : LOCAL_MCP_REQUEST_TIMEOUT_MS, ...fetchInit } = init;
@@ -180,6 +182,24 @@ function localMcpNotify(message, tone = "agent", agent = null) {
     window.setTimeout(() => item.remove(), 220);
   }, 4200);
 }
+
+function localMcpBroadcastActivity(message, tone = "agent", agent = null, { dashboardOnly = false } = {}) {
+  if (!dashboardOnly || document.querySelector(".dashboard")) localMcpNotify(message, tone, agent);
+  localMcpActivityChannel?.postMessage({
+    sourceEditorId: localMcpBridgeState.editorId,
+    message: String(message || "").trim().slice(0, 240),
+    tone,
+    agent,
+    dashboardOnly,
+  });
+}
+
+localMcpActivityChannel?.addEventListener("message", (event) => {
+  const activity = event.data;
+  if (!activity || activity.sourceEditorId === localMcpBridgeState.editorId || typeof activity.message !== "string") return;
+  if (activity.dashboardOnly && !document.querySelector(".dashboard")) return;
+  localMcpNotify(activity.message, activity.tone, activity.agent);
+});
 
 function localMcpEnsureModal() {
   let backdrop = document.querySelector("#agent-connect-modal");
@@ -465,14 +485,14 @@ async function localMcpPoll() {
       continue;
     }
     localMcpAddEvent(`Tool call: ${event.toolName}`);
-    localMcpNotify(event.label || "Editing the current slide…", "agent", event.agent);
+    localMcpBroadcastActivity(event.label || "Editing the current slide…", "agent", event.agent);
     try {
       const result = await window.slideStudioAgent.execute(event.operation);
       await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: true, result, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Applied: ${event.toolName}`);
-      if (event.toolName === "create_project" && document.querySelector(".dashboard")) {
+      if (event.toolName === "create_project") {
         const projectName = String(result?.name || event.operation?.name || "New project").trim().slice(0, 160);
-        localMcpNotify(`Created ${projectName}`, "success", event.agent);
+        localMcpBroadcastActivity(`Created ${projectName}`, "success", event.agent, { dashboardOnly: true });
       }
     } catch (error) {
       await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: false, error: error.message, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
@@ -506,6 +526,7 @@ window.addEventListener("beforeunload", () => {
   localMcpBridgeState.stopped = true;
   localMcpBridgeState.shouldReconnect = false;
   window.clearInterval(localMcpHeartbeatTimer);
+  localMcpActivityChannel?.close();
 });
 window.addEventListener("focus", localMcpActivateVisibleEditor);
 document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);
