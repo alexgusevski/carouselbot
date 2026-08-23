@@ -68,7 +68,8 @@ async function tool(name, args = {}) {
 }
 
 const chrome = spawn(chromePath, [
-  "--headless=new", "--disable-background-networking", "--disable-component-update", "--no-first-run",
+  "--headless=new", "--disable-background-networking", "--disable-component-update", "--disable-breakpad",
+  "--disable-crash-reporter", "--noerrdialogs", "--no-first-run",
   "--no-default-browser-check", "--window-size=2400,1800", `--remote-debugging-port=${debuggingPort}`,
   `--user-data-dir=${profile}`, "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
@@ -85,6 +86,27 @@ async function waitForJson(path) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Chrome DevTools endpoint did not start.");
+}
+
+async function closeChromeGracefully() {
+  if (chrome.exitCode != null) return;
+  let control;
+  try {
+    const response = await fetch(`http://127.0.0.1:${debuggingPort}/json/version`);
+    if (!response.ok) return;
+    const version = await response.json();
+    control = connectCdp(version.webSocketDebuggerUrl);
+    await control.ready;
+    await Promise.race([
+      control.send("Browser.close").catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
+    await Promise.race([
+      new Promise((resolve) => chrome.once("exit", resolve)),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]);
+  } catch { /* Chrome may already be closing. */ }
+  finally { control?.close(); }
 }
 
 function connectCdp(webSocketDebuggerUrl) {
@@ -198,6 +220,12 @@ try {
   }
   await evaluate(cdp, `document.querySelector('[data-action="connect-agent"]').click()`);
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('[data-local-mcp-connect]'))`), "MCP connection dialog did not open.");
+  const statusAlignment = await evaluate(cdp, `(() => {
+    const status = document.querySelector(".agent-connect-actions .agent-connection-status");
+    const style = status && getComputedStyle(status);
+    return style ? { justifySelf: style.justifySelf, justifyContent: style.justifyContent, textAlign: style.textAlign } : null;
+  })()`);
+  if (statusAlignment?.justifySelf !== "start" || statusAlignment.justifyContent !== "flex-start" || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
   await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
   const remembered = await evaluate(cdp, `localStorage.getItem("slide-studio:mcp-connected")`);
@@ -394,6 +422,11 @@ try {
   })()`);
   try {
     await tool("update_project", { projectId: createdProject.projectId, name: "Cross-tab sync verified" });
+    const crossTabActivity = await waitFor(() => evaluate(secondCdp, `(() => {
+      const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity")].find((entry) => entry.textContent.includes("Updating the project"));
+      return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
+    })()`), "A tool action performed in another editor was not announced in this tab.");
+    if (crossTabActivity.label !== "Codex" || !crossTabActivity.icon?.includes("codex-logo-colored")) throw new Error(`Cross-tab activity used the wrong client identity: ${JSON.stringify(crossTabActivity)}`);
     await waitFor(() => evaluate(secondCdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === "Cross-tab sync verified")`), "The dashboard did not receive the cross-tab project update.");
     await waitFor(() => evaluate(secondCdp, `(() => {
       const image = document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]');
@@ -411,8 +444,9 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, dashboardProjectNotification: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
+  await closeChromeGracefully();
   secondCdp?.close();
   cdp?.close();
   mcp.stdin.end();
