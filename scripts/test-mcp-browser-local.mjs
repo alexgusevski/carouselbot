@@ -67,7 +67,7 @@ async function tool(name, args = {}) {
 
 const chrome = spawn(chromePath, [
   "--headless=new", "--disable-background-networking", "--disable-component-update", "--no-first-run",
-  "--no-default-browser-check", "--window-size=1440,1000", `--remote-debugging-port=${debuggingPort}`,
+  "--no-default-browser-check", "--window-size=2400,1800", `--remote-debugging-port=${debuggingPort}`,
   `--user-data-dir=${profile}`, "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
 chrome.stderr.setEncoding("utf8");
@@ -194,11 +194,9 @@ try {
   if (initialConnection.buttonStatus !== "idle" || initialConnection.remembered !== null || initialEditors.some((editor) => editor.id === initialConnection.editorId)) {
     throw new Error(`The browser contacted MCP before the user opted in: ${JSON.stringify({ initialConnection, initialEditors })}`);
   }
-  await evaluate(cdp, `(async () => {
-    document.querySelector('[data-action="connect-agent"]').click();
-    document.querySelector('[data-local-mcp-connect]').click();
-    return true;
-  })()`);
+  await evaluate(cdp, `document.querySelector('[data-action="connect-agent"]').click()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('[data-local-mcp-connect]'))`), "MCP connection dialog did not open.");
+  await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
   const remembered = await evaluate(cdp, `localStorage.getItem("slide-studio:mcp-connected")`);
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
@@ -273,8 +271,8 @@ try {
       ? Math.abs(geometry.pathLeft - geometry.contentLeft)
       : Math.abs(geometry.pathRight - geometry.contentRight);
     const minimumPadding = Math.max(0.002, geometry.pathWidth * 0.01);
-    const paddingTolerance = Math.max(0.03, geometry.pathWidth * 0.02);
-    if (geometry.align !== align || geometry.alignItems !== expectedAlignItems || alignedEdgeDelta > paddingTolerance || geometry.leftPadding < minimumPadding || geometry.rightPadding < minimumPadding || Math.abs(geometry.cssPaddingLeft - geometry.cssPaddingRight) > 0.001) {
+    const paddingTolerance = 2;
+    if (geometry.align !== align || geometry.alignItems !== expectedAlignItems || alignedEdgeDelta > paddingTolerance || geometry.leftPadding < minimumPadding || geometry.rightPadding < minimumPadding || Math.abs(geometry.leftPadding - geometry.rightPadding) > paddingTolerance || Math.abs(geometry.cssPaddingLeft - geometry.cssPaddingRight) > 0.001) {
       throw new Error(`Boxed ${align}-aligned text padding changed after reload: ${JSON.stringify(geometry)}`);
     }
   }
