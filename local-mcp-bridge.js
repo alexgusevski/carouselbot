@@ -6,6 +6,7 @@ const LOCAL_MCP_BRIDGE_URL = (() => {
 })();
 const LOCAL_MCP_RETRY_MS = 1200;
 const LOCAL_MCP_HEARTBEAT_MS = 10_000;
+const LOCAL_MCP_REQUEST_TIMEOUT_MS = 8_000;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
@@ -47,6 +48,7 @@ const localMcpBridgeState = {
   connecting: false,
   shouldReconnect: false,
   reconnectLoopRunning: false,
+  reconnectFailures: 0,
   connectionRemembered: localMcpConnectionWasRemembered(),
   stopped: false,
   editorId: localMcpEditorId(),
@@ -59,14 +61,22 @@ const localMcpBridgeState = {
   lastFocusedElement: null,
 };
 
-function localMcpRequest(path, init = {}) {
+async function localMcpRequest(path, init = {}) {
+  const { timeoutMs = path.startsWith("/events?") ? 0 : LOCAL_MCP_REQUEST_TIMEOUT_MS, ...fetchInit } = init;
   const headers = new Headers(init.headers || {});
   if (localMcpBridgeState.sessionToken && path !== "/connect") headers.set("Authorization", `Bearer ${localMcpBridgeState.sessionToken}`);
-  const requestInit = { mode: "cors", cache: "no-store", ...init, headers };
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(new DOMException("Local companion request timed out.", "TimeoutError")), timeoutMs) : null;
+  const requestInit = { mode: "cors", cache: "no-store", ...fetchInit, headers, ...(controller ? { signal: controller.signal } : {}) };
   try {
-    return fetch(new Request(`${LOCAL_MCP_BRIDGE_URL}${path}`, { ...requestInit, targetAddressSpace: "loopback" }));
-  } catch {
-    return fetch(`${LOCAL_MCP_BRIDGE_URL}${path}`, requestInit);
+    try {
+      return await fetch(new Request(`${LOCAL_MCP_BRIDGE_URL}${path}`, { ...requestInit, targetAddressSpace: "loopback" }));
+    } catch (error) {
+      if (controller?.signal.aborted) throw error;
+      return await fetch(`${LOCAL_MCP_BRIDGE_URL}${path}`, requestInit);
+    }
+  } finally {
+    if (timer) window.clearTimeout(timer);
   }
 }
 
@@ -288,7 +298,12 @@ async function localMcpPermissionWasDenied() {
 }
 
 async function localMcpConnectFromClick() {
-  if (localMcpBridgeState.connected || localMcpBridgeState.connecting || localMcpBridgeState.reconnectLoopRunning) return;
+  if (localMcpBridgeState.connected || localMcpBridgeState.connecting) return;
+  if (localMcpBridgeState.reconnectLoopRunning) {
+    localMcpBridgeState.reconnectFailures = 0;
+    localMcpSetStatus("connecting", "Retrying the local companion…");
+    return;
+  }
   localMcpBridgeState.connecting = true;
   localMcpSetStatus("connecting", "Requesting access to the local companion…");
   try {
@@ -327,6 +342,7 @@ async function localMcpDisconnectFromClick() {
   localMcpBridgeState.sessionToken = null;
   localMcpBridgeState.agents = [];
   localMcpBridgeState.editSessions = [];
+  localMcpBridgeState.reconnectFailures = 0;
   localMcpSetStatus("idle", "Not connected");
   localMcpAddEvent("Browser disconnected by user");
 }
@@ -353,6 +369,7 @@ async function localMcpHandshake() {
   localMcpBridgeState.agents = result.agents || [];
   localMcpBridgeState.editSessions = result.editSessions || [];
   localMcpBridgeState.connected = true;
+  localMcpBridgeState.reconnectFailures = 0;
   localMcpAddEvent("Companion handshake completed");
   localMcpSetStatus("connected", "Connected locally");
   localMcpNotify(localMcpBridgeState.agents.length ? "Connected and ready to edit" : "Local companion connected; waiting for an agent", "success", localMcpBridgeState.agents[0]);
@@ -413,7 +430,11 @@ async function localMcpPollWithReconnect() {
         localMcpBridgeState.connected = false;
         localMcpBridgeState.connecting = false;
         localMcpBridgeState.sessionToken = null;
-        localMcpSetStatus("connecting", "Reconnecting to the local companion…");
+        localMcpBridgeState.reconnectFailures += 1;
+        const waiting = localMcpBridgeState.reconnectFailures > 1;
+        localMcpSetStatus(waiting ? "error" : "connecting", waiting
+          ? "Local companion unavailable. Retrying automatically…"
+          : "Reconnecting to the local companion…");
         await new Promise((resolve) => setTimeout(resolve, LOCAL_MCP_RETRY_MS));
       }
     }
@@ -428,6 +449,7 @@ async function localMcpResumeRememberedConnection() {
   if (localMcpBridgeState.connected || localMcpBridgeState.connecting || localMcpBridgeState.reconnectLoopRunning) return;
   localMcpBridgeState.shouldReconnect = true;
   localMcpBridgeState.connecting = true;
+  localMcpBridgeState.reconnectFailures = 0;
   localMcpSetStatus("connecting", "Reconnecting to the local companion…");
   void localMcpPollWithReconnect();
 }
