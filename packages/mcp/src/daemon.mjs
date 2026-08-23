@@ -17,7 +17,8 @@ const COMMAND_TIMEOUT_MS = 90_000;
 const EDIT_SESSION_TTL_MS = Number(process.env.SLIDE_STUDIO_EDIT_SESSION_TTL_MS) || 5 * 60_000;
 const MAX_AUDIT_EVENTS = 500;
 const MAX_AUDIT_BYTES = 2 * 1024 * 1024;
-const EVENT_POLL_TIMEOUT_MS = Number(process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS) || 5 * 60_000;
+const EVENT_POLL_TIMEOUT_MS = Number(process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS) || 500;
+const MAX_EVENT_POLL_TIMEOUT_MS = 5_000;
 const daemonSecret = randomBytes(32).toString("base64url");
 const editors = new Map();
 const clients = new Map();
@@ -547,6 +548,10 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/events" && request.method === "GET") {
       const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
       if (!editor) return;
+      const requestedWait = Number(url.searchParams.get("wait"));
+      const waitMs = url.searchParams.has("wait") && Number.isFinite(requestedWait)
+        ? Math.min(MAX_EVENT_POLL_TIMEOUT_MS, Math.max(0, requestedWait))
+        : EVENT_POLL_TIMEOUT_MS;
       editor.cors = cors;
       if (editor.poll) endEditorPoll(editor);
       editor.poll = response;
@@ -558,10 +563,12 @@ const server = createServer(async (request, response) => {
         editor.lastSeen = Date.now();
       });
       deliverNext(editor);
-      if (editor.poll) editor.pollTimer = setTimeout(() => {
+      if (editor.poll && waitMs === 0) {
+        endEditorPoll(editor);
+      } else if (editor.poll) editor.pollTimer = setTimeout(() => {
         if (editor.poll !== response) return;
         endEditorPoll(editor);
-      }, EVENT_POLL_TIMEOUT_MS);
+      }, waitMs);
       editor.pollTimer?.unref();
       return;
     }

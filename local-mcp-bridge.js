@@ -7,6 +7,8 @@ const LOCAL_MCP_BRIDGE_URL = (() => {
 const LOCAL_MCP_RETRY_MS = 1200;
 const LOCAL_MCP_HEARTBEAT_MS = 10_000;
 const LOCAL_MCP_REQUEST_TIMEOUT_MS = 8_000;
+const LOCAL_MCP_EVENT_REQUEST_TIMEOUT_MS = 1_500;
+const LOCAL_MCP_POLL_INTERVAL_MS = 250;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
 const LOCAL_MCP_ACTIVITY_CHANNEL = "slide-studio:mcp-activity";
@@ -476,8 +478,18 @@ async function localMcpResumeRememberedConnection() {
 
 async function localMcpPoll() {
   while (!localMcpBridgeState.stopped && localMcpBridgeState.connected) {
-    const response = await localMcpRequest(`/events?editorId=${encodeURIComponent(localMcpBridgeState.editorId)}`);
-    if (response.status === 204) continue;
+    let response;
+    try {
+      response = await localMcpRequest(`/events?editorId=${encodeURIComponent(localMcpBridgeState.editorId)}&wait=0`, { timeoutMs: LOCAL_MCP_EVENT_REQUEST_TIMEOUT_MS });
+    } catch (error) {
+      if (!["AbortError", "TimeoutError"].includes(error?.name)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, LOCAL_MCP_POLL_INTERVAL_MS));
+      continue;
+    }
+    if (response.status === 204) {
+      await new Promise((resolve) => setTimeout(resolve, LOCAL_MCP_POLL_INTERVAL_MS));
+      continue;
+    }
     if (!response.ok) throw new Error(`Event poll returned ${response.status}`);
     const event = await response.json();
     if (event.kind === "system") {
