@@ -1016,7 +1016,10 @@ function renderDashboard() {
     </main>
   `;
   bindDashboardEvents();
-  requestAnimationFrame(() => refreshAllProjectCovers(sortedProjects));
+  // The dashboard DOM is already mounted. Start composing covers immediately so
+  // background tabs are not left with raw solid-color slide backgrounds while
+  // requestAnimationFrame is throttled or paused by the browser.
+  refreshAllProjectCovers(sortedProjects);
 }
 
 function projectCoverSignature(project) {
