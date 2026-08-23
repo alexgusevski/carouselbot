@@ -197,6 +197,7 @@ async function boxedLineGeometry(cdp, textId) {
 
 let cdp;
 let secondCdp;
+const additionalCdps = [];
 try {
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "Codex browser test", version: "1" } });
   mcp.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`);
@@ -414,6 +415,17 @@ try {
   await secondCdp.ready;
   await secondCdp.send("Runtime.enable");
   await waitFor(() => evaluate(secondCdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Second editor did not restore the remembered connection.");
+  for (let index = 0; index < 5; index += 1) {
+    const { targetId } = await cdp.send("Target.createTarget", { url: browserPageUrl });
+    const page = await waitFor(async () => (await waitForJson("/json/list")).find((item) => item.id === targetId), `Stress editor ${index + 3} did not open.`);
+    const extraCdp = connectCdp(page.webSocketDebuggerUrl);
+    await extraCdp.ready;
+    await extraCdp.send("Runtime.enable");
+    await waitFor(() => evaluate(extraCdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), `Stress editor ${index + 3} did not restore the remembered connection.`);
+    additionalCdps.push(extraCdp);
+  }
+  const stressEditors = (await tool("list_editors")).structuredContent.editors;
+  if (stressEditors.length < 7) throw new Error(`Seven-tab transport stress setup connected only ${stressEditors.length} editors.`);
   const previousCoverUrl = await waitFor(() => evaluate(secondCdp, `document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')?.src || ""`), "The dashboard did not render its initial composed project cover.");
   await evaluate(secondCdp, `(() => {
     window.__slideStudioOriginalRequestAnimationFrame = window.requestAnimationFrame;
@@ -421,7 +433,9 @@ try {
     return true;
   })()`);
   try {
+    const stressStartedAt = Date.now();
     await tool("update_project", { projectId: createdProject.projectId, name: "Cross-tab sync verified" });
+    if (Date.now() - stressStartedAt > 5_000) throw new Error("A browser operation took over five seconds with seven connected editors.");
     const crossTabActivity = await waitFor(() => evaluate(secondCdp, `(() => {
       const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity")].find((entry) => entry.textContent.includes("Updating the project"));
       return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
@@ -444,9 +458,10 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
+  for (const extraCdp of additionalCdps) extraCdp.close();
   secondCdp?.close();
   cdp?.close();
   mcp.stdin.end();
