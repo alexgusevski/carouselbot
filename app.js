@@ -17,6 +17,7 @@ const HISTORY_LIMIT = 200;
 const BOX_TEXT_LINE_HEIGHT = 1.12;
 const BOX_LINE_HEIGHT = 1.42;
 const BOX_HORIZONTAL_PADDING = 0.52;
+const TEXT_BOX_EDGE_PADDING = 0.3;
 const BOX_CORNER_RADIUS = 0.27;
 const BOX_JUNCTION_RADIUS = 0.18;
 const FONT_SIZE_MIN = 20;
@@ -2219,7 +2220,12 @@ function measureFont(text) {
 
 function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - fontSize * 0.32);
+  const boxWidth = box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width;
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const horizontalInset = perLineBox
+    ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
+    : fontSize * 0.32;
+  const maxWidth = Math.max(1, boxWidth - horizontalInset);
   return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
 }
 
@@ -3873,6 +3879,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const horizontalPadding = fontSize * BOX_HORIZONTAL_PADDING;
+  const edgePadding = perLineBox ? fontSize * TEXT_BOX_EDGE_PADDING : 0;
   const verticalPadding = fontSize * 0.1;
   const color = textColor(text);
   context.save();
@@ -3883,15 +3890,19 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   context.textBaseline = "middle";
   context.lineJoin = "round";
   context.lineCap = "round";
-  const lines = wrapText(context, text.text, Math.max(1, width - fontSize * 0.32));
+  const wrapInset = perLineBox ? (edgePadding + horizontalPadding) * 2 : fontSize * 0.32;
+  const lines = wrapText(context, text.text, Math.max(1, width - wrapInset));
   const visibleLineCount = Math.max(1, Math.floor((height - verticalPadding * 2) / lineHeight));
   const visibleLines = lines.slice(0, visibleLineCount);
   const blockHeight = visibleLines.length * lineHeight;
   const startY = y + (height - blockHeight) / 2 + lineHeight / 2;
-  const pillWidths = visibleLines.map((line) => Math.min(width, context.measureText(line || " ").width + horizontalPadding * 2));
+  const innerWidth = width - edgePadding * 2;
+  const pillWidths = visibleLines.map((line) => Math.min(innerWidth, context.measureText(line || " ").width + horizontalPadding * 2));
   const alignedTextInset = perLineBox ? horizontalPadding : fontSize * 0.16;
-  const textX = align === "left" ? x + alignedTextInset : align === "right" ? x + width - alignedTextInset : x + width / 2;
-  const pillStart = (pillWidth) => align === "left" ? x : align === "right" ? x + width - pillWidth : x + (width - pillWidth) / 2;
+  const contentLeft = x + edgePadding;
+  const contentRight = x + width - edgePadding;
+  const textX = align === "left" ? contentLeft + alignedTextInset : align === "right" ? contentRight - alignedTextInset : x + width / 2;
+  const pillStart = (pillWidth) => align === "left" ? contentLeft : align === "right" ? contentRight - pillWidth : x + (width - pillWidth) / 2;
 
   if (text.style === "boxed" && text.backgroundShape === "full") {
     context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
