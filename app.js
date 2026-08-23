@@ -1,6 +1,8 @@
 const DB_NAME = "slide-studio-db";
 const DB_VERSION = 1;
 const STORE_NAME = "projects";
+const PROJECT_CHANNEL_NAME = "slide-studio-projects-v1";
+const PROJECT_SYNC_STORAGE_KEY = "slide-studio:project-change";
 const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
@@ -15,6 +17,7 @@ const HISTORY_LIMIT = 200;
 const BOX_TEXT_LINE_HEIGHT = 1.12;
 const BOX_LINE_HEIGHT = 1.42;
 const BOX_HORIZONTAL_PADDING = 0.52;
+const TEXT_BOX_EDGE_PADDING = 0.3;
 const BOX_CORNER_RADIUS = 0.27;
 const BOX_JUNCTION_RADIUS = 0.18;
 const FONT_SIZE_MIN = 20;
@@ -63,6 +66,9 @@ const state = {
   thumbnailUrls: new Map(),
   thumbnailSignatures: new Map(),
   thumbnailVersions: new Map(),
+  projectCoverUrls: new Map(),
+  projectCoverSignatures: new Map(),
+  projectCoverVersions: new Map(),
   slideRailScrollPositions: new Map(),
   pendingSlideBackgroundTarget: null,
   croppingOverlayId: null,
@@ -71,6 +77,9 @@ const state = {
   copiedLayer: null,
   shareAllCache: null,
 };
+
+const projectChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel(PROJECT_CHANNEL_NAME) : null;
+const projectChannelSource = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 
 const history = {
   past: [],
@@ -90,19 +99,24 @@ function cloneProject(project) {
   };
 }
 
-function recordHistory() {
-  const project = activeProject();
+function recordHistory(project = activeProject()) {
   if (!project || history.applying) return;
   history.past.push(cloneProject(project));
   if (history.past.length > HISTORY_LIMIT) history.past.shift();
-  history.future = [];
+  history.future = history.future.filter((snapshot) => snapshot.id !== project.id);
 }
 
-function applyHistorySnapshot(snapshot) {
+function takeProjectHistorySnapshot(stack, projectId) {
+  const index = stack.findLastIndex((snapshot) => snapshot.id === projectId);
+  return index < 0 ? null : stack.splice(index, 1)[0];
+}
+
+async function applyHistorySnapshot(snapshot) {
   const index = state.projects.findIndex((project) => project.id === snapshot.id);
   if (index < 0) return;
+  const expectedRevision = Number(state.projects[index].revision) || 0;
   history.applying = true;
-  state.projects[index] = cloneProject(snapshot);
+  state.projects[index] = { ...cloneProject(snapshot), revision: expectedRevision + 1, updatedAt: Date.now() };
   state.activeProjectId = snapshot.id;
   if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
     state.activeSlideId = state.projects[index].slides[0]?.id || null;
@@ -110,24 +124,35 @@ function applyHistorySnapshot(snapshot) {
   setLayerSelection(selectedLayerKeys());
   state.croppingOverlayId = null;
   renderEditor();
-  putProject(state.projects[index]).catch((error) => console.error(error));
-  history.applying = false;
+  try {
+    await putProject(state.projects[index], { expectedRevision });
+  } catch (error) {
+    console.error(error);
+    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(snapshot.id);
+    throw error;
+  } finally {
+    history.applying = false;
+  }
 }
 
 function undo() {
-  if (!history.past.length || isEditingTextTarget(document.activeElement)) return;
+  if (isEditingTextTarget(document.activeElement)) return;
   const project = activeProject();
   if (!project) return;
+  const snapshot = takeProjectHistorySnapshot(history.past, project.id);
+  if (!snapshot) return;
   history.future.push(cloneProject(project));
-  applyHistorySnapshot(history.past.pop());
+  return applyHistorySnapshot(snapshot);
 }
 
 function redo() {
-  if (!history.future.length || isEditingTextTarget(document.activeElement)) return;
+  if (isEditingTextTarget(document.activeElement)) return;
   const project = activeProject();
   if (!project) return;
+  const snapshot = takeProjectHistorySnapshot(history.future, project.id);
+  if (!snapshot) return;
   history.past.push(cloneProject(project));
-  applyHistorySnapshot(history.future.pop());
+  return applyHistorySnapshot(snapshot);
 }
 
 const app = document.querySelector("#app");
@@ -151,7 +176,7 @@ function routeFromPathname(pathname = window.location.pathname) {
 
 function updateBrowserRoute(path, historyMode) {
   if (historyMode === "none" || window.location.pathname === path) return;
-  window.history[historyMode === "replace" ? "replaceState" : "pushState"]({}, "", path);
+  window.history[historyMode === "replace" ? "replaceState" : "pushState"]({}, "", `${path}${window.location.search}${window.location.hash}`);
 }
 
 function escapeHtml(value = "") {
@@ -247,21 +272,122 @@ function getAllProjects() {
   });
 }
 
-function putProject(project) {
+function getProjectFromDb(projectId) {
   return new Promise((resolve, reject) => {
-    const request = state.db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).put(project);
-    request.onsuccess = () => resolve();
+    const request = state.db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(projectId);
+    request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
   });
 }
 
-function deleteProjectFromDb(projectId) {
+function staleProjectError(projectId, expectedRevision, actualRevision) {
+  const error = new Error(`Project ${projectId} changed in another tab (expected revision ${expectedRevision}, current ${actualRevision}). The latest project was reloaded; inspect it and retry with current IDs.`);
+  error.code = "STALE_PROJECT";
+  error.expectedRevision = expectedRevision;
+  error.actualRevision = actualRevision;
+  return error;
+}
+
+function announceProjectEvent(event) {
+  projectChannel?.postMessage(event);
+  try {
+    localStorage.setItem(PROJECT_SYNC_STORAGE_KEY, JSON.stringify({ ...event, nonce: uid() }));
+  } catch { /* BroadcastChannel remains the primary same-origin sync path. */ }
+}
+
+function announceProjectChange(type, project) {
+  announceProjectEvent({ type, source: projectChannelSource, projectId: project.id, revision: Number(project.revision) || 0, updatedAt: Number(project.updatedAt) || 0 });
+}
+
+function putProject(project, { expectedRevision = null, broadcast = true } = {}) {
   return new Promise((resolve, reject) => {
-    const request = state.db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(projectId);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    let conflict = null;
+    const read = store.get(project.id);
+    read.onerror = () => reject(read.error);
+    read.onsuccess = () => {
+      const actualRevision = Number(read.result?.revision) || 0;
+      if (expectedRevision != null && actualRevision !== Number(expectedRevision)) {
+        conflict = staleProjectError(project.id, Number(expectedRevision), actualRevision);
+        transaction.abort();
+        return;
+      }
+      store.put(project);
+    };
+    transaction.oncomplete = () => {
+      if (broadcast) announceProjectChange("project.updated", project);
+      resolve();
+    };
+    transaction.onerror = () => { if (!conflict) reject(transaction.error); };
+    transaction.onabort = () => reject(conflict || transaction.error || new Error("Project save was aborted."));
   });
 }
+
+function deleteProjectFromDb(projectId, { expectedRevision = null, broadcast = true } = {}) {
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    let conflict = null;
+    const read = store.get(projectId);
+    read.onerror = () => reject(read.error);
+    read.onsuccess = () => {
+      const actualRevision = Number(read.result?.revision) || 0;
+      if (expectedRevision != null && actualRevision !== Number(expectedRevision)) {
+        conflict = staleProjectError(projectId, Number(expectedRevision), actualRevision);
+        transaction.abort();
+        return;
+      }
+      store.delete(projectId);
+    };
+    transaction.oncomplete = () => {
+      if (broadcast) announceProjectEvent({ type: "project.deleted", source: projectChannelSource, projectId });
+      resolve();
+    };
+    transaction.onerror = () => { if (!conflict) reject(transaction.error); };
+    transaction.onabort = () => reject(conflict || transaction.error || new Error("Project deletion was aborted."));
+  });
+}
+
+async function reloadProjectFromDb(projectId, { render = true } = {}) {
+  const latest = await getProjectFromDb(projectId);
+  const index = state.projects.findIndex((project) => project.id === projectId);
+  if (!latest) {
+    if (index >= 0) state.projects.splice(index, 1);
+    clearProjectCover(projectId);
+    if (state.activeProjectId === projectId) {
+      state.activeProjectId = null;
+      state.activeSlideId = null;
+      updateBrowserRoute("/", "replace");
+    }
+  } else if (index >= 0) {
+    state.projects[index] = latest;
+    if (state.activeProjectId === projectId && !latest.slides.some((slide) => slide.id === state.activeSlideId)) state.activeSlideId = latest.slides[0]?.id || null;
+  } else state.projects.push(latest);
+  if (render) {
+    if (!state.activeProjectId) renderDashboard();
+    else if (state.activeProjectId === projectId) renderEditor();
+  }
+  return latest;
+}
+
+async function handleExternalProjectEvent(data) {
+  if (!data || data.source === projectChannelSource || !data.projectId || !state.db) return;
+  const local = state.projects.find((project) => project.id === data.projectId);
+  if (data.type === "project.deleted" || !local || Number(data.revision) > (Number(local.revision) || 0) || Number(data.updatedAt) > (Number(local.updatedAt) || 0)) {
+    await reloadProjectFromDb(data.projectId).catch((error) => console.error("Could not synchronize project", error));
+  }
+}
+
+projectChannel?.addEventListener("message", ({ data }) => { void handleExternalProjectEvent(data); });
+window.addEventListener("storage", (event) => {
+  if (event.key !== PROJECT_SYNC_STORAGE_KEY || !event.newValue) return;
+  try {
+    void handleExternalProjectEvent(JSON.parse(event.newValue));
+  } catch (error) {
+    console.error("Could not read project synchronization event", error);
+  }
+});
 
 function activeProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
@@ -679,8 +805,9 @@ function showProjectDeleteConfirmation(projectId) {
     confirmButton.disabled = true;
     confirmButton.textContent = "Removing…";
     try {
-      await deleteProjectFromDb(projectId);
+      await deleteProjectFromDb(projectId, { expectedRevision: Number(project.revision) || 0 });
       project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
+      clearProjectCover(projectId);
       state.slideRailScrollPositions.delete(projectId);
       state.projects = state.projects.filter((item) => item.id !== projectId);
       close();
@@ -688,6 +815,7 @@ function showProjectDeleteConfirmation(projectId) {
       toast("Project removed");
     } catch (error) {
       console.error(error);
+      if (error.code === "STALE_PROJECT") await reloadProjectFromDb(projectId);
       cancelButton.disabled = false;
       confirmButton.disabled = false;
       confirmButton.textContent = "Remove project";
@@ -750,10 +878,15 @@ function scheduleSave() {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
     try {
-      await putProject(project);
+      const baseRevision = Number(project.revision) || 0;
+      project.revision = baseRevision + 1;
+      await putProject(project, { expectedRevision: baseRevision });
     } catch (error) {
       console.error(error);
-      toast("Couldn’t save this project in your browser.");
+      if (error.code === "STALE_PROJECT") {
+        await reloadProjectFromDb(project.id);
+        toast("This project changed in another tab. Reloaded the latest version.");
+      } else toast("Couldn’t save this project in your browser.");
     }
   }, 180);
 }
@@ -804,6 +937,16 @@ function icon(name) {
 
 function renderHeader({ editor = false } = {}) {
   const project = activeProject();
+  const agentConnectButton = `
+    <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect via MCP" title="Connect via MCP">
+      <span class="agent-logo-stack" aria-hidden="true">
+        <img src="/assets/claude-ai-icon-f3a857f4.svg" alt="" />
+        <img src="/assets/codex-logo-colored-53743834.svg" alt="" />
+        <img src="/assets/hermes-agent-icon-e5340726.webp" alt="" />
+      </span>
+      <span class="agent-connect-label">Connect AI</span>
+      <span class="agent-connect-dot" aria-hidden="true"></span>
+    </button>`;
   return `
     <header class="app-header${editor ? " app-header--editor" : ""}">
       <button class="brand" type="button" data-action="home" aria-label="Go to projects">
@@ -817,17 +960,17 @@ function renderHeader({ editor = false } = {}) {
       ` : ""}
       <div class="header-actions">
         ${editor ? `
-          <button class="icon-button mobile-edit-button" type="button" data-action="toggle-inspector" aria-label="Toggle text controls">${icon("edit")}</button>
           <button class="button button--quiet share-button" type="button" data-action="share" aria-label="AirDrop current slide" title="AirDrop current slide" ${activeSlide() ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop</span>
           </button>
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop all</span>
           </button>
+          ${agentConnectButton}
           <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide as PNG" title="Download PNG" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>PNG</span>
           </button>
-        ` : `<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
+        ` : `${agentConnectButton}<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
         <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
       </div>
     </header>
@@ -862,11 +1005,12 @@ function renderDashboard() {
             <span><strong>Start a project</strong><small>Add photos when you’re ready</small></span>
           </button>
           ${sortedProjects.map((project) => {
-            const cover = project.slides[0]?.imageData;
+            const slide = project.slides[0];
+            const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
             return `
               <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
-                <span class="project-preview">
-                  ${cover ? `<img src="${cover}" alt="" />` : `<span class="project-preview-empty">No photos yet</span>`}
+                <span class="project-preview" data-project-cover-id="${project.id}">
+                  ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
                 </span>
                 <span class="project-meta">
                   <strong>${escapeHtml(project.name)}</strong>
@@ -880,6 +1024,72 @@ function renderDashboard() {
     </main>
   `;
   bindDashboardEvents();
+  // The dashboard DOM is already mounted. Start composing covers immediately so
+  // background tabs are not left with raw solid-color slide backgrounds while
+  // requestAnimationFrame is throttled or paused by the browser.
+  refreshAllProjectCovers(sortedProjects);
+}
+
+function projectCoverSignature(project) {
+  const slide = project.slides[0];
+  return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide)}` : "";
+}
+
+async function refreshProjectCover(project) {
+  const slide = project.slides[0];
+  const target = app.querySelector(`[data-project-cover-id="${project.id}"]`);
+  if (!target) return;
+  if (!slide) {
+    clearProjectCover(project.id);
+    target.innerHTML = `<span class="project-preview-empty">No slides yet</span>`;
+    return;
+  }
+  const signature = projectCoverSignature(project);
+  const cachedUrl = state.projectCoverUrls.get(project.id);
+  if (cachedUrl && state.projectCoverSignatures.get(project.id) === signature) {
+    const image = target.querySelector("img");
+    if (image?.src !== cachedUrl) image.src = cachedUrl;
+    image?.setAttribute("data-composite-cover", "true");
+    return;
+  }
+
+  const version = (state.projectCoverVersions.get(project.id) || 0) + 1;
+  state.projectCoverVersions.set(project.id, version);
+  target.classList.add("is-rendering");
+  try {
+    const canvas = await renderSlideCanvas(slide, 270, 480, project);
+    const blob = await canvasToBlob(canvas);
+    if (state.projectCoverVersions.get(project.id) !== version) return;
+    const url = URL.createObjectURL(blob);
+    const previousUrl = state.projectCoverUrls.get(project.id);
+    state.projectCoverUrls.set(project.id, url);
+    state.projectCoverSignatures.set(project.id, signature);
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    const currentTarget = app.querySelector(`[data-project-cover-id="${project.id}"]`);
+    if (currentTarget) {
+      const image = document.createElement("img");
+      image.src = url;
+      image.alt = "";
+      image.dataset.compositeCover = "true";
+      currentTarget.replaceChildren(image);
+      currentTarget.classList.remove("is-rendering");
+    }
+  } catch (error) {
+    console.error("Could not render project cover", error);
+    target.classList.remove("is-rendering");
+  }
+}
+
+function refreshAllProjectCovers(projects = state.projects) {
+  projects.forEach((project) => { void refreshProjectCover(project); });
+}
+
+function clearProjectCover(projectId) {
+  const url = state.projectCoverUrls.get(projectId);
+  if (url) URL.revokeObjectURL(url);
+  state.projectCoverUrls.delete(projectId);
+  state.projectCoverSignatures.delete(projectId);
+  state.projectCoverVersions.delete(projectId);
 }
 
 function renderEditor() {
@@ -1401,7 +1611,7 @@ function renderCurrentRoute() {
 
 function createProject() {
   const now = Date.now();
-  const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, slides: [], assets: [] };
+  const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [] };
   state.projects.push(project);
   openProject(project.id);
   putProject(project).catch((error) => {
@@ -2024,7 +2234,12 @@ function measureFont(text) {
 
 function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const maxWidth = Math.max(1, (box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width) - fontSize * 0.32);
+  const boxWidth = box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width;
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const horizontalInset = perLineBox
+    ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
+    : fontSize * 0.32;
+  const maxWidth = Math.max(1, boxWidth - horizontalInset);
   return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
 }
 
@@ -2706,11 +2921,15 @@ async function handleAssetUpload(event) {
       renderEditor();
       return;
     }
-    await putProject(project);
+    const baseRevision = Number(project.revision) || 0;
+    project.updatedAt = Date.now();
+    project.revision = baseRevision + 1;
+    await putProject(project, { expectedRevision: baseRevision });
     toast(`${added} ${added === 1 ? "asset" : "assets"} uploaded`);
     renderEditor();
   } catch (error) {
     console.error(error);
+    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
     toast("One of those files couldn’t be added.");
     renderEditor();
   }
@@ -3495,7 +3714,7 @@ function loadImage(src) {
   });
 }
 
-async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT) {
+async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT, project = activeProject()) {
   await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
   const image = await loadImage(slide.imageData);
   const canvas = document.createElement("canvas");
@@ -3504,7 +3723,7 @@ async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HE
   const context = canvas.getContext("2d");
   const imageLayout = getImageLayout(slide, width, height);
   context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-  await drawSlideLayers(context, slide, width, height);
+  await drawSlideLayers(context, slide, width, height, project);
   return canvas;
 }
 
@@ -3638,15 +3857,15 @@ async function shareAllSlides() {
   }
 }
 
-async function drawSlideLayers(context, slide, canvasWidth, canvasHeight) {
+async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject()) {
   for (const { kind, item } of slideItems(slide)) {
-    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight);
+    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project);
     else drawTextLayer(context, item, canvasWidth, canvasHeight);
   }
 }
 
-async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight) {
-  const asset = projectAsset(overlay.assetId);
+async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject()) {
+  const asset = project?.assets?.find((item) => item.id === overlay.assetId);
   if (!asset) return;
   const image = await loadImage(asset.imageData);
   const metrics = getOverlayMetrics(overlay, asset);
@@ -3679,6 +3898,7 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const horizontalPadding = fontSize * BOX_HORIZONTAL_PADDING;
+  const edgePadding = perLineBox ? fontSize * TEXT_BOX_EDGE_PADDING : 0;
   const verticalPadding = fontSize * 0.1;
   const color = textColor(text);
   context.save();
@@ -3689,15 +3909,19 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   context.textBaseline = "middle";
   context.lineJoin = "round";
   context.lineCap = "round";
-  const lines = wrapText(context, text.text, Math.max(1, width - fontSize * 0.32));
+  const wrapInset = perLineBox ? (edgePadding + horizontalPadding) * 2 : fontSize * 0.32;
+  const lines = wrapText(context, text.text, Math.max(1, width - wrapInset));
   const visibleLineCount = Math.max(1, Math.floor((height - verticalPadding * 2) / lineHeight));
   const visibleLines = lines.slice(0, visibleLineCount);
   const blockHeight = visibleLines.length * lineHeight;
   const startY = y + (height - blockHeight) / 2 + lineHeight / 2;
-  const pillWidths = visibleLines.map((line) => Math.min(width, context.measureText(line || " ").width + horizontalPadding * 2));
+  const innerWidth = width - edgePadding * 2;
+  const pillWidths = visibleLines.map((line) => Math.min(innerWidth, context.measureText(line || " ").width + horizontalPadding * 2));
   const alignedTextInset = perLineBox ? horizontalPadding : fontSize * 0.16;
-  const textX = align === "left" ? x + alignedTextInset : align === "right" ? x + width - alignedTextInset : x + width / 2;
-  const pillStart = (pillWidth) => align === "left" ? x : align === "right" ? x + width - pillWidth : x + (width - pillWidth) / 2;
+  const contentLeft = x + edgePadding;
+  const contentRight = x + width - edgePadding;
+  const textX = align === "left" ? contentLeft + alignedTextInset : align === "right" ? contentRight - alignedTextInset : x + width / 2;
+  const pillStart = (pillWidth) => align === "left" ? contentLeft : align === "right" ? contentRight - pillWidth : x + (width - pillWidth) / 2;
 
   if (text.style === "boxed" && text.backgroundShape === "full") {
     context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
@@ -4080,6 +4304,7 @@ async function init() {
     state.db = await openDatabase();
     state.projects = await getAllProjects();
     state.projects.forEach((project) => {
+      if (!Number.isFinite(Number(project.revision))) project.revision = 0;
       if (!Array.isArray(project.assets)) project.assets = [];
       project.slides.forEach((slide) => {
         if (slide.imageScale == null) slide.imageScale = 1;
@@ -4094,6 +4319,7 @@ async function init() {
           }
           if (overlay.z == null) overlay.z = index + 1;
         });
+        if (!Array.isArray(slide.texts)) slide.texts = [];
         slide.texts.forEach((text, index) => {
           if (text.outlineWidth == null) text.outlineWidth = DEFAULT_OUTLINE_WIDTH;
           if (!normalizeHexColor(text.color)) text.color = textColor(text);
@@ -4112,6 +4338,12 @@ async function init() {
   }
   renderCurrentRoute();
   window.addEventListener("popstate", renderCurrentRoute);
+  window.addEventListener("pageshow", () => {
+    if (!state.activeProjectId) void refreshDashboardProjects();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !state.activeProjectId) void refreshDashboardProjects();
+  });
   document.addEventListener("paste", (event) => {
     handleClipboardPaste(event);
   });
@@ -4177,4 +4409,21 @@ async function init() {
   });
 }
 
-init();
+let dashboardRefreshPromise = null;
+
+function refreshDashboardProjects() {
+  if (!state.db || state.activeProjectId) return Promise.resolve();
+  if (dashboardRefreshPromise) return dashboardRefreshPromise;
+  dashboardRefreshPromise = getAllProjects()
+    .then((projects) => {
+      if (state.activeProjectId) return;
+      state.projects = projects;
+      renderDashboard();
+      bindGlobalActions();
+    })
+    .catch((error) => console.error("Could not refresh dashboard projects", error))
+    .finally(() => { dashboardRefreshPromise = null; });
+  return dashboardRefreshPromise;
+}
+
+window.slideStudioReady = init();

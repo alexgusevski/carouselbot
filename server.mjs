@@ -12,8 +12,13 @@ const files = new Map([
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/agent-commands.js", ["agent-commands.js", "text/javascript; charset=utf-8"]],
+  ["/local-mcp-bridge.js", ["local-mcp-bridge.js", "text/javascript; charset=utf-8"]],
   ["/assets/TikTokSans.ttf", ["assets/TikTokSans.ttf", "font/ttf"]],
   ["/assets/airdrop.svg", ["assets/airdrop.svg", "image/svg+xml"]],
+  ["/assets/claude-ai-icon-f3a857f4.svg", ["assets/claude-ai-icon-f3a857f4.svg", "image/svg+xml"]],
+  ["/assets/codex-logo-colored-53743834.svg", ["assets/codex-logo-colored-53743834.svg", "image/svg+xml"]],
+  ["/assets/hermes-agent-icon-e5340726.webp", ["assets/hermes-agent-icon-e5340726.webp", "image/webp"]],
   ["/assets/Octicons-mark-github.svg", ["assets/Octicons-mark-github.svg", "image/svg+xml"]],
   ["/assets/favicon.svg", ["assets/favicon.svg", "image/svg+xml"]],
 ]);
