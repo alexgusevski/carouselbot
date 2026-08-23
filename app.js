@@ -921,6 +921,21 @@ function renderEditor() {
     if (activeSlide()) sizeStage();
     refreshAllSlideThumbnails(project.slides);
   });
+  void repaintTextAfterFontLoad(project.id, state.activeSlideId);
+}
+
+async function repaintTextAfterFontLoad(projectId, slideId) {
+  try {
+    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
+    await document.fonts.ready;
+  } catch {
+    return;
+  }
+  if (state.activeProjectId !== projectId || state.activeSlideId !== slideId) return;
+  requestAnimationFrame(() => {
+    if (state.activeProjectId !== projectId || state.activeSlideId !== slideId) return;
+    activeSlide()?.texts.forEach(updateTextBox);
+  });
 }
 
 function renderSlideRail(project) {
@@ -2120,12 +2135,8 @@ function paintTextContent(text, content, box) {
   const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const padX = fontSize * BOX_HORIZONTAL_PADDING;
-  const widths = lines.map((line) => context.measureText(line || " ").width + (perLineBox ? padX * 2 : 0));
   const contentWidth = Math.max(1, content.clientWidth || box?.clientWidth || 1);
-  const nodes = [];
-  if (perLineBox) nodes.push(createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth));
-
-  nodes.push(...lines.map((line) => {
+  const lineNodes = lines.map((line) => {
     if (text.style === "outline") {
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("class", "text-line outline-line");
@@ -2154,8 +2165,17 @@ function paintTextContent(text, content, box) {
     span.className = "text-line";
     span.textContent = line || "\u00a0";
     return span;
-  }));
-  content.replaceChildren(...nodes);
+  });
+  content.replaceChildren(...lineNodes);
+  if (!perLineBox) return;
+
+  const widths = lineNodes.map((lineNode, index) => {
+    const renderedWidth = lineNode.getBoundingClientRect().width;
+    return renderedWidth > 0
+      ? renderedWidth
+      : context.measureText(lines[index] || " ").width + padX * 2;
+  });
+  content.prepend(createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth));
 }
 
 function updateOverlayBox(overlay) {
