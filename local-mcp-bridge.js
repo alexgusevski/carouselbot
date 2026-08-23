@@ -448,6 +448,10 @@ async function localMcpPoll() {
       const result = await window.slideStudioAgent.execute(event.operation);
       await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: true, result, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Applied: ${event.toolName}`);
+      if (event.toolName === "create_project" && document.querySelector(".dashboard")) {
+        const projectName = String(result?.name || event.operation?.name || "New project").trim().slice(0, 160);
+        localMcpNotify(`Created ${projectName}`, "success", event.agent);
+      }
     } catch (error) {
       await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: false, error: error.message, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Failed: ${event.toolName}`);

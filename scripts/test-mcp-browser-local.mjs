@@ -239,6 +239,11 @@ try {
     projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent)
   })`);
   if (!dashboardUpdated.dashboardVisible || !dashboardUpdated.projectNames.includes("Full MCP browser test")) throw new Error(`Dashboard did not update live: ${JSON.stringify(dashboardUpdated)}`);
+  const dashboardProjectNotification = await waitFor(() => evaluate(cdp, `(() => {
+    const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity--success")].find((entry) => entry.textContent.includes("Created Full MCP browser test"));
+    return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
+  })()`), "MCP-created project did not show a dashboard notification.");
+  if (dashboardProjectNotification.label !== "Codex" || !dashboardProjectNotification.icon?.includes("codex-logo-colored")) throw new Error(`Dashboard project notification used the wrong client identity: ${JSON.stringify(dashboardProjectNotification)}`);
   const addedSlide = (await tool("add_slide", { projectId: createdProject.projectId, name: "Live automation", backgroundColor: "#25282E" })).structuredContent;
   const dashboardAfterSlide = await evaluate(cdp, `({ pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), slideCount: [...document.querySelectorAll('.project-card')].find((card) => card.querySelector('.project-meta strong')?.textContent === 'Full MCP browser test')?.querySelector('.project-meta span')?.textContent })`);
   if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.slideCount?.startsWith("1 slide")) throw new Error(`Adding a slide changed the dashboard view: ${JSON.stringify(dashboardAfterSlide)}`);
@@ -406,7 +411,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, dashboardProjectNotification: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   secondCdp?.close();
   cdp?.close();
