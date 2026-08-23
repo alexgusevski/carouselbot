@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { BRIDGE_URL, DAEMON_STATE_PATH, PACKAGE_VERSION, PROTOCOL_VERSION } from "./config.mjs";
+import { preferHostAgent } from "./agent-identity.mjs";
 
 const DAEMON_ENTRY = fileURLToPath(new URL("daemon.mjs", import.meta.url));
 
@@ -91,7 +92,7 @@ export async function createCompanion(initialName = "MCP agent", initialVersion 
     clientId,
     get daemon() { return { pid: state.pid, url: BRIDGE_URL, version: state.version, packageVersion: PACKAGE_VERSION }; },
     async identify(name, version) {
-      clientName = name || clientName;
+      clientName = preferHostAgent(name, clientName);
       clientVersion = version || clientVersion;
       await register();
     },

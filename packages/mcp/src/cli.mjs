@@ -8,7 +8,8 @@ const [command = "serve", ...arguments_] = process.argv.slice(2);
 
 async function main() {
   if (command === "serve") {
-    await serveMcp();
+    const agentName = arguments_.find((value) => value.startsWith("--agent="))?.slice("--agent=".length) || null;
+    await serveMcp({ agentName });
     return;
   }
   if (command === "setup") {
@@ -35,7 +36,7 @@ async function main() {
     return;
   }
   if (command === "help" || command === "--help" || command === "-h") {
-    process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\n\nUsage:\n  slides-studio-mcp serve\n  slides-studio-mcp setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  slides-studio-mcp call <tool> [--json '{"key":"value"}'] [--stdin]\n  slides-studio-mcp doctor\n  slides-studio-mcp restart\n  slides-studio-mcp version\n`);
+    process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\n\nUsage:\n  slides-studio-mcp serve [--agent=claude|codex|hermes|opencode|openclaw]\n  slides-studio-mcp setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  slides-studio-mcp call <tool> [--json '{"key":"value"}'] [--stdin]\n  slides-studio-mcp doctor\n  slides-studio-mcp restart\n  slides-studio-mcp version\n`);
     return;
   }
   throw new Error(`Unknown command: ${command}`);

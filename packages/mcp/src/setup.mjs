@@ -17,10 +17,10 @@ function commandVersion(command) {
 }
 
 function shellCommand(client, specifier) {
-  if (client === "claude") return ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", "slide-studio", "--", "npx", "-y", specifier, "serve"];
-  if (client === "codex") return ["codex", "mcp", "add", "slide-studio", "--", "npx", "-y", specifier, "serve"];
-  if (client === "hermes") return ["hermes", "mcp", "add", "slide-studio", "--command", "npx", "--args", "-y", specifier, "serve"];
-  if (client === "openclaw") return ["openclaw", "mcp", "add", "slide-studio", "--command", "npx", "--arg", "-y", "--arg", specifier, "--arg", "serve"];
+  if (client === "claude") return ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", "slide-studio", "--", "npx", "-y", specifier, "serve", "--agent=claude"];
+  if (client === "codex") return ["codex", "mcp", "add", "slide-studio", "--", "npx", "-y", specifier, "serve", "--agent=codex"];
+  if (client === "hermes") return ["hermes", "mcp", "add", "slide-studio", "--command", "npx", "--args", "-y", specifier, "serve", "--agent=hermes"];
+  if (client === "openclaw") return ["openclaw", "mcp", "add", "slide-studio", "--command", "npx", "--arg", "-y", "--arg", specifier, "--arg", "serve", "--arg", "--agent=openclaw"];
   return null;
 }
 
@@ -35,7 +35,7 @@ function quote(value) {
 }
 
 function openCodeSnippet(specifier, version = commandVersion("opencode")) {
-  const server = { type: "local", command: ["npx", "-y", specifier, "serve"] };
+  const server = { type: "local", command: ["npx", "-y", specifier, "serve", "--agent=opencode"] };
   return JSON.stringify(Number(version?.split(".")[0]) >= 2
     ? { mcp: { servers: { "slide-studio": server } } }
     : { mcp: { "slide-studio": { ...server, enabled: true } } }, null, 2);
