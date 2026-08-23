@@ -83,6 +83,7 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
     const guidance = await rpc.request("tools/call", { name: "get_design_guidance", arguments: {} });
     assert.match(guidance.result.content[0].text, /Treat per-line boxes as the default/);
     assert.match(guidance.result.content[0].text, /fit_text_boxes/);
+    assert.match(guidance.result.content[0].text, /automatically preserve width and fit height/);
     assert.match(guidance.result.content[0].text, /body copy `54–68`/);
 
     const editors = await rpc.request("tools/call", { name: "list_editors", arguments: {} });

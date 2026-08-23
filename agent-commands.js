@@ -1,5 +1,6 @@
 const SLIDE_STUDIO_AGENT_PROTOCOL = 3;
 const AGENT_TEXT_ROLE_SIZES = { title: 104, subtitle: 76, body: 60, caption: 48 };
+const AGENT_TEXT_VERTICAL_SAFETY_PADDING = 0.36;
 
 function agentTextRole(value, requestedRole) {
   if (Object.hasOwn(AGENT_TEXT_ROLE_SIZES, requestedRole)) return requestedRole;
@@ -195,7 +196,7 @@ function agentFitTextBox(text, mode = "both") {
   const lines = wrapText(context, text.text, Math.max(1, fittedWidth - horizontalInset));
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const contentHeight = perLineBox
-    ? Math.max(fontSize * BOX_LINE_HEIGHT, (lines.length - 1) * lineHeight + fontSize * BOX_LINE_HEIGHT) + fontSize * 0.24
+    ? Math.max(fontSize * BOX_LINE_HEIGHT, (lines.length - 1) * lineHeight + fontSize * BOX_LINE_HEIGHT) + fontSize * AGENT_TEXT_VERTICAL_SAFETY_PADDING
     : lines.length * lineHeight + fontSize * (fullBox ? 0.76 : 0.28);
   const fittedHeight = Math.max(OUTPUT_HEIGHT * 0.045, contentHeight);
   const previous = { x: text.x, y: text.y, width: text.width, height: text.height };
@@ -216,6 +217,20 @@ function agentFitTextBox(text, mode = "both") {
     fitted: { x: text.x, y: text.y, width: text.width, height: text.height },
     lineCount: lines.length,
   };
+}
+
+function agentAutoFitTextBox(text) {
+  text.width = clamp(text.width, 0.1, 1);
+  text.x = clamp(text.x, 0, 1 - text.width);
+  const requestedTop = text.y;
+  const result = agentFitTextBox(text, "height");
+  if (text.height > 1) {
+    throw new Error(`Text requires ${result.lineCount} lines and cannot fit on one slide at this width and font size. Shorten it, widen it, reduce it within the role range, or split it across slides.`);
+  }
+  text.y = clamp(requestedTop, 0, 1 - text.height);
+  result.fitted = { x: text.x, y: text.y, width: text.width, height: text.height };
+  result.automatic = true;
+  return result;
 }
 
 function agentApplyImagePatch(image, patch = {}, asset = projectAsset(image.assetId)) {
@@ -401,6 +416,7 @@ async function executeSlideStudioAgentOperation(operation) {
   if (operation.type === "text.add") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
+    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
     const role = agentTextRole(operation.text, operation.role);
     const text = agentApplyTextPatch({
       id: uid(), text: "Your text", x: 0.12, y: 0.4, width: 0.76, height: 0.12,
@@ -408,25 +424,30 @@ async function executeSlideStudioAgentOperation(operation) {
       background: "black", backgroundShape: "lines", align: "center", rotation: 0,
       z: nextLayerZ(slide),
     }, operation);
+    const fittedTextBox = agentAutoFitTextBox(text);
     return agentCommit(project, slide, () => {
       slide.texts.push(text);
       selectOnlyLayer("text", text.id);
-      return { createdTextId: text.id };
+      return { createdTextId: text.id, fittedTextBox };
     }, "AI agent added text");
   }
 
   if (operation.type === "text.update") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
+    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
     return agentCommit(project, slide, () => {
-      const updated = operation.updates.map(({ id, ...patch }) => {
+      const fittedTextBoxes = operation.updates.map(({ id, ...patch }) => {
         const text = slide.texts.find((item) => item.id === id);
         if (!text) throw new Error(`Text layer not found: ${id}`);
-        agentApplyTextPatch(text, patch);
-        return id;
+        const next = agentApplyTextPatch({ ...text }, patch);
+        const fitted = agentAutoFitTextBox(next);
+        Object.assign(text, next);
+        return fitted;
       });
+      const updated = fittedTextBoxes.map(({ id }) => id);
       if (updated.length === 1) selectOnlyLayer("text", updated[0]);
-      return { updatedTextIds: updated };
+      return { updatedTextIds: updated, fittedTextBoxes };
     }, "AI agent updated text");
   }
 

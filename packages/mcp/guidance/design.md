@@ -6,6 +6,8 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 
 - Build for a 9:16 phone canvas and keep one clear idea per slide.
 - Prefer `boxed` text with `backgroundShape: "lines"` for highlighted copy. Treat per-line boxes as the default; use `full` only for a deliberate card or label.
+- `add_text` and `update_text` automatically preserve width and fit height around all wrapped lines with safety padding. Do not render just to discover clipping or call `fit_text_boxes` after ordinary copy edits.
+- Use `fit_text_boxes` with `mode: "both"` only when you intentionally want width to shrink as well. If automatic fitting rejects copy that cannot fit on one slide, shorten it or split it across slides.
 - After creating or changing any full-box text, call `fit_text_boxes`. A full box must hug its rendered content instead of leaving a large empty rectangle.
 - Use plain or outlined text for supporting copy. Use no more than two text treatments on one slide.
 - Choose size by role rather than one universal value: titles `92–124`, subtitles `68–84`, body copy `54–68`, captions `44–52`. These are ranges, not fixed presets; render and adjust within them.
@@ -34,7 +36,7 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Increase height when multiline text or per-line backgrounds approach the top or bottom edge.
 - Use `fit_text_boxes` after changing full-box copy or font size. Use `mode: "height"` when the chosen width must remain fixed.
 - Keep `x + width` and `y + height` within the canvas unless an off-canvas effect is intentional.
-- With boxed text, keep `backgroundShape: "lines"` and do not size the box tightly around the letters; rounded pills need breathing room.
+- With boxed text, keep `backgroundShape: "lines"`; automatic height fitting includes minimum breathing room so rounded pills stay inside the text container.
 - If the result is uncertain, render it. Numeric state is not a visual review.
 
 ## Agent behavior
