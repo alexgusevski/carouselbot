@@ -74,14 +74,35 @@ function localMcpSendJson(path, value, init = {}) {
   });
 }
 
+const LOCAL_MCP_AGENT_PRESENTATIONS = [
+  { matches: ["claude", "anthropic"], label: "Claude", icon: "/assets/claude-ai-icon-f3a857f4.svg" },
+  { matches: ["codex", "openai"], label: "Codex", icon: "/assets/codex-logo-colored-53743834.svg" },
+  { matches: ["hermes"], label: "Hermes", icon: "/assets/hermes-agent-icon-e5340726.webp" },
+  { matches: ["opencode"], label: "OpenCode" },
+  { matches: ["openclaw"], label: "OpenClaw" },
+];
+
+function localMcpAgentPresentation(agent) {
+  const rawName = String(agent?.name || "AI agent").trim();
+  const normalizedName = rawName.toLowerCase();
+  const known = LOCAL_MCP_AGENT_PRESENTATIONS.find(({ matches }) => matches.some((match) => normalizedName.includes(match)));
+  if (known) return known;
+  const initials = rawName === "AI agent"
+    ? "AI"
+    : rawName.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase().slice(0, 2) || "AI";
+  return { label: rawName, initials };
+}
+
 function localMcpAgentLabel(agent) {
-  const name = String(agent?.name || "AI agent").toLowerCase();
-  if (name.includes("claude")) return "Claude";
-  if (name.includes("codex")) return "Codex";
-  if (name.includes("hermes")) return "Hermes";
-  if (name.includes("opencode")) return "OpenCode";
-  if (name.includes("openclaw")) return "OpenClaw";
-  return agent?.name || "AI agent";
+  return localMcpAgentPresentation(agent).label;
+}
+
+function localMcpAgentIcon(agent) {
+  const presentation = localMcpAgentPresentation(agent);
+  if (presentation.icon) {
+    return `<span class="agent-activity-icon" aria-hidden="true"><img src="${presentation.icon}" alt="" /></span>`;
+  }
+  return `<span class="agent-activity-icon agent-activity-icon--generic" aria-hidden="true">${escapeHtml(presentation.initials || "AI")}</span>`;
 }
 
 function localMcpConnectionMessage() {
@@ -136,7 +157,7 @@ function localMcpNotify(message, tone = "agent", agent = null) {
   }
   const item = document.createElement("div");
   item.className = `agent-activity agent-activity--${["success", "error", "info"].includes(tone) ? tone : "agent"}`;
-  item.innerHTML = `<span class="agent-activity-dot" aria-hidden="true"></span><span><strong>${escapeHtml(localMcpAgentLabel(agent))}</strong>${escapeHtml(value)}</span>`;
+  item.innerHTML = `${localMcpAgentIcon(agent)}<span><strong>${escapeHtml(localMcpAgentLabel(agent))}</strong>${escapeHtml(value)}</span>`;
   stack.appendChild(item);
   requestAnimationFrame(() => item.classList.add("is-visible"));
   window.setTimeout(() => {

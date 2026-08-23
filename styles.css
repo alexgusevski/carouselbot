@@ -510,7 +510,7 @@ button:disabled {
 .agent-activity {
   display: grid;
   grid-template-columns: auto 1fr;
-  align-items: start;
+  align-items: center;
   gap: 10px;
   padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
@@ -537,18 +537,30 @@ button:disabled {
   font-size: 12px;
 }
 
-.agent-activity-dot {
-  width: 9px;
-  height: 9px;
-  margin-top: 4px;
+.agent-activity-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+  place-items: center;
   border-radius: 50%;
-  background: #25f4ee;
-  box-shadow: 0 0 0 4px rgb(37 244 238 / 13%);
+  flex: 0 0 auto;
 }
 
-.agent-activity--success .agent-activity-dot { background: #35d07f; box-shadow: 0 0 0 4px rgb(53 208 127 / 13%); }
-.agent-activity--error .agent-activity-dot { background: #fe2c55; box-shadow: 0 0 0 4px rgb(254 44 85 / 13%); }
-.agent-activity--info .agent-activity-dot { background: #4d7cfe; box-shadow: 0 0 0 4px rgb(77 124 254 / 13%); }
+.agent-activity-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.agent-activity-icon--generic {
+  color: #fff;
+  background: #4d7cfe;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: -0.02em;
+}
 
 .agent-connection-status {
   display: flex;
