@@ -60,7 +60,8 @@ export async function runSetup(arguments_) {
   const clientArgument = arguments_.find((value) => value.startsWith("--client="))?.slice("--client=".length);
   const requested = clientArgument ? clientArgument.split(",").map((value) => value.trim().toLowerCase()) : supported.filter(commandExists);
   const clients = [...new Set(requested)].filter((client) => supported.includes(client));
-  const specifier = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
+  const releaseTag = PACKAGE_VERSION.includes("-beta.") ? "beta" : "latest";
+  const specifier = `${PACKAGE_NAME}@${releaseTag}`;
   const dryRun = flags.has("--dry-run");
   const assumeYes = flags.has("--yes") || flags.has("-y");
   if (!clients.length) throw new Error("No supported agent CLI was detected. Use --client=claude,codex,hermes,opencode,openclaw or copy the generic stdio config below.");
