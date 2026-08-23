@@ -201,11 +201,7 @@ button:disabled {
   width: 25px;
   height: 25px;
   margin-left: -7px;
-  border: 2px solid var(--panel);
-  border-radius: 50%;
-  background: var(--white);
-  object-fit: cover;
-  box-shadow: 0 1px 4px rgba(21, 21, 21, 0.18);
+  object-fit: contain;
 }
 
 .agent-logo-stack img:first-child {
@@ -320,11 +316,7 @@ button:disabled {
   width: 34px;
   height: 34px;
   margin-left: -8px;
-  overflow: hidden;
   place-items: center;
-  border: 2px solid var(--panel);
-  border-radius: 50%;
-  background: #f2f2ed;
 }
 
 .agent-client-icons span:first-child {
@@ -335,7 +327,7 @@ button:disabled {
   width: 100%;
   height: 100%;
   padding: 0;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .agent-modal-close {
