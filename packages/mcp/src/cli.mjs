@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { companionDoctor, companionRestart } from "./companion.mjs";
-import { PACKAGE_NAME, PACKAGE_VERSION, TEST_EDITOR_URL } from "./config.mjs";
+import { EDITOR_URL, PACKAGE_NAME, PACKAGE_VERSION } from "./config.mjs";
 import { runSetup } from "./setup.mjs";
 import { serveMcp } from "./stdio-server.mjs";
 
@@ -23,7 +23,7 @@ async function main() {
   }
   if (command === "doctor") {
     const health = await companionDoctor();
-    process.stdout.write(`${JSON.stringify({ package: PACKAGE_NAME, packageVersion: PACKAGE_VERSION, editor: TEST_EDITOR_URL, daemon: health }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ package: PACKAGE_NAME, packageVersion: PACKAGE_VERSION, editor: EDITOR_URL, daemon: health }, null, 2)}\n`);
     return;
   }
   if (command === "restart") {

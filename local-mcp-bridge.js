@@ -12,7 +12,7 @@ const LOCAL_MCP_POLL_INTERVAL_MS = 250;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
 const LOCAL_MCP_ACTIVITY_CHANNEL = "slide-studio:mcp-activity";
-const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
+const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/main/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
 function localMcpConnectionWasRemembered() {
   try {

@@ -3,7 +3,7 @@ import { cp, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION, TEST_EDITOR_URL } from "./config.mjs";
+import { EDITOR_URL, PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION } from "./config.mjs";
 
 const supported = ["claude", "codex", "hermes", "opencode", "openclaw"];
 
@@ -66,7 +66,7 @@ export async function runSetup(arguments_) {
   const assumeYes = flags.has("--yes") || flags.has("-y");
   if (!clients.length) throw new Error("No supported agent CLI was detected. Use --client=claude,codex,hermes,opencode,openclaw or copy the generic stdio config below.");
 
-  process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\nDetected: ${clients.join(", ")}\nEditor: ${TEST_EDITOR_URL}\n\n`);
+  process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\nDetected: ${clients.join(", ")}\nEditor: ${EDITOR_URL}\n\n`);
   for (const client of clients) {
     const command = shellCommand(client, specifier);
     if (command) process.stdout.write(`${client}: ${command.map(quote).join(" ")}\n`);
@@ -98,7 +98,7 @@ export async function runSetup(arguments_) {
     else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);
   }
   const skillTargets = await installSkill();
-  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${TEST_EDITOR_URL} in your normal local browser and click Connect AI. Do not use a sandboxed agent browser.\n`);
+  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${EDITOR_URL} in your normal local browser and click Connect AI. Do not use a sandboxed agent browser.\n`);
   process.stdout.write(`First connection check (no browser automation): npx -y ${specifier} call list_editors\n`);
   if (clients.includes("hermes")) process.stdout.write("Hermes can also refresh native tools in place with /reload-mcp and /reload-skills.\n");
   if (clients.includes("claude")) process.stdout.write("Claude may require a new session for native MCP registration; use the CLI fallback immediately instead of stopping.\n");

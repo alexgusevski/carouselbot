@@ -16,15 +16,15 @@ Before using any browser or making edits, call `list_editors`. A registered edit
 
 Browser reconnection is automatic. After `EDITOR_DISCONNECTED`, `EDITOR_RELOADED`, a dropped browser request, or an empty `list_editors` result that follows a working connection, wait briefly and retry `list_editors` several times. Do not restart the companion for a transient browser disconnect: restarting invalidates every browser session and makes recovery slower. If the editor does not return, ask the user to keep or reload the real editor tab; preserve completed project work and begin a new edit session after it reconnects.
 
-Run `npx -y slides-studio-mcp@beta restart` only when the MCP explicitly reports an outdated companion protocol or `doctor` reports that the daemon itself is unhealthy. After a necessary restart, ask the user to reload their real editor tab and retry `list_editors`.
+Run `npx -y slides-studio-mcp@latest restart` only when the MCP explicitly reports an outdated companion protocol or `doctor` reports that the daemon itself is unhealthy. After a necessary restart, ask the user to reload their real editor tab and retry `list_editors`.
 
 If the native MCP tools are not registered in the current session, do not stop or ask for a restart. Use the same validated tools through the local CLI fallback:
 
 ```bash
-npx -y slides-studio-mcp@beta call get_design_guidance
-npx -y slides-studio-mcp@beta call list_editors
-npx -y slides-studio-mcp@beta call list_tools --json '{"names":["add_slide","add_text"]}'
-npx -y slides-studio-mcp@beta call create_project --json '{"name":"My presentation"}'
+npx -y slides-studio-mcp@latest call get_design_guidance
+npx -y slides-studio-mcp@latest call list_editors
+npx -y slides-studio-mcp@latest call list_tools --json '{"names":["add_slide","add_text"]}'
+npx -y slides-studio-mcp@latest call create_project --json '{"name":"My presentation"}'
 ```
 
 Every tool accepts the same JSON arguments as MCP. Use `list_tools` without arguments for compact discovery or pass `{"names":[...]}` to retrieve selected schemas. Prefer `apply_operations` for batches. `render_slide` writes its returned image to a temporary local `previewPath`; inspect that file and remove the temporary directory after the review. Hermes can load the native tools in place with `/reload-mcp` and refresh this skill with `/reload-skills`.

@@ -14,7 +14,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const { companionRestart, createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
   const first = await createCompanion("Claude Code", "test");
   const second = await createCompanion("Codex", "test");
-  const origin = "https://slides-mcp-poc-0821.pages.dev";
+  const origin = "https://slides-editor.pages.dev";
   const base = `http://127.0.0.1:${port}`;
 
   async function connect(editorId) {

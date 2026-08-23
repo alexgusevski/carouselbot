@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 const root = new URL("..", import.meta.url);
 const rootPath = root.pathname;
 const pageUrl = process.argv.includes("--deployed")
-  ? "https://slides-mcp-poc-0821.pages.dev"
+  ? "https://slides-editor.pages.dev"
   : process.env.SLIDE_STUDIO_TEST_URL || "http://127.0.0.1:4173";
 const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const debuggingPort = 19229;

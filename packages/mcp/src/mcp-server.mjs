@@ -2,7 +2,7 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { GUIDANCE_PATH, PACKAGE_NAME, PACKAGE_VERSION, TEST_EDITOR_URL } from "./config.mjs";
+import { EDITOR_URL, GUIDANCE_PATH, PACKAGE_NAME, PACKAGE_VERSION } from "./config.mjs";
 
 const id = z.string().min(1).max(160);
 const optionalId = id.optional();
@@ -99,7 +99,7 @@ export async function createSlideStudioMcpServer(companion) {
   let guidanceRead = false;
   let identifiedAs = null;
   const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION }, {
-    instructions: `First call list_editors and use the registered local browser tab. Never open or connect Slide Studio through a sandboxed agent browser. If no editor is listed, retry briefly because browser reconnection is automatic, then ask the user to open ${TEST_EDITOR_URL} in their normal browser and click Connect AI. Never restart a healthy companion for a transient editor disconnect; restart only for an explicit protocol mismatch or failed daemon health check. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel editing workers require distinct editor sessions. Use render_slide to inspect actual pixels.`,
+    instructions: `First call list_editors and use the registered local browser tab. Never open or connect Slide Studio through a sandboxed agent browser. If no editor is listed, retry briefly because browser reconnection is automatic, then ask the user to open ${EDITOR_URL} in their normal browser and click Connect AI. Never restart a healthy companion for a transient editor disconnect; restart only for an explicit protocol mismatch or failed daemon health check. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel editing workers require distinct editor sessions. Use render_slide to inspect actual pixels.`,
     capabilities: { tools: {}, resources: {} },
   });
 

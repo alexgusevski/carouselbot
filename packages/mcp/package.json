@@ -1,6 +1,6 @@
 {
   "name": "slides-studio-mcp",
-  "version": "0.1.0-beta.12",
+  "version": "0.1.0",
   "description": "Local-first MCP companion for the hosted Slide Studio editor",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "url": "git+https://github.com/alexgusevski/tiktokslideeditor.git",
     "directory": "packages/mcp"
   },
-  "homepage": "https://slides-mcp-poc-0821.pages.dev",
+  "homepage": "https://slides-editor.pages.dev",
   "bugs": "https://github.com/alexgusevski/tiktokslideeditor/issues",
   "bin": {
     "slides-studio-mcp": "src/cli.mjs"

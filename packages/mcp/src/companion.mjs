@@ -34,7 +34,7 @@ async function healthyState() {
   try {
     const result = await daemonRequest(state, "/internal/health");
     if (result.protocolVersion !== PROTOCOL_VERSION) {
-      const error = new Error(`Local companion ${result.version || "unknown"} uses protocol ${result.protocolVersion}; ${PACKAGE_VERSION} requires protocol ${PROTOCOL_VERSION}. Run \`npx -y slides-studio-mcp@beta restart\`, then reload the editor.`);
+      const error = new Error(`Local companion ${result.version || "unknown"} uses protocol ${result.protocolVersion}; ${PACKAGE_VERSION} requires protocol ${PROTOCOL_VERSION}. Run \`npx -y slides-studio-mcp@latest restart\`, then reload the editor.`);
       error.code = "EPROTOCOL";
       throw error;
     }

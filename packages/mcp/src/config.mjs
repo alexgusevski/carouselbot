@@ -11,9 +11,9 @@ export const PROTOCOL_VERSION = 3;
 export const BRIDGE_HOST = "127.0.0.1";
 export const BRIDGE_PORT = Number(process.env.SLIDE_STUDIO_BRIDGE_PORT) || 43117;
 export const BRIDGE_URL = `http://${BRIDGE_HOST}:${BRIDGE_PORT}`;
-export const TEST_EDITOR_URL = "https://slides-mcp-poc-0821.pages.dev";
+export const EDITOR_URL = "https://slides-editor.pages.dev";
 export const ALLOWED_ORIGINS = new Set((process.env.SLIDE_STUDIO_ALLOWED_ORIGINS || [
-  TEST_EDITOR_URL,
+  EDITOR_URL,
   "http://127.0.0.1:4173",
   "http://localhost:4173",
 ].join(",")).split(",").map((value) => value.trim()).filter(Boolean));

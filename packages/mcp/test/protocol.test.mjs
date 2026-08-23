@@ -110,12 +110,12 @@ test("protects internal routes, origins, and protocol versions", async () => {
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${base}/internal/health`)).status, 401);
     assert.equal((await fetch(`${base}/health`, { headers: { Origin: "https://attacker.example" } })).status, 403);
-    const preflight = await fetch(`${base}/health`, { method: "OPTIONS", headers: { Origin: "https://slides-mcp-poc-0821.pages.dev", "Access-Control-Request-Private-Network": "true" } });
+    const preflight = await fetch(`${base}/health`, { method: "OPTIONS", headers: { Origin: "https://slides-editor.pages.dev", "Access-Control-Request-Private-Network": "true" } });
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get("access-control-allow-private-network"), "true");
     const mismatch = await fetch(`${base}/connect`, {
       method: "POST",
-      headers: { Origin: "https://slides-mcp-poc-0821.pages.dev", "Content-Type": "application/json" },
+      headers: { Origin: "https://slides-editor.pages.dev", "Content-Type": "application/json" },
       body: JSON.stringify({ editorId: "test-editor", protocolVersion: 999 }),
     });
     assert.equal(mismatch.status, 409);
