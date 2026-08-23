@@ -75,7 +75,18 @@ function agentSolidBackground(color = "#EEEDE7") {
 }
 
 function agentNextFrame() {
-  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  if (document.visibilityState !== "visible") return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallback);
+      resolve();
+    };
+    const fallback = window.setTimeout(finish, 250);
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+  });
 }
 
 async function agentMedia(mediaId) {

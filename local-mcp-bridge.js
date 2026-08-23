@@ -1,5 +1,6 @@
 const LOCAL_MCP_BRIDGE_URL = "http://127.0.0.1:43117";
 const LOCAL_MCP_RETRY_MS = 1200;
+const LOCAL_MCP_HEARTBEAT_MS = 10_000;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/alex/local-mcp-pages-poc/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
@@ -347,6 +348,17 @@ async function localMcpActivateVisibleEditor() {
   }
 }
 
+async function localMcpHeartbeat() {
+  if (!localMcpBridgeState.connected || !localMcpBridgeState.sessionToken) return;
+  try {
+    const response = await localMcpSendJson("/heartbeat", { editorId: localMcpBridgeState.editorId });
+    if (!response.ok) throw new Error(`Heartbeat returned ${response.status}`);
+  } catch {
+    // The event poll owns reconnect state. A heartbeat may race with a daemon
+    // restart, so it must never create a second reconnect loop.
+  }
+}
+
 function localMcpHandleSystemEvent(event) {
   if (event.type === "agents.changed") {
     const previous = new Set(localMcpBridgeState.agents.map((agent) => agent.id));
@@ -436,10 +448,12 @@ const localMcpAppRoot = document.querySelector("#app");
 if (localMcpAppRoot) new MutationObserver(() => localMcpSetStatus(localMcpBridgeState.status, localMcpBridgeState.statusMessage)).observe(localMcpAppRoot, { childList: true, subtree: true });
 
 void localMcpResumeRememberedConnection();
+const localMcpHeartbeatTimer = window.setInterval(() => void localMcpHeartbeat(), LOCAL_MCP_HEARTBEAT_MS);
 
 window.addEventListener("beforeunload", () => {
   localMcpBridgeState.stopped = true;
   localMcpBridgeState.shouldReconnect = false;
+  window.clearInterval(localMcpHeartbeatTimer);
 });
 window.addEventListener("focus", localMcpActivateVisibleEditor);
 document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);

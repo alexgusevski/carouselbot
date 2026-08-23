@@ -168,7 +168,21 @@ try {
 
   await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
   await waitFor(() => evaluate(cdp, "Boolean(document.querySelector('.dashboard'))"), "Dashboard did not open.");
-  const createdProject = (await tool("create_project", { name: "Full MCP browser test" })).structuredContent;
+  await evaluate(cdp, `(() => {
+    window.__slideStudioOriginalRequestAnimationFrame = window.requestAnimationFrame;
+    window.requestAnimationFrame = () => 0;
+    return true;
+  })()`);
+  let createdProject;
+  try {
+    createdProject = (await tool("create_project", { name: "Full MCP browser test" })).structuredContent;
+  } finally {
+    await evaluate(cdp, `(() => {
+      window.requestAnimationFrame = window.__slideStudioOriginalRequestAnimationFrame;
+      delete window.__slideStudioOriginalRequestAnimationFrame;
+      return true;
+    })()`);
+  }
   const dashboardUpdated = await evaluate(cdp, `({
     dashboardVisible: Boolean(document.querySelector('.dashboard')),
     projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent)

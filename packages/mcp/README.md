@@ -29,6 +29,8 @@ Every MCP tool name and JSON argument shape works with `call`. The CLI-only `lis
 
 Always use `list_editors` to check the browser connection. Do not open Slide Studio or click **Connect AI** through a sandboxed, remote, or agent-controlled browser: that is a different browser session and may not have access to the user's local companion. If no editor is listed, ask the user to open the editor in their normal browser on the same computer and connect there, then retry `list_editors`.
 
+Browser reconnection is automatic. For a transient `EDITOR_DISCONNECTED`, `EDITOR_RELOADED`, dropped browser request, or newly empty editor list, wait briefly and retry `list_editors`; do not restart a healthy daemon. Use `restart` only for an explicit companion protocol mismatch or when `doctor` reports that the daemon itself is unhealthy. Restarting invalidates current browser session tokens and should not be used as generic connection recovery.
+
 Hermes can refresh native tools without restarting by running `/reload-mcp`, then `/reload-skills`. Claude may still need a new session to register a newly added plain stdio server, but its current session can use the CLI fallback instead of stopping.
 
 The companion binds only to `127.0.0.1`. There is no hosted relay: projects remain in browser IndexedDB and local images remain on the user's computer.

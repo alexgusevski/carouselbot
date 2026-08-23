@@ -77,6 +77,11 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const command = await nextCommand("editor-a", editorA.sessionToken);
     assert.equal(command.editSessionId, sessionA.id);
     assert.equal(command.operation.projectId, "project-a");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.ok(
+      (await first.call("list_editors")).editors.some((editor) => editor.id === "editor-a"),
+      "an editor running a command must stay active beyond the idle TTL",
+    );
     await fetch(`${base}/result`, {
       method: "POST",
       headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
@@ -85,6 +90,13 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     assert.equal((await browserCall).revision, 2);
     const audit = await first.call("list_recent_operations", { projectId: "project-a", limit: 10 });
     assert.ok(audit.events.some((event) => event.toolName === "add_slide" && event.status === "ok"));
+
+    const heartbeat = await fetch(`${base}/heartbeat`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a" }),
+    });
+    assert.equal(heartbeat.status, 200);
 
     await first.call("end_edit_session", { editSessionId: sessionA.id });
     await second.call("end_edit_session", { editSessionId: sessionB.id });

@@ -10,7 +10,7 @@ import {
 
 const MAX_JSON_BYTES = 40 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
-const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 15_000;
+const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 90_000;
@@ -34,11 +34,17 @@ function log(message) {
   process.stderr.write(`[slide-studio-daemon] ${message}\n`);
 }
 
+function editorHasInflightCommand(editorId) {
+  for (const pending of inflight.values()) if (pending.editorId === editorId) return true;
+  return false;
+}
+
 function activeEditors() {
   const cutoff = Date.now() - EDITOR_TTL_MS;
   return [...editors.values()].filter((editor) => (
     editor.lastSeen >= cutoff
     || Boolean(editor.poll && !editor.poll.destroyed && !editor.poll.writableEnded)
+    || editorHasInflightCommand(editor.id)
   ));
 }
 
@@ -525,6 +531,12 @@ const server = createServer(async (request, response) => {
       focusedEditorId = editor.id;
       return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
     }
+    if (url.pathname === "/heartbeat" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = requireEditor(request, response, body.editorId, cors);
+      if (!editor) return;
+      return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
+    }
     if (url.pathname === "/disconnect" && request.method === "POST") {
       const body = await readJson(request);
       const editor = requireEditor(request, response, body.editorId, cors);
@@ -650,7 +662,11 @@ setInterval(() => {
     clientsChanged = true;
   }
   for (const [id, editor] of editors) {
-    if (editor.lastSeen >= now - EDITOR_TTL_MS || (editor.poll && !editor.poll.destroyed && !editor.poll.writableEnded)) continue;
+    if (
+      editor.lastSeen >= now - EDITOR_TTL_MS
+      || (editor.poll && !editor.poll.destroyed && !editor.poll.writableEnded)
+      || editorHasInflightCommand(id)
+    ) continue;
     disconnectEditor(id, "Browser editor connection expired.");
   }
   if (clientsChanged) broadcastAgents();
