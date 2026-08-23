@@ -1008,7 +1008,7 @@ function renderDashboard() {
             const slide = project.slides[0];
             const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
             return `
-              <button class="project-card" type="button" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
+              <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
                 <span class="project-preview" data-project-cover-id="${project.id}">
                   ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
                 </span>
@@ -1016,7 +1016,7 @@ function renderDashboard() {
                   <strong>${escapeHtml(project.name)}</strong>
                   <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
                 </span>
-              </button>
+              </a>
             `;
           }).join("")}
         </div>
@@ -1607,9 +1607,21 @@ function createProject() {
 
 function bindDashboardEvents() {
   app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
-  app.querySelectorAll("[data-project-id]").forEach((button) => {
-    button.addEventListener("click", () => openProject(button.dataset.projectId));
-    button.addEventListener("contextmenu", (event) => showProjectMenu(event, button.dataset.projectId));
+  app.querySelectorAll("[data-project-id]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      openProject(link.dataset.projectId);
+    });
+    link.addEventListener("contextmenu", (event) => {
+      if (event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        window.open(link.href, "_blank", "noopener");
+        return;
+      }
+      showProjectMenu(event, link.dataset.projectId);
+    });
   });
 }
 
@@ -3877,7 +3889,8 @@ function drawTextLayer(context, text, imageWidth, imageHeight) {
   const blockHeight = visibleLines.length * lineHeight;
   const startY = y + (height - blockHeight) / 2 + lineHeight / 2;
   const pillWidths = visibleLines.map((line) => Math.min(width, context.measureText(line || " ").width + horizontalPadding * 2));
-  const textX = align === "left" ? x + fontSize * 0.16 : align === "right" ? x + width - fontSize * 0.16 : x + width / 2;
+  const alignedTextInset = perLineBox ? horizontalPadding : fontSize * 0.16;
+  const textX = align === "left" ? x + alignedTextInset : align === "right" ? x + width - alignedTextInset : x + width / 2;
   const pillStart = (pillWidth) => align === "left" ? x : align === "right" ? x + width - pillWidth : x + (width - pillWidth) / 2;
 
   if (text.style === "boxed" && text.backgroundShape === "full") {

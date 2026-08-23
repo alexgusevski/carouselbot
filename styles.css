@@ -825,6 +825,11 @@ button:disabled {
   transform: translateY(-4px);
 }
 
+.project-card {
+  color: inherit;
+  text-decoration: none;
+}
+
 .project-preview {
   position: absolute;
   inset: 0 0 74px;
@@ -2037,7 +2042,7 @@ button:disabled {
   justify-content: center;
   height: 1.12em;
   margin: 0;
-  padding: 0;
+  padding: 0 0.52em;
   color: var(--text-color, #fff);
   background: transparent;
   line-height: 1.12;
@@ -2047,8 +2052,16 @@ button:disabled {
   justify-content: flex-start;
 }
 
+.text-box[data-style="boxed"][data-box-shape="lines"][data-align="left"] .text-editor {
+  transform: translateX(0.52em);
+}
+
 .text-box[data-style="boxed"][data-box-shape="lines"][data-align="right"] .text-line {
   justify-content: flex-end;
+}
+
+.text-box[data-style="boxed"][data-box-shape="lines"][data-align="right"] .text-editor {
+  transform: translateX(-0.52em);
 }
 
 .text-box[data-style="boxed"][data-box-shape="lines"][data-background="black"] .text-line {
