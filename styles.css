@@ -1942,10 +1942,18 @@ button:disabled {
   text-align: left;
 }
 
+.text-box[data-align="left"] .text-content {
+  align-items: flex-start;
+}
+
 .text-box[data-align="right"] .text-content-wrap,
 .text-box[data-align="right"] .text-content,
 .text-box[data-align="right"] .text-line {
   text-align: right;
+}
+
+.text-box[data-align="right"] .text-content {
+  align-items: flex-end;
 }
 
 .text-content {

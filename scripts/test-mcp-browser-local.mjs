@@ -126,6 +126,51 @@ async function waitFor(predicate, message, timeout = 25_000) {
   throw new Error(`${message}\n${diagnostics.slice(-3000)}`);
 }
 
+async function boxedLineGeometry(cdp, textId) {
+  return evaluate(cdp, `(() => {
+    const box = document.querySelector('.text-box[data-text-id="${textId}"]');
+    const content = box?.querySelector('.text-visual--inside .text-content');
+    const line = content?.querySelector('.text-line');
+    const path = content?.querySelector('.text-background path');
+    if (!box || !content || !line || !path || !line.firstChild) return {
+      ready: false,
+      hasBox: Boolean(box),
+      hasContent: Boolean(content),
+      hasLine: Boolean(line),
+      hasPath: Boolean(path),
+      contentHtml: content?.innerHTML || null,
+    };
+    const range = document.createRange();
+    range.selectNodeContents(line);
+    const lineStyle = getComputedStyle(line);
+    const contentRect = content.getBoundingClientRect();
+    const pathRect = path.getBoundingClientRect();
+    const textRect = range.getBoundingClientRect();
+    if (contentRect.width <= 0 || pathRect.width <= 0 || textRect.width <= 0) return {
+      ready: false,
+      reason: "zero geometry",
+      contentWidth: contentRect.width,
+      pathWidth: pathRect.width,
+      cssPaddingLeft: parseFloat(lineStyle.paddingLeft) || 0,
+      cssPaddingRight: parseFloat(lineStyle.paddingRight) || 0,
+      textWidth: textRect.width,
+      boxWidth: box.getBoundingClientRect().width,
+    };
+    return {
+      ready: true,
+      align: box.dataset.align,
+      alignItems: getComputedStyle(content).alignItems,
+      contentLeft: contentRect.left,
+      contentRight: contentRect.right,
+      pathLeft: pathRect.left,
+      pathRight: pathRect.right,
+      pathWidth: pathRect.width,
+      leftPadding: textRect.left - pathRect.left,
+      rightPadding: pathRect.right - textRect.right,
+    };
+  })()`);
+}
+
 let cdp;
 let secondCdp;
 try {
@@ -212,6 +257,27 @@ try {
     imageCount: document.querySelectorAll('.overlay-box').length
   })`);
   if (visible.title !== "Full MCP browser test" || !visible.texts.includes("Built live through MCP") || visible.connected !== "connected" || visible.imageCount !== 1) throw new Error(`Live DOM did not match: ${JSON.stringify(visible)}`);
+
+  for (const [align, expectedAlignItems] of [["left", "flex-start"], ["right", "flex-end"]]) {
+    await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, updates: [{ id: addedText.createdTextId, align }] });
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('.project-title-input')?.value === "Full MCP browser test" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), `Editor did not restore after the ${align}-alignment reload.`);
+    let latestGeometry = null;
+    const geometry = await waitFor(async () => {
+      latestGeometry = await boxedLineGeometry(cdp, addedText.createdTextId);
+      return latestGeometry?.ready ? latestGeometry : null;
+    }, `Boxed ${align}-aligned text did not render after reload.`).catch((error) => {
+      throw new Error(`${error.message}\nLast geometry state: ${JSON.stringify(latestGeometry)}`);
+    });
+    const alignedEdgeDelta = align === "left"
+      ? Math.abs(geometry.pathLeft - geometry.contentLeft)
+      : Math.abs(geometry.pathRight - geometry.contentRight);
+    const minimumPadding = Math.max(0.002, geometry.pathWidth * 0.01);
+    const paddingTolerance = Math.max(0.03, geometry.pathWidth * 0.02);
+    if (geometry.align !== align || geometry.alignItems !== expectedAlignItems || alignedEdgeDelta > paddingTolerance || geometry.leftPadding < minimumPadding || geometry.rightPadding < minimumPadding || Math.abs(geometry.cssPaddingLeft - geometry.cssPaddingRight) > 0.001) {
+      throw new Error(`Boxed ${align}-aligned text padding changed after reload: ${JSON.stringify(geometry)}`);
+    }
+  }
 
   await tool("update_image", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, updates: [{ id: image.createdImageId, x: 0.31, y: 0.5, width: 0.36, rotation: 12, cropX: 0.05, cropY: 0.05, cropW: 0.9, cropH: 0.9 }] });
   await tool("update_asset", { projectId: createdProject.projectId, assetId: imported.assetId, name: "Verified mark" });
@@ -307,7 +373,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, fittedFullBox: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 30, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 32, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   secondCdp?.close();
   cdp?.close();
