@@ -158,9 +158,9 @@ function localMcpEnsureModal() {
         <h2 id="agent-modal-title">Connect via MCP</h2>
         <div class="agent-modal-intro">
           <div class="agent-client-icons" aria-label="Compatible with Claude, Codex, Hermes, and other MCP clients">
-            <span title="Claude"><img src="/assets/claude-ai-symbol.svg" alt="Claude" /></span>
-            <span title="Codex"><img src="/assets/codex-logo.svg" alt="Codex" /></span>
-            <span title="Hermes"><img src="/assets/hermes-agent-logo.webp" alt="Hermes" /></span>
+            <span title="Claude"><img src="/assets/claude-ai-icon-f3a857f4.svg" alt="Claude" /></span>
+            <span title="Codex"><img src="/assets/codex-logo-colored-53743834.svg" alt="Codex" /></span>
+            <span title="Hermes"><img src="/assets/hermes-agent-icon-e5340726.webp" alt="Hermes" /></span>
           </div>
           <p class="agent-modal-agent-label">Use with an agent</p>
         </div>

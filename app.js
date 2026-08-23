@@ -931,9 +931,9 @@ function renderHeader({ editor = false } = {}) {
   const agentConnectButton = `
     <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect via MCP" title="Connect via MCP">
       <span class="agent-logo-stack" aria-hidden="true">
-        <img src="/assets/claude-ai-symbol.svg" alt="" />
-        <img src="/assets/codex-logo.svg" alt="" />
-        <img src="/assets/hermes-agent-logo.webp" alt="" />
+        <img src="/assets/claude-ai-icon-f3a857f4.svg" alt="" />
+        <img src="/assets/codex-logo-colored-53743834.svg" alt="" />
+        <img src="/assets/hermes-agent-icon-e5340726.webp" alt="" />
       </span>
       <span class="agent-connect-label">Connect AI</span>
       <span class="agent-connect-dot" aria-hidden="true"></span>
