@@ -9,6 +9,7 @@ const LOCAL_MCP_HEARTBEAT_MS = 10_000;
 const LOCAL_MCP_REQUEST_TIMEOUT_MS = 8_000;
 const LOCAL_MCP_EVENT_REQUEST_TIMEOUT_MS = 1_500;
 const LOCAL_MCP_POLL_INTERVAL_MS = 250;
+const LOCAL_MCP_NOTIFICATION_DURATION_MS = 6_300;
 const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
 const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
 const LOCAL_MCP_ACTIVITY_CHANNEL = "slide-studio:mcp-activity";
@@ -182,7 +183,7 @@ function localMcpNotify(message, tone = "agent", agent = null) {
   window.setTimeout(() => {
     item.classList.remove("is-visible");
     window.setTimeout(() => item.remove(), 220);
-  }, 4200);
+  }, LOCAL_MCP_NOTIFICATION_DURATION_MS);
 }
 
 function localMcpBroadcastActivity(message, tone = "agent", agent = null, { dashboardOnly = false } = {}) {
