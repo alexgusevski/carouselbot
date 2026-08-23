@@ -256,7 +256,14 @@ try {
   editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify background project edits preserve the current view" })).structuredContent.id;
   const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
   const temporarySlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Background edit", backgroundColor: "#18181B" })).structuredContent;
-  await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Edited without taking over", x: 0.1, y: 0.4, width: 0.8, height: 0.14, size: 72, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF" });
+  const perLineText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Edited without taking over", role: "subtitle", x: 0.1, y: 0.2, width: 0.8, height: 0.16, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
+  const fullBoxText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "A full box should fit this body copy instead of leaving a huge empty rectangle around it.", role: "body", x: 0.1, y: 0.42, width: 0.8, height: 0.48, style: "boxed", background: "black", backgroundShape: "full", align: "left", color: "#FFFFFF" })).structuredContent;
+  const fitted = (await tool("fit_text_boxes", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, textIds: [fullBoxText.createdTextId] })).structuredContent;
+  const backgroundSlide = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide;
+  const perLineLayer = backgroundSlide.texts.find((text) => text.id === perLineText.createdTextId);
+  const fullBoxLayer = backgroundSlide.texts.find((text) => text.id === fullBoxText.createdTextId);
+  if (perLineLayer?.role !== "subtitle" || perLineLayer.size !== 76 || perLineLayer.backgroundShape !== "lines") throw new Error(`Role defaults or per-line preference failed: ${JSON.stringify(perLineLayer)}`);
+  if (fullBoxLayer?.role !== "body" || fullBoxLayer.size !== 60 || fullBoxLayer.height >= 0.48 || fitted.fittedTextBoxes?.[0]?.id !== fullBoxText.createdTextId) throw new Error(`Full-box content fitting failed: ${JSON.stringify({ fullBoxLayer, fitted })}`);
   const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   if (JSON.stringify(preservedView) !== JSON.stringify(pinnedView)) throw new Error(`Background project edits changed the user's view: ${JSON.stringify({ pinnedView, preservedView })}`);
   await tool("delete_project", { projectId: temporaryProject.projectId });
@@ -300,7 +307,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 28, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, crossTabSync: true, composedDashboardCover: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, fittedFullBox: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 30, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   secondCdp?.close();
   cdp?.close();

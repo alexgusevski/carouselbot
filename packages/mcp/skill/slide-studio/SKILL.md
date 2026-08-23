@@ -46,6 +46,8 @@ With only one agent and one editor, the server can create an implicit session fo
 
 Inspect the assigned editor before editing and keep the returned IDs and revision. Work on the assigned project and slide. Pass `expectedRevision` for sensitive mutations. If `STALE_PROJECT` is returned, the browser has reloaded the canonical IndexedDB copy; inspect again and retry with current IDs. Prefer `apply_operations` for compact related changes while preserving logical order.
 
+Use readable role-based type ranges: title `92–124`, subtitle `68–84`, body `54–68`, caption `44–52`. Do not solve dense copy by dropping below the body range; shorten it or split it across slides. For highlighted text, prefer `style: "boxed"` with `backgroundShape: "lines"`. Use `backgroundShape: "full"` only for a deliberate card, then call `fit_text_boxes` after any copy or size change so the rectangle hugs the rendered text. Use `mode: "height"` when its width should stay fixed.
+
 After each meaningful composition or after a short batch, call `render_slide` and inspect the returned image. Fix clipping, spacing, contrast, unsafe TikTok-overlay placement, and weak hierarchy before claiming the slide is finished. Use `export_slide` or `export_project` only when local files are requested; do not overwrite existing files unless authorized.
 
 Edits follow the latest changed slide only when their project is already visible. Creating or editing another project must not take over the user's current browser view. `open_project` and `set_view` intentionally navigate, so call them only when the user asks to see that project. Other tabs synchronize project cards and project state through local browser storage. Use `show_notification` only for short, useful status messages.

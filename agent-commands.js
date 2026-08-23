@@ -1,4 +1,13 @@
 const SLIDE_STUDIO_AGENT_PROTOCOL = 3;
+const AGENT_TEXT_ROLE_SIZES = { title: 104, subtitle: 76, body: 60, caption: 48 };
+
+function agentTextRole(value, requestedRole) {
+  if (Object.hasOwn(AGENT_TEXT_ROLE_SIZES, requestedRole)) return requestedRole;
+  const length = String(value || "").replace(/\s+/g, " ").trim().length;
+  if (length <= 48) return "title";
+  if (length <= 110) return "subtitle";
+  return "body";
+}
 
 function agentProject(projectId = state.activeProjectId) {
   const project = state.projects.find((item) => item.id === projectId);
@@ -151,6 +160,7 @@ async function agentCommit(project, slide, mutate, message) {
 
 function agentApplyTextPatch(text, patch = {}) {
   if (patch.text != null) text.text = String(patch.text).slice(0, 4000);
+  if (patch.role != null && Object.hasOwn(AGENT_TEXT_ROLE_SIZES, patch.role)) text.role = patch.role;
   if (patch.width != null) text.width = clamp(Number(patch.width), 0.1, 1.5);
   if (patch.height != null) text.height = clamp(Number(patch.height), 0.045, 1.5);
   if (patch.x != null) text.x = clamp(Number(patch.x), -0.5, 1.5);
@@ -166,6 +176,46 @@ function agentApplyTextPatch(text, patch = {}) {
   if (patch.z != null) text.z = Number(patch.z) || text.z;
   ensureBoxedTextContrast(text);
   return text;
+}
+
+function agentFitTextBox(text, mode = "both") {
+  const context = measureCanvas.getContext("2d");
+  const fontSize = text.size;
+  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const fullBox = text.style === "boxed" && text.backgroundShape === "full";
+  const horizontalInset = perLineBox
+    ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
+    : fullBox ? fontSize * 0.76 : fontSize * 0.32;
+  const currentWidth = text.width * DESIGN_WIDTH;
+  const longestParagraph = Math.max(...String(text.text || " ").split("\n").map((line) => context.measureText(line || " ").width));
+  const fittedWidth = mode === "height"
+    ? currentWidth
+    : Math.min(currentWidth, Math.max(DESIGN_WIDTH * 0.12, longestParagraph + horizontalInset));
+  const lines = wrapText(context, text.text, Math.max(1, fittedWidth - horizontalInset));
+  const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
+  const contentHeight = perLineBox
+    ? Math.max(fontSize * BOX_LINE_HEIGHT, (lines.length - 1) * lineHeight + fontSize * BOX_LINE_HEIGHT) + fontSize * 0.24
+    : lines.length * lineHeight + fontSize * (fullBox ? 0.76 : 0.28);
+  const fittedHeight = Math.max(OUTPUT_HEIGHT * 0.045, contentHeight);
+  const previous = { x: text.x, y: text.y, width: text.width, height: text.height };
+  const horizontalAnchor = textAlignment(text);
+  const right = text.x + text.width;
+  const centerX = text.x + text.width / 2;
+  const centerY = text.y + text.height / 2;
+  text.width = clamp(fittedWidth / DESIGN_WIDTH, 0.1, 1.5);
+  text.height = clamp(fittedHeight / OUTPUT_HEIGHT, 0.045, 1.5);
+  if (mode !== "height") {
+    if (horizontalAnchor === "right") text.x = right - text.width;
+    else if (horizontalAnchor === "center") text.x = centerX - text.width / 2;
+  }
+  text.y = centerY - text.height / 2;
+  return {
+    id: text.id,
+    previous,
+    fitted: { x: text.x, y: text.y, width: text.width, height: text.height },
+    lineCount: lines.length,
+  };
 }
 
 function agentApplyImagePatch(image, patch = {}, asset = projectAsset(image.assetId)) {
@@ -351,9 +401,10 @@ async function executeSlideStudioAgentOperation(operation) {
   if (operation.type === "text.add") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
+    const role = agentTextRole(operation.text, operation.role);
     const text = agentApplyTextPatch({
       id: uid(), text: "Your text", x: 0.12, y: 0.4, width: 0.76, height: 0.12,
-      size: 64, style: "plain", outlineWidth: DEFAULT_OUTLINE_WIDTH, color: "#FFFFFF",
+      role, size: AGENT_TEXT_ROLE_SIZES[role], style: "plain", outlineWidth: DEFAULT_OUTLINE_WIDTH, color: "#FFFFFF",
       background: "black", backgroundShape: "lines", align: "center", rotation: 0,
       z: nextLayerZ(slide),
     }, operation);
@@ -377,6 +428,19 @@ async function executeSlideStudioAgentOperation(operation) {
       if (updated.length === 1) selectOnlyLayer("text", updated[0]);
       return { updatedTextIds: updated };
     }, "AI agent updated text");
+  }
+
+  if (operation.type === "text.fit") {
+    const project = agentProject(operation.projectId);
+    const slide = agentSlide(project, operation.slideId);
+    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
+    return agentCommit(project, slide, () => ({
+      fittedTextBoxes: operation.textIds.map((id) => {
+        const text = slide.texts.find((item) => item.id === id);
+        if (!text) throw new Error(`Text layer not found: ${id}`);
+        return agentFitTextBox(text, operation.mode);
+      }),
+    }), "AI agent fitted text boxes to their content");
   }
 
   if (operation.type === "asset.import") {

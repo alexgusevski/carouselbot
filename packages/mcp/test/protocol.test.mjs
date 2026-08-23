@@ -67,7 +67,7 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
 
     const listed = await rpc.request("tools/list");
     const names = listed.result.tools.map((tool) => tool.name);
-    for (const name of ["get_design_guidance", "list_editors", "begin_edit_session", "end_edit_session", "list_edit_sessions", "list_recent_operations", "inspect_editor", "create_project", "add_slide", "add_text", "import_asset", "add_image", "render_slide", "export_project", "apply_operations"]) assert.ok(names.includes(name), `missing ${name}`);
+    for (const name of ["get_design_guidance", "list_editors", "begin_edit_session", "end_edit_session", "list_edit_sessions", "list_recent_operations", "inspect_editor", "create_project", "add_slide", "add_text", "fit_text_boxes", "import_asset", "add_image", "render_slide", "export_project", "apply_operations"]) assert.ok(names.includes(name), `missing ${name}`);
     assert.ok(names.length >= 30, `expected complete surface, received ${names.length}`);
     assert.ok(listed.result.tools.every((tool) => tool.annotations.openWorldHint === false), "every tool should declare its closed local domain");
     const annotations = Object.fromEntries(listed.result.tools.map((tool) => [tool.name, tool.annotations]));
@@ -81,7 +81,9 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
     assert.match(blocked.result.content[0].text, /get_design_guidance/);
 
     const guidance = await rpc.request("tools/call", { name: "get_design_guidance", arguments: {} });
-    assert.match(guidance.result.content[0].text, /Avoid `backgroundShape: "full"`/);
+    assert.match(guidance.result.content[0].text, /Treat per-line boxes as the default/);
+    assert.match(guidance.result.content[0].text, /fit_text_boxes/);
+    assert.match(guidance.result.content[0].text, /body copy `54–68`/);
 
     const editors = await rpc.request("tools/call", { name: "list_editors", arguments: {} });
     assert.deepEqual(editors.result.structuredContent.editors, []);

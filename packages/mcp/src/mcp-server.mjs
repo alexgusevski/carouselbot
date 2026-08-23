@@ -15,6 +15,7 @@ const targetProject = { editSessionId, projectId: optionalId, expectedRevision }
 const targetSlide = { editSessionId, projectId: optionalId, slideId: optionalId, expectedRevision };
 const textFields = {
   text: z.string().max(4000).optional(), x: unit.optional(), y: unit.optional(), width: positiveUnit.optional(), height: positiveUnit.optional(),
+  role: z.enum(["title", "subtitle", "body", "caption"]).optional().describe("Semantic size role. Recommended ranges: title 92-124, subtitle 68-84, body 54-68, caption 44-52."),
   size: z.number().min(20).max(180).optional(), style: z.enum(["plain", "outline", "boxed"]).optional(),
   outlineWidth: z.number().min(0).max(40).optional(), color: color.optional(), background: z.enum(["white", "black"]).optional(),
   backgroundShape: z.enum(["lines", "full"]).optional(), align: z.enum(["left", "center", "right"]).optional(),
@@ -34,7 +35,7 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["id", "editSessionId", "editorId", "projectId", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "createdImageId", "createdLayers", "assetId", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "updatedImageIds", "applied", "path", "bytes"];
+  const keys = ["id", "editSessionId", "editorId", "projectId", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "createdImageId", "createdLayers", "assetId", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
   return Object.fromEntries(keys.flatMap((key) => value?.[key] == null ? [] : [[key, value[key]]]));
 }
 
@@ -55,7 +56,7 @@ function operationLabel(toolName) {
     create_project: "Creating a project…", update_project: "Updating the project…", delete_project: "Deleting a project…",
     open_project: "Opening a project…", add_slide: "Adding a slide…", update_slide: "Updating a slide…",
     duplicate_slide: "Duplicating a slide…", reorder_slides: "Reordering slides…", delete_slide: "Deleting a slide…",
-    add_text: "Adding text…", update_text: "Updating text…", import_asset: "Importing a local image…",
+    add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_asset: "Importing a local image…",
     update_asset: "Updating an image asset…", delete_asset: "Deleting an image asset…", add_image: "Placing an image…",
     update_image: "Updating an image…", delete_layers: "Deleting layers…", duplicate_layers: "Duplicating layers…",
     reorder_layers: "Reordering layers…", undo: "Undoing the last edit…", redo: "Redoing the last edit…",
@@ -85,7 +86,7 @@ async function prepareOperation(companion, toolName, args) {
   const type = ({
     create_project: "project.create", open_project: "project.open", update_project: "project.update", delete_project: "project.delete",
     add_slide: "slide.add", update_slide: "slide.update", duplicate_slide: "slide.duplicate", reorder_slides: "slide.reorder", delete_slide: "slide.delete",
-    add_text: "text.add", update_text: "text.update", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
+    add_text: "text.add", update_text: "text.update", fit_text_boxes: "text.fit", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
     add_image: "image.add", update_image: "image.update", delete_layers: "layer.delete", duplicate_layers: "layer.duplicate", reorder_layers: "layer.reorder",
     undo: "history.undo", redo: "history.redo", set_view: "view.update", render_slide: "slide.render", inspect_editor: "editor.inspect",
   })[toolName];
@@ -159,8 +160,9 @@ export async function createSlideStudioMcpServer(companion) {
   register("reorder_slides", "Set the complete slide order using every slide ID exactly once.", z.object({ ...targetProject, slideIds: z.array(id).min(1) }).strict(), (args) => browserOperation(companion, "reorder_slides", args), { destructiveHint: true });
   register("delete_slide", "Delete one slide.", z.object({ ...targetSlide, slideId: id }).strict(), (args) => browserOperation(companion, "delete_slide", args), { destructiveHint: true });
 
-  register("add_text", "Add a text layer. Coordinates and dimensions are normalized to the 9:16 canvas; attractive defaults use generous bounds and per-line boxes.", z.object({ ...targetSlide, ...textFields, text: z.string().min(1).max(4000) }).strict(), (args) => browserOperation(companion, "add_text", args), { destructiveHint: false });
+  register("add_text", "Add a text layer. Choose a semantic role and a size within its readable range. Boxed text defaults to the preferred per-line background.", z.object({ ...targetSlide, ...textFields, text: z.string().min(1).max(4000) }).strict(), (args) => browserOperation(companion, "add_text", args), { destructiveHint: false });
   register("update_text", "Update one or more text layers, including content, geometry, color, style, alignment, rotation, and stacking.", z.object({ ...targetSlide, updates: z.array(z.object({ id, ...textFields }).strict()).min(1).max(100) }).strict(), (args) => browserOperation(companion, "update_text", args), { destructiveHint: true });
+  register("fit_text_boxes", "Resize one or more text boxes to their rendered content while preserving alignment. Use after changing text or size, and always for full-box backgrounds; mode=height keeps the current width.", z.object({ ...targetSlide, textIds: z.array(id).min(1).max(100), mode: z.enum(["height", "both"]).default("both") }).strict(), (args) => browserOperation(companion, "fit_text_boxes", args), { destructiveHint: true });
 
   register("import_asset", "Import a local image file into the active project's reusable asset library. Image bytes stay local.", z.object({ ...targetSlide, path: z.string().min(1), name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "import_asset", args), { destructiveHint: false });
   register("update_asset", "Rename a reusable image asset.", z.object({ ...targetProject, assetId: id, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_asset", args), { destructiveHint: true });
