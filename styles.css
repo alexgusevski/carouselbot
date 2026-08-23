@@ -174,14 +174,14 @@ button:disabled {
 
 .github-mark {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 25px;
+  height: 25px;
 }
 
 .airdrop-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
   object-fit: cover;
 }
 
@@ -3159,10 +3159,6 @@ input[type="range"]::-webkit-slider-thumb {
     border: 0;
   }
 
-  .mobile-edit-button {
-    display: inline-flex !important;
-  }
-
   .project-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -3209,12 +3205,6 @@ input[type="range"]::-webkit-slider-thumb {
 
   .agent-modal-connect {
     width: 100%;
-  }
-}
-
-@media (min-width: 781px) {
-  .mobile-edit-button {
-    display: none !important;
   }
 }
 

@@ -960,7 +960,6 @@ function renderHeader({ editor = false } = {}) {
       ` : ""}
       <div class="header-actions">
         ${editor ? `
-          <button class="icon-button mobile-edit-button" type="button" data-action="toggle-inspector" aria-label="Toggle text controls">${icon("edit")}</button>
           <button class="button button--quiet share-button" type="button" data-action="share" aria-label="AirDrop current slide" title="AirDrop current slide" ${activeSlide() ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop</span>
           </button>
