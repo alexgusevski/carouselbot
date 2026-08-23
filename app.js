@@ -933,7 +933,7 @@ function renderHeader({ editor = false } = {}) {
       <span class="agent-logo-stack" aria-hidden="true">
         <img src="/assets/claude-ai-symbol.svg" alt="" />
         <img src="/assets/codex-logo.svg" alt="" />
-        <img src="/assets/hermes-agent-logo.svg" alt="" />
+        <img src="/assets/hermes-agent-logo.webp" alt="" />
       </span>
       <span class="agent-connect-label">Connect AI</span>
       <span class="agent-connect-dot" aria-hidden="true"></span>

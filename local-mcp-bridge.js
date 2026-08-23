@@ -160,7 +160,7 @@ function localMcpEnsureModal() {
           <div class="agent-client-icons" aria-label="Compatible with Claude, Codex, Hermes, and other MCP clients">
             <span title="Claude"><img src="/assets/claude-ai-symbol.svg" alt="Claude" /></span>
             <span title="Codex"><img src="/assets/codex-logo.svg" alt="Codex" /></span>
-            <span title="Hermes"><img src="/assets/hermes-agent-logo.svg" alt="Hermes" /></span>
+            <span title="Hermes"><img src="/assets/hermes-agent-logo.webp" alt="Hermes" /></span>
           </div>
           <p class="agent-modal-agent-label">Use with an agent</p>
         </div>

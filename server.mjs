@@ -18,7 +18,7 @@ const files = new Map([
   ["/assets/airdrop.svg", ["assets/airdrop.svg", "image/svg+xml"]],
   ["/assets/claude-ai-symbol.svg", ["assets/claude-ai-symbol.svg", "image/svg+xml"]],
   ["/assets/codex-logo.svg", ["assets/codex-logo.svg", "image/svg+xml"]],
-  ["/assets/hermes-agent-logo.svg", ["assets/hermes-agent-logo.svg", "image/svg+xml"]],
+  ["/assets/hermes-agent-logo.webp", ["assets/hermes-agent-logo.webp", "image/webp"]],
   ["/assets/Octicons-mark-github.svg", ["assets/Octicons-mark-github.svg", "image/svg+xml"]],
   ["/assets/favicon.svg", ["assets/favicon.svg", "image/svg+xml"]],
 ]);

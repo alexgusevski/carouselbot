@@ -209,7 +209,7 @@ button:disabled {
 }
 
 .agent-logo-stack img:first-child {
-  padding: 3px;
+  padding: 0;
 }
 
 .agent-logo-stack img:nth-child(2) {
@@ -334,12 +334,8 @@ button:disabled {
 .agent-client-icons img {
   width: 100%;
   height: 100%;
-  padding: 5px;
-  object-fit: contain;
-}
-
-.agent-client-icons span:nth-child(2) img {
   padding: 0;
+  object-fit: cover;
 }
 
 .agent-modal-close {
