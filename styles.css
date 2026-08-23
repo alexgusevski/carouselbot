@@ -458,8 +458,9 @@ button:disabled {
 
 .agent-connect-actions .agent-connection-status {
   max-width: 100%;
-  justify-content: center;
-  text-align: center;
+  justify-self: start;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .agent-how-it-works {
@@ -3200,7 +3201,7 @@ input[type="range"]::-webkit-slider-thumb {
   }
 
   .agent-connect-actions .agent-connection-status {
-    justify-content: center;
+    justify-content: flex-start;
   }
 
   .agent-modal-connect {
