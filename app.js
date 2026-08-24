@@ -949,10 +949,10 @@ function renderHeader({ editor = false } = {}) {
     </button>`;
   return `
     <header class="app-header${editor ? " app-header--editor" : ""}">
-      ${editor ? '<a class="brand" href="/" data-action="home" aria-label="Go to projects">' : '<button class="brand" type="button" data-action="home" aria-label="Go to projects">'}
+      <a class="brand" href="/" data-action="home" aria-label="Go to projects">
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-copy"><strong>Slide Studio</strong><small>TikTok image maker</small></span>
-      ${editor ? "</a>" : "</button>"}
+      </a>
       ${editor && project ? `
         <div class="project-identity">
           <input class="project-title-input" value="${escapeHtml(project.name)}" aria-label="Project name" maxlength="64" />
@@ -1621,6 +1621,7 @@ function createProject() {
 }
 
 function bindDashboardEvents() {
+  bindGlobalActions();
   app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
   app.querySelectorAll("[data-project-id]").forEach((link) => {
     link.addEventListener("click", (event) => {
