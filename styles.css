@@ -619,8 +619,10 @@ button:disabled {
   gap: 12px;
   align-items: center;
   border: 0;
+  color: inherit;
   background: transparent;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .not-found-brand {

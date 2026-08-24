@@ -949,10 +949,10 @@ function renderHeader({ editor = false } = {}) {
     </button>`;
   return `
     <header class="app-header${editor ? " app-header--editor" : ""}">
-      <button class="brand" type="button" data-action="home" aria-label="Go to projects">
+      ${editor ? '<a class="brand" href="/" data-action="home" aria-label="Go to projects">' : '<button class="brand" type="button" data-action="home" aria-label="Go to projects">'}
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-copy"><strong>Slide Studio</strong><small>TikTok image maker</small></span>
-      </button>
+      ${editor ? "</a>" : "</button>"}
       ${editor && project ? `
         <div class="project-identity">
           <input class="project-title-input" value="${escapeHtml(project.name)}" aria-label="Project name" maxlength="64" />
@@ -1641,7 +1641,18 @@ function bindDashboardEvents() {
 }
 
 function bindGlobalActions() {
-  app.querySelector('[data-action="home"]')?.addEventListener("click", () => openDashboard());
+  const homeLink = app.querySelector('[data-action="home"]');
+  homeLink?.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    openDashboard();
+  });
+  homeLink?.addEventListener("contextmenu", (event) => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    window.open(homeLink.href, "_blank", "noopener");
+  });
 }
 
 function bindEditorEvents() {
