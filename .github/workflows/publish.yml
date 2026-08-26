@@ -1,0 +1,55 @@
+name: Publish npm packages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish with provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-release
+
+    steps:
+      - name: Check out the released tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Verify release tag and package versions
+        run: node scripts/verify-release.mjs "${{ github.event.release.tag_name }}"
+
+      - name: Test release source
+        run: npm test
+
+      - name: Publish stable packages
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          npm publish --workspace carouselbot --access public --provenance --tag latest
+          npm publish --workspace slides-studio-mcp --access public --provenance --tag latest
+
+      - name: Publish prerelease packages
+        if: ${{ github.event.release.prerelease }}
+        run: |
+          npm publish --workspace carouselbot --access public --provenance --tag beta
+          npm publish --workspace slides-studio-mcp --access public --provenance --tag beta
