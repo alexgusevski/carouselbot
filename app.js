@@ -81,6 +81,7 @@ const state = {
   copiedLayer: null,
   shareAllCache: null,
 };
+let migrationModalDismissed = false;
 
 const projectChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel(PROJECT_CHANNEL_NAME) : null;
 const projectChannelSource = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
@@ -1012,27 +1013,34 @@ function renderHeader({ editor = false } = {}) {
 }
 
 function renderLegacyMigrationNotice(projects) {
-  if (!domainMigration.isLegacyOrigin || !domainMigration.config.enabled) return "";
+  if (!domainMigration.isLegacyOrigin || !domainMigration.config.enabled || migrationModalDismissed) return "";
   const completed = domainMigration.completedMigration();
   const count = projects.length;
   const pending = domainMigration.hasPendingProjects(projects);
   const detail = completed && !pending
-    ? `A copy of ${completed.projectCount} ${completed.projectCount === 1 ? "project" : "projects"} was sent to carousel.bot. Your originals are still safe here.`
+    ? `Your ${completed.projectCount === 1 ? "project has" : "projects have"} already been copied. The originals are still safe in this browser.`
     : count
-      ? `${completed ? "Projects changed since your last copy. " : ""}We found ${count} ${count === 1 ? "project" : "projects"} in this browser. Copy them securely to the new domain; nothing will be deleted here.`
-      : "This browser has no projects to copy. Open the new CarouselBot home to get started.";
+      ? `${completed ? "Some projects changed since your last copy. " : ""}We found ${count} ${count === 1 ? "project" : "projects"} in this browser. Copying them will not remove anything from this site.`
+      : "There are no projects saved in this browser, so you can head straight to the new site.";
   return `
-    <section class="migration-notice" aria-labelledby="migration-notice-title">
-      <div>
-        <p class="eyebrow">New name, new home</p>
-        <h2 id="migration-notice-title">Slide Studio is now CarouselBot.</h2>
-        <p data-migration-status>${escapeHtml(detail)}</p>
-      </div>
-      <div class="migration-actions">
-        ${pending ? `<button class="button button--primary" type="button" data-action="migrate-projects">${completed ? "Copy changed projects" : `Copy ${count === 1 ? "my project" : `my ${count} projects`}`}</button>` : ""}
-        <a class="button button--quiet" href="${escapeHtml(domainMigration.config.canonicalOrigin)}" target="_blank" rel="noopener">Open carousel.bot</a>
-      </div>
-    </section>`;
+    <div class="migration-modal-backdrop" data-migration-modal>
+      <section class="migration-modal" role="dialog" aria-modal="true" aria-labelledby="migration-modal-title" aria-describedby="migration-modal-description migration-modal-status">
+        <button class="migration-modal-close" type="button" data-action="close-migration-modal" aria-label="Close migration notice" title="Close">
+          <span aria-hidden="true">×</span>
+        </button>
+        <p class="eyebrow">Slide Studio has moved</p>
+        <h2 id="migration-modal-title">Meet CarouselBot.</h2>
+        <p id="migration-modal-description" class="migration-modal-description">
+          This project now lives at <strong>carousel.bot</strong>. It is still free and
+          <a href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer">open source</a>.
+        </p>
+        <p id="migration-modal-status" class="migration-modal-status" data-migration-status>${escapeHtml(detail)}</p>
+        <div class="migration-actions">
+          ${pending ? `<button class="button button--primary" type="button" data-action="migrate-projects">${completed ? "Copy changed projects" : `Copy ${count === 1 ? "my project" : `my ${count} projects`}`}</button>` : ""}
+          <a class="button button--quiet" href="${escapeHtml(domainMigration.config.canonicalOrigin)}" target="_blank" rel="noopener">${pending ? "Open without copying" : "Open carousel.bot"}</a>
+        </div>
+      </section>
+    </div>`;
 }
 
 function renderDashboard() {
@@ -1681,6 +1689,22 @@ function createProject() {
 
 function bindDashboardEvents() {
   bindGlobalActions();
+  const migrationModal = app.querySelector("[data-migration-modal]");
+  const dismissMigrationModal = () => {
+    if (!migrationModal) return;
+    migrationModalDismissed = true;
+    migrationModal.classList.add("is-closing");
+    window.setTimeout(() => migrationModal.remove(), 150);
+    app.querySelector('[data-action="new-project"]')?.focus({ preventScroll: true });
+  };
+  migrationModal?.querySelector('[data-action="close-migration-modal"]')?.addEventListener("click", dismissMigrationModal);
+  migrationModal?.addEventListener("click", (event) => {
+    if (event.target === migrationModal) dismissMigrationModal();
+  });
+  migrationModal?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") dismissMigrationModal();
+  });
+  migrationModal?.querySelector('[data-action="close-migration-modal"]')?.focus({ preventScroll: true });
   app.querySelector('[data-action="migrate-projects"]')?.addEventListener("click", migrateLegacyProjects);
   app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
   app.querySelectorAll("[data-project-id]").forEach((link) => {
