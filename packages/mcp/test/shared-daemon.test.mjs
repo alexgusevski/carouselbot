@@ -5,16 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 test("shares one daemon while preserving per-agent editor selection", async () => {
-  const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-shared-"));
+  const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-shared-"));
   const port = 45000 + Math.floor(Math.random() * 1000);
-  process.env.SLIDE_STUDIO_STATE_DIR = stateDirectory;
-  process.env.SLIDE_STUDIO_BRIDGE_PORT = String(port);
-  process.env.SLIDE_STUDIO_EDITOR_TTL_MS = "120";
-  process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS = "2000";
+  process.env.CAROUSELBOT_STATE_DIR = stateDirectory;
+  process.env.CAROUSELBOT_BRIDGE_PORT = String(port);
+  process.env.CAROUSELBOT_EDITOR_TTL_MS = "120";
+  process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS = "2000";
   const { companionRestart, createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
   const first = await createCompanion("Claude Code", "test");
   const second = await createCompanion("Codex", "test");
-  const origin = "https://slides-editor.pages.dev";
+  const origin = "https://carousel.bot";
   const base = `http://127.0.0.1:${port}`;
 
   async function connect(editorId) {
@@ -136,9 +136,9 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const state = await readFile(join(stateDirectory, `daemon-${port}.json`), "utf8").then(JSON.parse).catch(() => null);
     if (state?.pid) try { process.kill(state.pid, "SIGTERM"); } catch { /* Already stopped. */ }
     await rm(stateDirectory, { recursive: true, force: true });
-    delete process.env.SLIDE_STUDIO_STATE_DIR;
-    delete process.env.SLIDE_STUDIO_BRIDGE_PORT;
-    delete process.env.SLIDE_STUDIO_EDITOR_TTL_MS;
-    delete process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS;
+    delete process.env.CAROUSELBOT_STATE_DIR;
+    delete process.env.CAROUSELBOT_BRIDGE_PORT;
+    delete process.env.CAROUSELBOT_EDITOR_TTL_MS;
+    delete process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS;
   }
 });

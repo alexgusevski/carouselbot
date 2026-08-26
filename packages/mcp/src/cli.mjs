@@ -36,7 +36,7 @@ async function main() {
     return;
   }
   if (command === "help" || command === "--help" || command === "-h") {
-    process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\n\nUsage:\n  slides-studio-mcp serve [--agent=claude|codex|hermes|opencode|openclaw]\n  slides-studio-mcp setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  slides-studio-mcp call <tool> [--json '{"key":"value"}'] [--stdin]\n  slides-studio-mcp doctor\n  slides-studio-mcp restart\n  slides-studio-mcp version\n`);
+    process.stdout.write(`CarouselBot MCP ${PACKAGE_VERSION}\n\nUsage:\n  carouselbot serve [--agent=claude|codex|hermes|opencode|openclaw]\n  carouselbot setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  carouselbot call <tool> [--json '{"key":"value"}'] [--stdin]\n  carouselbot doctor\n  carouselbot restart\n  carouselbot version\n`);
     return;
   }
   throw new Error(`Unknown command: ${command}`);

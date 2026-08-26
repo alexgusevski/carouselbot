@@ -11,9 +11,9 @@ const execute = promisify(execFile);
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 
 test("calls the validated MCP tool surface from the CLI without a client restart", async () => {
-  const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-call-"));
+  const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-call-"));
   const port = 47000 + Math.floor(Math.random() * 1000);
-  const env = { ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory, SLIDE_STUDIO_BRIDGE_PORT: String(port) };
+  const env = { ...process.env, CAROUSELBOT_STATE_DIR: stateDirectory, CAROUSELBOT_BRIDGE_PORT: String(port) };
   try {
     const { stdout } = await execute(process.execPath, [cli, "call", "list_editors"], { env, timeout: 15_000 });
     const result = JSON.parse(stdout);

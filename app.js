@@ -1,8 +1,10 @@
-const DB_NAME = "slide-studio-db";
+const APP_CONFIG = window.CAROUSELBOT_CONFIG;
+const domainMigration = window.CarouselBotDomainMigration.createController(window, APP_CONFIG);
+const DB_NAME = domainMigration.isLegacyOrigin ? "slide-studio-db" : "carouselbot-db";
 const DB_VERSION = 1;
 const STORE_NAME = "projects";
-const PROJECT_CHANNEL_NAME = "slide-studio-projects-v1";
-const PROJECT_SYNC_STORAGE_KEY = "slide-studio:project-change";
+const PROJECT_CHANNEL_NAME = "carouselbot-projects-v1";
+const PROJECT_SYNC_STORAGE_KEY = "carouselbot:project-change";
 const DESIGN_WIDTH = 1080;
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
@@ -11,8 +13,10 @@ const DEFAULT_OUTLINE_WIDTH = 12;
 const OUTLINE_RATIO = 0.17;
 const TEXT_WEIGHT = 500;
 const TEXT_LINE_HEIGHT = 1.12;
-const CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
-const CLIPBOARD_STORAGE_KEY = "slide-studio-layer-clipboard";
+const CLIPBOARD_LAYER_TYPE = "application/x-carouselbot-layer";
+const LEGACY_CLIPBOARD_LAYER_TYPE = "application/x-slide-studio-layer";
+const CLIPBOARD_STORAGE_KEY = "carouselbot-layer-clipboard";
+const LEGACY_CLIPBOARD_STORAGE_KEY = "slide-studio-layer-clipboard";
 const HISTORY_LIMIT = 200;
 const BOX_TEXT_LINE_HEIGHT = 1.12;
 const BOX_LINE_HEIGHT = 1.42;
@@ -322,6 +326,36 @@ function putProject(project, { expectedRevision = null, broadcast = true } = {})
     transaction.onerror = () => { if (!conflict) reject(transaction.error); };
     transaction.onabort = () => reject(conflict || transaction.error || new Error("Project save was aborted."));
   });
+}
+
+async function importMigratedProject(project) {
+  const incoming = structuredClone(project);
+  const result = await new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    let outcome = "invalid";
+    const read = store.get(incoming.id);
+    read.onerror = () => reject(read.error);
+    read.onsuccess = () => {
+      outcome = domainMigration.migrationResult(read.result || null, incoming);
+      if (outcome === "invalid") {
+        transaction.abort();
+        return;
+      }
+      if (outcome !== "skipped") store.put(incoming);
+    };
+    transaction.oncomplete = () => resolve(outcome);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(outcome === "invalid"
+      ? new Error(`Project ${incoming.id || "unknown"} is not a valid CarouselBot project.`)
+      : transaction.error || new Error("Project import was aborted."));
+  });
+  if (result === "skipped") return result;
+  announceProjectChange("project.updated", incoming);
+  const index = state.projects.findIndex((item) => item.id === incoming.id);
+  if (index >= 0) state.projects[index] = incoming;
+  else state.projects.push(incoming);
+  return result;
 }
 
 function deleteProjectFromDb(projectId, { expectedRevision = null, broadcast = true } = {}) {
@@ -951,7 +985,7 @@ function renderHeader({ editor = false } = {}) {
     <header class="app-header${editor ? " app-header--editor" : ""}">
       <a class="brand" href="/" data-action="home" aria-label="Go to projects">
         <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-copy"><strong>Slide Studio</strong><small>TikTok image maker</small></span>
+        <span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span>
       </a>
       ${editor && project ? `
         <div class="project-identity">
@@ -971,10 +1005,34 @@ function renderHeader({ editor = false } = {}) {
             ${icon("download")} <span>PNG</span>
           </button>
         ` : `${agentConnectButton}<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
-        <a class="icon-button github-link" href="https://github.com/alexgusevski/tiktokslideeditor" target="_blank" rel="noopener noreferrer" aria-label="Open Slide Studio on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
+        <a class="icon-button github-link" href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer" aria-label="Open CarouselBot on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
       </div>
     </header>
   `;
+}
+
+function renderLegacyMigrationNotice(projects) {
+  if (!domainMigration.isLegacyOrigin || !domainMigration.config.enabled) return "";
+  const completed = domainMigration.completedMigration();
+  const count = projects.length;
+  const pending = domainMigration.hasPendingProjects(projects);
+  const detail = completed && !pending
+    ? `A copy of ${completed.projectCount} ${completed.projectCount === 1 ? "project" : "projects"} was sent to carousel.bot. Your originals are still safe here.`
+    : count
+      ? `${completed ? "Projects changed since your last copy. " : ""}We found ${count} ${count === 1 ? "project" : "projects"} in this browser. Copy them securely to the new domain; nothing will be deleted here.`
+      : "This browser has no projects to copy. Open the new CarouselBot home to get started.";
+  return `
+    <section class="migration-notice" aria-labelledby="migration-notice-title">
+      <div>
+        <p class="eyebrow">New name, new home</p>
+        <h2 id="migration-notice-title">Slide Studio is now CarouselBot.</h2>
+        <p data-migration-status>${escapeHtml(detail)}</p>
+      </div>
+      <div class="migration-actions">
+        ${pending ? `<button class="button button--primary" type="button" data-action="migrate-projects">${completed ? "Copy changed projects" : `Copy ${count === 1 ? "my project" : `my ${count} projects`}`}</button>` : ""}
+        <a class="button button--quiet" href="${escapeHtml(domainMigration.config.canonicalOrigin)}" target="_blank" rel="noopener">Open carousel.bot</a>
+      </div>
+    </section>`;
 }
 
 function renderDashboard() {
@@ -982,10 +1040,11 @@ function renderDashboard() {
   state.activeProjectId = null;
   state.activeSlideId = null;
   clearLayerSelection();
-  document.title = "Slide Studio";
+  document.title = "CarouselBot";
   const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
   app.innerHTML = `
     ${renderHeader()}
+    ${renderLegacyMigrationNotice(sortedProjects)}
     <main class="dashboard">
       <section class="dashboard-hero">
         <div>
@@ -1095,7 +1154,7 @@ function clearProjectCover(projectId) {
 function renderEditor() {
   const project = activeProject();
   if (!project) return renderDashboard();
-  document.title = `${project.name} · Slide Studio`;
+  document.title = `${project.name} · CarouselBot`;
   if (!activeSlide() && project.slides[0]) state.activeSlideId = project.slides[0].id;
   const previousSlideList = app.querySelector(".slide-list");
   if (previousSlideList) {
@@ -1622,6 +1681,7 @@ function createProject() {
 
 function bindDashboardEvents() {
   bindGlobalActions();
+  app.querySelector('[data-action="migrate-projects"]')?.addEventListener("click", migrateLegacyProjects);
   app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
   app.querySelectorAll("[data-project-id]").forEach((link) => {
     link.addEventListener("click", (event) => {
@@ -1639,6 +1699,28 @@ function bindDashboardEvents() {
       showProjectMenu(event, link.dataset.projectId);
     });
   });
+}
+
+async function migrateLegacyProjects(event) {
+  const button = event.currentTarget;
+  const status = app.querySelector("[data-migration-status]");
+  button.disabled = true;
+  button.textContent = "Opening CarouselBot…";
+  try {
+    const summary = await domainMigration.start([...state.projects], {
+      onProgress: ({ completed, total }) => {
+        button.textContent = `Copying ${completed} of ${total}…`;
+        if (status) status.textContent = "Keep both tabs open while your projects and images are copied.";
+      },
+    });
+    if (status) status.textContent = `Copied ${summary.projectCount} ${summary.projectCount === 1 ? "project" : "projects"} to carousel.bot. Your originals are still safe here.`;
+    button.textContent = "Projects copied";
+  } catch (error) {
+    console.error(error);
+    if (status) status.textContent = error.message;
+    button.disabled = false;
+    button.textContent = "Try again";
+  }
 }
 
 function bindGlobalActions() {
@@ -1661,7 +1743,7 @@ function bindEditorEvents() {
   const title = app.querySelector(".project-title-input");
   title?.addEventListener("input", () => {
     activeProject().name = title.value || "New Project";
-    document.title = `${activeProject().name} · Slide Studio`;
+    document.title = `${activeProject().name} · CarouselBot`;
     scheduleSave();
   });
 
@@ -2616,7 +2698,7 @@ function reorderSlide(sourceId, targetId, placement) {
 }
 
 function bindSlideReordering() {
-  const slideType = "application/x-slide-studio-slide";
+  const slideType = "application/x-carouselbot-slide";
   const buttons = [...app.querySelectorAll(".slide-thumb[data-slide-id]")];
   buttons.forEach((button) => {
     button.addEventListener("contextmenu", (event) => {
@@ -4099,6 +4181,7 @@ function rememberCopiedLayer(copied) {
   state.copiedLayer = copied;
   try {
     localStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(copied));
+    localStorage.setItem(LEGACY_CLIPBOARD_STORAGE_KEY, JSON.stringify(copied));
   } catch (error) {
     console.warn("Could not share the copied layer with other tabs.", error);
   }
@@ -4106,7 +4189,8 @@ function rememberCopiedLayer(copied) {
 
 function storedCopiedLayer(token) {
   try {
-    const copied = parseCopiedLayer(localStorage.getItem(CLIPBOARD_STORAGE_KEY));
+    const copied = parseCopiedLayer(localStorage.getItem(CLIPBOARD_STORAGE_KEY))
+      || parseCopiedLayer(localStorage.getItem(LEGACY_CLIPBOARD_STORAGE_KEY));
     return copied?.token === token ? copied : null;
   } catch {
     return null;
@@ -4128,7 +4212,8 @@ function handleLayerCopy(event) {
   rememberCopiedLayer(copied);
   event.preventDefault();
   event.clipboardData?.setData(CLIPBOARD_LAYER_TYPE, JSON.stringify(copied));
-  event.clipboardData?.setData("text/plain", `slide-studio-layer:${token}`);
+  event.clipboardData?.setData(LEGACY_CLIPBOARD_LAYER_TYPE, JSON.stringify(copied));
+  event.clipboardData?.setData("text/plain", `carouselbot-layer:${token}`);
   toast(copies.length === 1
     ? `${copies[0].kind === "overlay" ? "Asset" : "Text"} copied`
     : `${copies.length} layers copied`);
@@ -4136,11 +4221,13 @@ function handleLayerCopy(event) {
 
 function copiedLayerFromClipboard(clipboardData) {
   if (!clipboardData) return null;
-  const clipboardLayer = parseCopiedLayer(clipboardData.getData(CLIPBOARD_LAYER_TYPE));
-  let token = clipboardLayer?.token || clipboardData.getData(CLIPBOARD_LAYER_TYPE);
+  const clipboardLayer = parseCopiedLayer(clipboardData.getData(CLIPBOARD_LAYER_TYPE))
+    || parseCopiedLayer(clipboardData.getData(LEGACY_CLIPBOARD_LAYER_TYPE));
+  let token = clipboardLayer?.token || clipboardData.getData(CLIPBOARD_LAYER_TYPE) || clipboardData.getData(LEGACY_CLIPBOARD_LAYER_TYPE);
   if (!token) {
     const text = clipboardData.getData("text/plain");
-    if (text.startsWith("slide-studio-layer:")) token = text.slice("slide-studio-layer:".length);
+    if (text.startsWith("carouselbot-layer:")) token = text.slice("carouselbot-layer:".length);
+    else if (text.startsWith("slide-studio-layer:")) token = text.slice("slide-studio-layer:".length);
   }
   if (!token) return null;
   if (token === state.copiedLayer?.token) return state.copiedLayer;
@@ -4348,6 +4435,24 @@ async function init() {
     state.projects = [];
     toast("Browser storage is unavailable. Projects won’t persist.");
   }
+  window.addEventListener("carouselbot:migration-complete", async (event) => {
+    state.projects = await getAllProjects();
+    renderDashboard();
+    const { imported = 0, updated = 0, skipped = 0 } = event.detail || {};
+    toast(`Projects ready: ${imported} copied, ${updated} updated${skipped ? `, ${skipped} already current` : ""}.`);
+  });
+  try {
+    domainMigration.registerImporter(importMigratedProject);
+  } catch (error) {
+    console.error(error);
+    toast(error.message);
+  }
+  if (domainMigration.isLegacyOrigin
+    && domainMigration.config.autoForwardEmptyLegacyStorage
+    && !domainMigration.hasPendingProjects(state.projects)) {
+    window.location.replace(domainMigration.config.canonicalOrigin);
+    return;
+  }
   renderCurrentRoute();
   window.addEventListener("popstate", renderCurrentRoute);
   window.addEventListener("pageshow", () => {
@@ -4438,4 +4543,6 @@ function refreshDashboardProjects() {
   return dashboardRefreshPromise;
 }
 
-window.slideStudioReady = init();
+window.carouselBotDomainMigration = domainMigration;
+window.carouselBotReady = init();
+window.slideStudioReady = window.carouselBotReady;

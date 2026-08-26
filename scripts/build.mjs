@@ -9,8 +9,10 @@ const output = join(root, "dist");
 await rm(output, { recursive: true, force: true });
 await mkdir(join(output, "assets"), { recursive: true });
 
-const [indexHtml, appSource, agentSource, bridgeSource, styleSource] = await Promise.all([
+const [indexHtml, configSource, migrationSource, appSource, agentSource, bridgeSource, styleSource] = await Promise.all([
   readFile(join(root, "index.html"), "utf8"),
+  readFile(join(root, "app-config.js"), "utf8"),
+  readFile(join(root, "domain-migration.js"), "utf8"),
   readFile(join(root, "app.js"), "utf8"),
   readFile(join(root, "agent-commands.js"), "utf8"),
   readFile(join(root, "local-mcp-bridge.js"), "utf8"),
@@ -18,6 +20,8 @@ const [indexHtml, appSource, agentSource, bridgeSource, styleSource] = await Pro
 ]);
 const assetVersion = createHash("sha256")
   .update(appSource)
+  .update(configSource)
+  .update(migrationSource)
   .update(agentSource)
   .update(bridgeSource)
   .update(styleSource)
@@ -26,6 +30,8 @@ const assetVersion = createHash("sha256")
 
 await Promise.all([
   writeFile(join(output, "index.html"), indexHtml.replaceAll("?v=dev", `?v=${assetVersion}`)),
+  copyFile(join(root, "app-config.js"), join(output, "app-config.js")),
+  copyFile(join(root, "domain-migration.js"), join(output, "domain-migration.js")),
   copyFile(join(root, "app.js"), join(output, "app.js")),
   copyFile(join(root, "agent-commands.js"), join(output, "agent-commands.js")),
   copyFile(join(root, "local-mcp-bridge.js"), join(output, "local-mcp-bridge.js")),

@@ -1,26 +1,30 @@
 {
-  "name": "slide-studio",
+  "name": "carouselbot-web",
   "version": "1.0.0",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
-  "description": "Local-first web editor for TikTok slideshow images",
-  "homepage": "https://slides-editor.pages.dev",
+  "description": "Local-first carousel editor with an optional MCP companion",
+  "homepage": "https://carousel.bot",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/alexgusevski/tiktokslideeditor.git"
+    "url": "git+https://github.com/alexgusevski/carouselbot.git"
   },
   "bugs": {
-    "url": "https://github.com/alexgusevski/tiktokslideeditor/issues"
+    "url": "https://github.com/alexgusevski/carouselbot/issues"
   },
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
     "mcp": "node packages/mcp/src/cli.mjs serve",
     "mcp:doctor": "node packages/mcp/src/cli.mjs doctor",
-    "mcp:pack": "npm pack --workspace slides-studio-mcp",
+    "mcp:pack": "npm pack --workspace carouselbot",
+    "mcp:pack:legacy": "npm pack --workspace slides-studio-mcp",
+    "test:migration": "node --test test/*.test.cjs",
+    "test:migration:browser": "node scripts/test-domain-migration-browser.mjs",
+    "test": "npm run test:migration && npm run test:mcp",
     "test:mcp": "node --test packages/mcp/test/*.test.mjs",
     "test:mcp:browser": "node scripts/test-mcp-browser-local.mjs --deployed --shared-daemon",
     "test:mcp:browser:local": "node scripts/test-mcp-browser-local.mjs",

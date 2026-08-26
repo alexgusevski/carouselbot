@@ -5,12 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const host = "127.0.0.1";
-const port = Number(process.env.SLIDE_STUDIO_PORT) || 4173;
+const port = Number(process.env.CAROUSELBOT_PORT || process.env.SLIDE_STUDIO_PORT) || 4173;
 
 const files = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
+  ["/app-config.js", ["app-config.js", "text/javascript; charset=utf-8"]],
+  ["/domain-migration.js", ["domain-migration.js", "text/javascript; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/agent-commands.js", ["agent-commands.js", "text/javascript; charset=utf-8"]],
   ["/local-mcp-bridge.js", ["local-mcp-bridge.js", "text/javascript; charset=utf-8"]],
@@ -52,5 +54,5 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Slide Studio is running at http://${host}:${port}`);
+  console.log(`CarouselBot is running at http://${host}:${port}`);
 });

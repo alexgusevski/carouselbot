@@ -7,9 +7,15 @@
     <meta name="theme-color" content="#121310" media="(prefers-color-scheme: dark)" />
     <meta
       name="description"
-      content="A simple local editor for making TikTok slideshow images."
+      content="Create polished social carousels locally in your browser, with optional AI editing through the CarouselBot MCP companion."
     />
-    <title>Slide Studio</title>
+    <meta property="og:site_name" content="CarouselBot" />
+    <meta property="og:title" content="CarouselBot — AI carousel maker" />
+    <meta property="og:description" content="Create polished social carousels locally in your browser." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://carousel.bot" />
+    <link rel="canonical" href="https://carousel.bot" />
+    <title>CarouselBot</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css?v=dev" />
   </head>
@@ -24,6 +30,8 @@
       </svg>
     </template>
 
+    <script src="/app-config.js?v=dev" defer></script>
+    <script src="/domain-migration.js?v=dev" defer></script>
     <script src="/app.js?v=dev" defer></script>
     <script src="/agent-commands.js?v=dev" defer></script>
     <script src="/local-mcp-bridge.js?v=dev" defer></script>

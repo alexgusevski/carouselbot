@@ -6,6 +6,8 @@ import { createInterface } from "node:readline/promises";
 import { EDITOR_URL, PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION } from "./config.mjs";
 
 const supported = ["claude", "codex", "hermes", "opencode", "openclaw"];
+const serverName = "carouselbot";
+const legacyServerName = "slide-studio";
 
 function commandExists(command) {
   return spawnSync(command, ["--version"], { stdio: "ignore" }).error?.code !== "ENOENT";
@@ -17,17 +19,17 @@ function commandVersion(command) {
 }
 
 function shellCommand(client, specifier) {
-  if (client === "claude") return ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", "slide-studio", "--", "npx", "-y", specifier, "serve", "--agent=claude"];
-  if (client === "codex") return ["codex", "mcp", "add", "slide-studio", "--", "npx", "-y", specifier, "serve", "--agent=codex"];
-  if (client === "hermes") return ["hermes", "mcp", "add", "slide-studio", "--command", "npx", "--args", "-y", specifier, "serve", "--agent=hermes"];
-  if (client === "openclaw") return ["openclaw", "mcp", "add", "slide-studio", "--command", "npx", "--arg", "-y", "--arg", specifier, "--arg", "serve", "--arg", "--agent=openclaw"];
+  if (client === "claude") return ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", serverName, "--", "npx", "-y", specifier, "serve", "--agent=claude"];
+  if (client === "codex") return ["codex", "mcp", "add", serverName, "--", "npx", "-y", specifier, "serve", "--agent=codex"];
+  if (client === "hermes") return ["hermes", "mcp", "add", serverName, "--command", "npx", "--args", "-y", specifier, "serve", "--agent=hermes"];
+  if (client === "openclaw") return ["openclaw", "mcp", "add", serverName, "--command", "npx", "--arg", "-y", "--arg", specifier, "--arg", "serve", "--arg", "--agent=openclaw"];
   return null;
 }
 
-function removeCommand(client) {
-  if (client === "claude") return ["claude", "mcp", "remove", "--scope", "user", "slide-studio"];
-  if (["codex", "hermes", "openclaw"].includes(client)) return [client, "mcp", "remove", "slide-studio"];
-  return null;
+function removeCommands(client) {
+  if (client === "claude") return [serverName, legacyServerName].map((name) => ["claude", "mcp", "remove", "--scope", "user", name]);
+  if (["codex", "hermes", "openclaw"].includes(client)) return [serverName, legacyServerName].map((name) => [client, "mcp", "remove", name]);
+  return [];
 }
 
 function quote(value) {
@@ -37,16 +39,16 @@ function quote(value) {
 function openCodeSnippet(specifier, version = commandVersion("opencode")) {
   const server = { type: "local", command: ["npx", "-y", specifier, "serve", "--agent=opencode"] };
   return JSON.stringify(Number(version?.split(".")[0]) >= 2
-    ? { mcp: { servers: { "slide-studio": server } } }
-    : { mcp: { "slide-studio": { ...server, enabled: true } } }, null, 2);
+    ? { mcp: { servers: { [serverName]: server } } }
+    : { mcp: { [serverName]: { ...server, enabled: true } } }, null, 2);
 }
 
 async function installSkill() {
-  const source = join(PACKAGE_ROOT, "skill", "slide-studio");
+  const source = join(PACKAGE_ROOT, "skill", "carouselbot");
   const targets = [
-    join(homedir(), ".agents", "skills", "slide-studio"),
-    join(homedir(), ".claude", "skills", "slide-studio"),
-    join(homedir(), ".hermes", "skills", "slide-studio"),
+    join(homedir(), ".agents", "skills", "carouselbot"),
+    join(homedir(), ".claude", "skills", "carouselbot"),
+    join(homedir(), ".hermes", "skills", "carouselbot"),
   ];
   for (const target of targets) {
     await mkdir(target, { recursive: true });
@@ -66,7 +68,7 @@ export async function runSetup(arguments_) {
   const assumeYes = flags.has("--yes") || flags.has("-y");
   if (!clients.length) throw new Error("No supported agent CLI was detected. Use --client=claude,codex,hermes,opencode,openclaw or copy the generic stdio config below.");
 
-  process.stdout.write(`Slide Studio MCP ${PACKAGE_VERSION}\nDetected: ${clients.join(", ")}\nEditor: ${EDITOR_URL}\n\n`);
+  process.stdout.write(`CarouselBot MCP ${PACKAGE_VERSION}\nDetected: ${clients.join(", ")}\nEditor: ${EDITOR_URL}\n\n`);
   for (const client of clients) {
     const command = shellCommand(client, specifier);
     if (command) process.stdout.write(`${client}: ${command.map(quote).join(" ")}\n`);
@@ -78,7 +80,7 @@ export async function runSetup(arguments_) {
   let approved = assumeYes;
   if (!approved && process.stdin.isTTY) {
     const prompt = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await prompt.question("\nAdd Slide Studio to the detected agent configs and install its skill? [y/N] ");
+    const answer = await prompt.question("\nAdd CarouselBot to the detected agent configs and install its skill? [y/N] ");
     prompt.close();
     approved = /^y(?:es)?$/i.test(answer.trim());
   }
@@ -91,8 +93,7 @@ export async function runSetup(arguments_) {
   for (const client of clients) {
     const command = shellCommand(client, specifier);
     if (!command) continue;
-    const remove = removeCommand(client);
-    if (remove) spawnSync(remove[0], remove.slice(1), { stdio: "ignore" });
+    for (const remove of removeCommands(client)) spawnSync(remove[0], remove.slice(1), { stdio: "ignore" });
     const result = spawnSync(command[0], command.slice(1), { stdio: "inherit" });
     if (result.status === 0) configured.push(client);
     else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);

@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  // Keep this Pages project name until the legacy-origin IndexedDB migration is retired.
   "name": "slides-editor",
   "compatibility_date": "2026-08-18",
   "pages_build_output_dir": "./dist"

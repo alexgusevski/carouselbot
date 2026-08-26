@@ -10,14 +10,14 @@ import {
 
 const MAX_JSON_BYTES = 40 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
-const EDITOR_TTL_MS = Number(process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
+const EDITOR_TTL_MS = Number(process.env.CAROUSELBOT_EDITOR_TTL_MS || process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 90_000;
-const EDIT_SESSION_TTL_MS = Number(process.env.SLIDE_STUDIO_EDIT_SESSION_TTL_MS) || 5 * 60_000;
+const EDIT_SESSION_TTL_MS = Number(process.env.CAROUSELBOT_EDIT_SESSION_TTL_MS || process.env.SLIDE_STUDIO_EDIT_SESSION_TTL_MS) || 5 * 60_000;
 const MAX_AUDIT_EVENTS = 500;
 const MAX_AUDIT_BYTES = 2 * 1024 * 1024;
-const EVENT_POLL_TIMEOUT_MS = Number(process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS) || 500;
+const EVENT_POLL_TIMEOUT_MS = Number(process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS || process.env.SLIDE_STUDIO_EVENT_POLL_TIMEOUT_MS) || 500;
 const MAX_EVENT_POLL_TIMEOUT_MS = 5_000;
 const daemonSecret = randomBytes(32).toString("base64url");
 const editors = new Map();
@@ -32,7 +32,7 @@ let idleSince = null;
 let auditWrite = Promise.resolve();
 
 function log(message) {
-  process.stderr.write(`[slide-studio-daemon] ${message}\n`);
+  process.stderr.write(`[carouselbot-daemon] ${message}\n`);
 }
 
 function editorHasInflightCommand(editorId) {
@@ -157,7 +157,7 @@ function claimProject(session, projectId) {
 
 function beginEditSession(client, { editorId, projectId, purpose }) {
   const connected = activeEditors();
-  if (!connected.length) throw codedError("NO_EDITOR", "No Slide Studio editor is connected. Open the test editor in the user's normal browser and click Connect AI.");
+  if (!connected.length) throw codedError("NO_EDITOR", "No CarouselBot editor is connected. Open the editor in the user's normal browser and click Connect AI.");
   let editor = editorId ? connected.find((item) => item.id === editorId) : null;
   if (editorId && !editor) throw codedError("EDITOR_DISCONNECTED", `Editor is not connected: ${editorId}`);
   if (!editor) {
@@ -173,7 +173,7 @@ function beginEditSession(client, { editorId, projectId, purpose }) {
   const now = Date.now();
   const session = {
     id: randomUUID(), editorId: editor.id, projectId: projectId || null,
-    purpose: String(purpose || "Edit Slide Studio").slice(0, 160), owner: publicClient(client),
+    purpose: String(purpose || "Edit CarouselBot").slice(0, 160), owner: publicClient(client),
     creatorClientId: client.id, lastClientId: client.id, implicit: false, createdAt: now, lastSeen: now,
   };
   editSessions.set(session.id, session);
@@ -189,7 +189,7 @@ function browserCors(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Expose-Headers": "X-Slide-Studio-Filename",
+    "Access-Control-Expose-Headers": "X-CarouselBot-Filename, X-Slide-Studio-Filename",
     "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "600",
     "Cache-Control": "no-store",
@@ -301,7 +301,7 @@ function selectEditor(clientId) {
   const focused = focusedEditorId && connected.find((editor) => editor.id === focusedEditorId);
   if (focused) return focused;
   if (connected.length === 1) return connected[0];
-  if (!connected.length) throw new Error("No Slide Studio editor is connected. Open the test editor and click Connect AI.");
+  if (!connected.length) throw new Error("No CarouselBot editor is connected. Open the editor and click Connect AI.");
   throw new Error("Multiple editors are connected and none is selected. Call list_editors, then select_editor.");
 }
 
@@ -605,7 +605,7 @@ const server = createServer(async (request, response) => {
       const item = media.get(id);
       if (!item || item.expiresAt < Date.now()) return sendJson(response, 404, { error: "Local image transfer expired." }, cors);
       media.delete(id);
-      response.writeHead(200, { ...cors, "Content-Type": item.mimeType, "Content-Length": item.buffer.length, "X-Slide-Studio-Filename": encodeURIComponent(item.filename) });
+      response.writeHead(200, { ...cors, "Content-Type": item.mimeType, "Content-Length": item.buffer.length, "X-CarouselBot-Filename": encodeURIComponent(item.filename), "X-Slide-Studio-Filename": encodeURIComponent(item.filename) });
       response.end(item.buffer);
       return;
     }
@@ -628,7 +628,7 @@ async function acquireDaemonLock() {
       const lockPid = Number(await readFile(DAEMON_LOCK_PATH, "utf8"));
       if (!Number.isInteger(lockPid) || lockPid <= 0) throw Object.assign(new Error("Invalid daemon lock."), { code: "ESTALE" });
       process.kill(lockPid, 0);
-      const running = new Error(`Slide Studio daemon is already running or starting (pid ${lockPid}).`);
+      const running = new Error(`CarouselBot daemon is already running or starting (pid ${lockPid}).`);
       running.code = "EALREADY";
       throw running;
     } catch (checkError) {
