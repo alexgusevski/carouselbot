@@ -40,9 +40,9 @@ function createRpc(child) {
 }
 
 async function withServer(callback) {
-  const stateDirectory = await mkdtemp(join(tmpdir(), "slides-studio-mcp-test-"));
+  const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-test-"));
   const port = 44000 + Math.floor(Math.random() * 1000);
-  const env = { ...process.env, SLIDE_STUDIO_BRIDGE_PORT: String(port), SLIDE_STUDIO_STATE_DIR: stateDirectory };
+  const env = { ...process.env, CAROUSELBOT_BRIDGE_PORT: String(port), CAROUSELBOT_STATE_DIR: stateDirectory };
   const child = spawn(process.execPath, [cli.pathname, "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   let errors = "";
   child.stderr.setEncoding("utf8");
@@ -62,7 +62,7 @@ async function withServer(callback) {
 test("serves a complete legacy-compatible stdio MCP surface", async () => {
   await withServer(async ({ rpc, errors }) => {
     const initialized = await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "protocol-test", version: "1" } });
-    assert.equal(initialized.result.serverInfo.name, "slides-studio-mcp");
+    assert.equal(initialized.result.serverInfo.name, "carouselbot");
     rpc.notify("notifications/initialized");
 
     const listed = await rpc.request("tools/list");
@@ -91,7 +91,7 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
 
     const noBrowser = await rpc.request("tools/call", { name: "create_project", arguments: { name: "No browser" } });
     assert.equal(noBrowser.result.isError, true);
-    assert.match(noBrowser.result.content[0].text, /No Slide Studio editor is connected/);
+    assert.match(noBrowser.result.content[0].text, /No CarouselBot editor is connected/);
     assert.doesNotMatch(errors(), /Invalid JSON-RPC|stdout/i);
   });
 });
@@ -110,14 +110,15 @@ test("protects internal routes, origins, and protocol versions", async () => {
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${base}/internal/health`)).status, 401);
     assert.equal((await fetch(`${base}/health`, { headers: { Origin: "https://attacker.example" } })).status, 403);
-    const preflight = await fetch(`${base}/health`, { method: "OPTIONS", headers: { Origin: "https://slides-editor.pages.dev", "Access-Control-Request-Private-Network": "true" } });
+    const preflight = await fetch(`${base}/health`, { method: "OPTIONS", headers: { Origin: "https://carousel.bot", "Access-Control-Request-Private-Network": "true" } });
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get("access-control-allow-private-network"), "true");
     const mismatch = await fetch(`${base}/connect`, {
       method: "POST",
-      headers: { Origin: "https://slides-editor.pages.dev", "Content-Type": "application/json" },
+      headers: { Origin: "https://carousel.bot", "Content-Type": "application/json" },
       body: JSON.stringify({ editorId: "test-editor", protocolVersion: 999 }),
     });
     assert.equal(mismatch.status, 409);
+    assert.equal((await fetch(`${base}/health`, { headers: { Origin: "https://slides-editor.pages.dev" } })).status, 200);
   });
 });

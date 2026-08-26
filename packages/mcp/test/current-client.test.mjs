@@ -11,19 +11,19 @@ const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 const root = dirname(dirname(dirname(dirname(cli))));
 
 test("negotiates the current protocol through the official MCP v2 client", async () => {
-  const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-current-"));
+  const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-current-"));
   const port = 46000 + Math.floor(Math.random() * 1000);
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [cli, "serve"],
     cwd: root,
-    env: Object.fromEntries(Object.entries({ ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory, SLIDE_STUDIO_BRIDGE_PORT: String(port) }).filter(([, value]) => typeof value === "string")),
+    env: Object.fromEntries(Object.entries({ ...process.env, CAROUSELBOT_STATE_DIR: stateDirectory, CAROUSELBOT_BRIDGE_PORT: String(port) }).filter(([, value]) => typeof value === "string")),
     stderr: "pipe",
   });
   const client = new Client({ name: "official-v2-test", version: "1" });
   try {
     await client.connect(transport);
-    assert.equal(client.getServerVersion()?.name, "slides-studio-mcp");
+    assert.equal(client.getServerVersion()?.name, "carouselbot");
     const { tools } = await client.listTools();
     assert.ok(tools.some((tool) => tool.name === "render_slide"));
     const guidance = await client.callTool({ name: "get_design_guidance", arguments: {} });

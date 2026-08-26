@@ -1,34 +1,28 @@
 {
-  "name": "carouselbot",
+  "name": "slides-studio-mcp",
   "version": "0.2.0",
-  "description": "Local-first MCP companion for the hosted CarouselBot editor",
+  "description": "Compatibility package for the renamed CarouselBot MCP",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/alexgusevski/carouselbot.git",
-    "directory": "packages/mcp"
+    "directory": "packages/slides-studio-mcp"
   },
   "homepage": "https://carousel.bot",
   "bugs": "https://github.com/alexgusevski/carouselbot/issues",
   "bin": {
-    "carouselbot": "src/cli.mjs"
-  },
-  "exports": {
-    "./cli": "./src/cli.mjs"
+    "slides-studio-mcp": "bin/cli.mjs"
   },
   "files": [
-    "src",
-    "guidance",
-    "skill",
+    "bin",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
-    "zod": "^4.4.3"
+    "carouselbot": "0.2.0"
   },
   "publishConfig": {
     "access": "public",

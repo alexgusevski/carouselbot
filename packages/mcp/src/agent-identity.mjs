@@ -13,6 +13,7 @@ const GENERIC_CLIENT_NAMES = new Set([
   "mcp",
   "mcp agent",
   "mcp client",
+  "carouselbot cli fallback",
   "slide studio cli fallback",
 ]);
 
@@ -27,7 +28,7 @@ export function isGenericAgentName(value) {
 }
 
 export function detectHostAgent(explicitName = null, environment = process.env, runtime = process) {
-  const configured = canonicalAgentName(explicitName || environment.SLIDE_STUDIO_AGENT);
+  const configured = canonicalAgentName(explicitName || environment.CAROUSELBOT_AGENT || environment.SLIDE_STUDIO_AGENT);
   if (configured) return configured;
   const environmentKeys = Object.keys(environment).filter((key) => environment[key]).join(" ");
   const evidence = [

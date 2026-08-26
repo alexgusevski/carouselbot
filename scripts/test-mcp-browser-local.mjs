@@ -7,16 +7,16 @@ const root = new URL("..", import.meta.url);
 const rootPath = root.pathname;
 const pageUrl = process.argv.includes("--deployed")
   ? "https://slides-editor.pages.dev"
-  : process.env.SLIDE_STUDIO_TEST_URL || "http://127.0.0.1:4173";
+  : process.env.CAROUSELBOT_TEST_URL || process.env.SLIDE_STUDIO_TEST_URL || "http://127.0.0.1:4173";
 const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const debuggingPort = 19229;
-const profile = await mkdtemp(join(tmpdir(), "slide-studio-browser-"));
-const stateDirectory = await mkdtemp(join(tmpdir(), "slide-studio-daemon-"));
+const profile = await mkdtemp(join(tmpdir(), "carouselbot-browser-"));
+const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-daemon-"));
 const exportPath = join(profile, "agent-export.png");
 const projectExportDirectory = join(profile, "project-export");
 const sharedDaemon = process.argv.includes("--shared-daemon");
 const bridgePort = sharedDaemon ? 43117 : 48000 + Math.floor(Math.random() * 1000);
-const env = sharedDaemon ? process.env : { ...process.env, SLIDE_STUDIO_STATE_DIR: stateDirectory, SLIDE_STUDIO_BRIDGE_PORT: String(bridgePort) };
+const env = sharedDaemon ? process.env : { ...process.env, CAROUSELBOT_STATE_DIR: stateDirectory, CAROUSELBOT_BRIDGE_PORT: String(bridgePort) };
 const browserPageUrl = sharedDaemon ? pageUrl : `${pageUrl}${pageUrl.includes("?") ? "&" : "?"}__mcpBridgePort=${bridgePort}`;
 const web = new URL(pageUrl).hostname === "127.0.0.1"
   ? spawn(process.execPath, ["server.mjs"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] })
@@ -209,11 +209,11 @@ try {
   await cdp.send("Runtime.enable");
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
   await cdp.send("Page.navigate", { url: browserPageUrl });
-  await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.slideStudioAgent)"), "Editor scripts did not load.");
+  await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent)"), "Editor scripts did not load.");
   const initialConnection = await evaluate(cdp, `({
     buttonStatus: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus || "idle",
-    remembered: localStorage.getItem("slide-studio:mcp-connected"),
-    editorId: window.slideStudioLocalMcpBridge.getState().editorId
+    remembered: localStorage.getItem("carouselbot:mcp-connected"),
+    editorId: window.carouselBotLocalMcpBridge.getState().editorId
   })`);
   const initialEditors = (await tool("list_editors")).structuredContent.editors;
   if (initialConnection.buttonStatus !== "idle" || initialConnection.remembered !== null || initialEditors.some((editor) => editor.id === initialConnection.editorId)) {
@@ -229,7 +229,7 @@ try {
   if (statusAlignment?.justifySelf !== "start" || statusAlignment.justifyContent !== "flex-start" || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
   await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
-  const remembered = await evaluate(cdp, `localStorage.getItem("slide-studio:mcp-connected")`);
+  const remembered = await evaluate(cdp, `localStorage.getItem("carouselbot:mcp-connected")`);
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
@@ -240,7 +240,7 @@ try {
   editSessionId = editSession.id;
   await tool("show_notification", { message: "Hello from the full local MCP", tone: "success" });
   const agentNotification = await evaluate(cdp, `(() => {
-    window.slideStudioLocalMcpBridge.notify("Identity icon regression", "success", { name: "Codex browser test" });
+    window.carouselBotLocalMcpBridge.notify("Identity icon regression", "success", { name: "Codex browser test" });
     const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity")].find((entry) => entry.textContent.includes("Identity icon regression"));
     return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
   })()`);
@@ -249,7 +249,7 @@ try {
   await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
   await waitFor(() => evaluate(cdp, "Boolean(document.querySelector('.dashboard'))"), "Dashboard did not open.");
   await evaluate(cdp, `(() => {
-    window.__slideStudioOriginalRequestAnimationFrame = window.requestAnimationFrame;
+    window.__carouselBotOriginalRequestAnimationFrame = window.requestAnimationFrame;
     window.requestAnimationFrame = () => 0;
     return true;
   })()`);
@@ -258,8 +258,8 @@ try {
     createdProject = (await tool("create_project", { name: "Full MCP browser test" })).structuredContent;
   } finally {
     await evaluate(cdp, `(() => {
-      window.requestAnimationFrame = window.__slideStudioOriginalRequestAnimationFrame;
-      delete window.__slideStudioOriginalRequestAnimationFrame;
+      window.requestAnimationFrame = window.__carouselBotOriginalRequestAnimationFrame;
+      delete window.__carouselBotOriginalRequestAnimationFrame;
       return true;
     })()`);
   }
@@ -282,7 +282,7 @@ try {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
     x: 0.1, y: 0.2, width: 0.8, height: 0.16, size: 82, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF",
   })).structuredContent;
-  const imported = (await tool("import_asset", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, path: join(rootPath, "assets", "favicon.svg"), name: "Slide Studio mark" })).structuredContent;
+  const imported = (await tool("import_asset", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, path: join(rootPath, "assets", "favicon.svg"), name: "CarouselBot mark" })).structuredContent;
   const image = (await tool("add_image", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, assetId: imported.assetId, x: 0.34, y: 0.52, width: 0.32, rotation: 6 })).structuredContent;
   const batch = await tool("apply_operations", { operations: [
     { tool: "add_text", arguments: { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Claude · Codex · Hermes · OpenCode · OpenClaw", x: 0.1, y: 0.76, width: 0.8, height: 0.1, size: 44, style: "plain", color: "#25F4EE" } },
@@ -318,7 +318,7 @@ try {
     try {
       await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, updates: [{ id: addedText.createdTextId, align }] });
     } catch (error) {
-      const browserState = await evaluate(cdp, `({ bridge: window.slideStudioLocalMcpBridge?.getState(), ready: document.readyState, visible: document.visibilityState })`).catch(() => null);
+      const browserState = await evaluate(cdp, `({ bridge: window.carouselBotLocalMcpBridge?.getState(), ready: document.readyState, visible: document.visibilityState })`).catch(() => null);
       const audit = await tool("list_recent_operations", { limit: 10 }).then((result) => result.structuredContent).catch(() => null);
       throw new Error(`${error.message}\nBrowser state: ${JSON.stringify(browserState)}\nRecent operations: ${JSON.stringify(audit)}`);
     }
@@ -380,7 +380,7 @@ try {
   await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP verified" });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  const pinnedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
+  const pinnedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify background project edits preserve the current view" })).structuredContent.id;
   const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
   const temporarySlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Background edit", backgroundColor: "#18181B" })).structuredContent;
@@ -397,10 +397,10 @@ try {
   if (perLineLayer?.role !== "subtitle" || perLineLayer.size !== 76 || perLineLayer.backgroundShape !== "lines") throw new Error(`Role defaults or per-line preference failed: ${JSON.stringify(perLineLayer)}`);
   if (!autoFitText.fittedTextBox?.automatic || !autoFitUpdate.fittedTextBoxes?.[0]?.automatic || autoFitLayer.height <= autoFitBefore.height || autoFitLayer.y + autoFitLayer.height > 1.0001) throw new Error(`Automatic MCP text-height fitting failed: ${JSON.stringify({ autoFitText, autoFitBefore, autoFitUpdate, autoFitLayer })}`);
   if (fullBoxLayer?.role !== "body" || fullBoxLayer.size !== 60 || fullBoxLayer.height >= 0.48 || fitted.fittedTextBoxes?.[0]?.id !== fullBoxText.createdTextId) throw new Error(`Full-box content fitting failed: ${JSON.stringify({ fullBoxLayer, fitted })}`);
-  const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
+  const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   if (JSON.stringify(preservedView) !== JSON.stringify(pinnedView)) throw new Error(`Background project edits changed the user's view: ${JSON.stringify({ pinnedView, preservedView })}`);
   await tool("delete_project", { projectId: temporaryProject.projectId });
-  const viewAfterBackgroundDelete = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.slideStudioAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
+  const viewAfterBackgroundDelete = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   if (JSON.stringify(viewAfterBackgroundDelete) !== JSON.stringify(pinnedView)) throw new Error(`Deleting a background project changed the user's view: ${JSON.stringify({ pinnedView, viewAfterBackgroundDelete })}`);
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
@@ -428,7 +428,7 @@ try {
   if (stressEditors.length < 7) throw new Error(`Seven-tab transport stress setup connected only ${stressEditors.length} editors.`);
   const previousCoverUrl = await waitFor(() => evaluate(secondCdp, `document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')?.src || ""`), "The dashboard did not render its initial composed project cover.");
   await evaluate(secondCdp, `(() => {
-    window.__slideStudioOriginalRequestAnimationFrame = window.requestAnimationFrame;
+    window.__carouselBotOriginalRequestAnimationFrame = window.requestAnimationFrame;
     window.requestAnimationFrame = () => 0;
     return true;
   })()`);
@@ -448,8 +448,8 @@ try {
     })()`), "The dashboard did not refresh its composed cover while animation frames were paused.");
   } finally {
     await evaluate(secondCdp, `(() => {
-      window.requestAnimationFrame = window.__slideStudioOriginalRequestAnimationFrame;
-      delete window.__slideStudioOriginalRequestAnimationFrame;
+      window.requestAnimationFrame = window.__carouselBotOriginalRequestAnimationFrame;
+      delete window.__carouselBotOriginalRequestAnimationFrame;
       return true;
     })()`);
   }

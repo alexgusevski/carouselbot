@@ -1,4 +1,4 @@
-const SLIDE_STUDIO_AGENT_PROTOCOL = 3;
+const CAROUSELBOT_AGENT_PROTOCOL = 3;
 const AGENT_TEXT_ROLE_SIZES = { title: 104, subtitle: 76, body: 60, caption: 48 };
 const AGENT_TEXT_VERTICAL_SAFETY_PADDING = 0.36;
 
@@ -60,7 +60,7 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
   const project = state.projects.find((item) => item.id === (projectId || state.activeProjectId)) || null;
   const slide = project?.slides.find((item) => item.id === (slideId || state.activeSlideId)) || null;
   return {
-    protocolVersion: SLIDE_STUDIO_AGENT_PROTOCOL,
+    protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
     activeProjectId: state.activeProjectId,
     activeSlideId: state.activeSlideId,
     view: { canvasZoom: state.canvasZoom, showTikTokOverlay: state.showTikTokOverlay },
@@ -101,7 +101,7 @@ function agentNextFrame() {
 
 async function agentMedia(mediaId) {
   if (!mediaId) return null;
-  const media = await window.slideStudioLocalMcpBridge.fetchMedia(mediaId);
+  const media = await window.carouselBotLocalMcpBridge.fetchMedia(mediaId);
   const imageData = await fileToDataUrl(media.file);
   const dimensions = await getImageDimensions(imageData);
   return { imageData, ...dimensions, name: media.name };
@@ -266,7 +266,7 @@ async function agentRender(project, slide, { width = 540, format = "png", qualit
   };
 }
 
-async function executeSlideStudioAgentOperation(operation) {
+async function executeCarouselBotAgentOperation(operation) {
   if (!operation || typeof operation.type !== "string") throw new Error("Operation type is required.");
 
   if (operation.type === "editor.inspect") {
@@ -274,7 +274,7 @@ async function executeSlideStudioAgentOperation(operation) {
     return agentInspect(operation);
   }
   if (operation.type === "ui.notify") {
-    window.slideStudioLocalMcpBridge?.notify(operation.message, operation.tone);
+    window.carouselBotLocalMcpBridge?.notify(operation.message, operation.tone);
     return { shown: true, message: String(operation.message) };
   }
 
@@ -604,8 +604,9 @@ async function executeSlideStudioAgentOperation(operation) {
   throw new Error(`Unsupported agent operation: ${operation.type}`);
 }
 
-window.slideStudioAgent = {
-  protocolVersion: SLIDE_STUDIO_AGENT_PROTOCOL,
-  execute: executeSlideStudioAgentOperation,
+window.carouselBotAgent = {
+  protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
+  execute: executeCarouselBotAgentOperation,
   inspect: agentInspect,
 };
+window.slideStudioAgent = window.carouselBotAgent;

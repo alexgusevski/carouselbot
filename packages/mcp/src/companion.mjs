@@ -34,7 +34,7 @@ async function healthyState() {
   try {
     const result = await daemonRequest(state, "/internal/health");
     if (result.protocolVersion !== PROTOCOL_VERSION) {
-      const error = new Error(`Local companion ${result.version || "unknown"} uses protocol ${result.protocolVersion}; ${PACKAGE_VERSION} requires protocol ${PROTOCOL_VERSION}. Run \`npx -y slides-studio-mcp@latest restart\`, then reload the editor.`);
+      const error = new Error(`Local companion ${result.version || "unknown"} uses protocol ${result.protocolVersion}; ${PACKAGE_VERSION} requires protocol ${PROTOCOL_VERSION}. Run \`npx -y carouselbot@latest restart\`, then reload the editor.`);
       error.code = "EPROTOCOL";
       throw error;
     }
@@ -60,7 +60,7 @@ async function ensureDaemon() {
     const state = await healthyState();
     if (state) return state;
   }
-  throw new Error("Could not start the local Slide Studio companion. Run `npx slides-studio-mcp doctor` for details.");
+  throw new Error("Could not start the local CarouselBot companion. Run `npx carouselbot doctor` for details.");
 }
 
 export async function createCompanion(initialName = "MCP agent", initialVersion = null) {

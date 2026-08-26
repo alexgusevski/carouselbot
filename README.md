@@ -1,47 +1,53 @@
-# Slide Studio
+# CarouselBot
 
-A focused, local-first web editor for creating TikTok slideshow images.
+A focused, local-first editor for creating social carousel images.
 
-**Live:** [slides-editor.pages.dev](https://slides-editor.pages.dev)
+**Canonical site:** [carousel.bot](https://carousel.bot)
 
-Everything runs in the browser. Photos and projects stay in IndexedDB on your device — nothing is uploaded.
+Everything runs in the browser. Photos and projects stay in IndexedDB on the user's device; nothing is uploaded to an application backend.
 
 ## AI agent control
 
-The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the hosted browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
+The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
 
 ```bash
-npx slides-studio-mcp@latest setup
+npx carouselbot@latest setup
 ```
 
-Open [slides-editor.pages.dev](https://slides-editor.pages.dev) in your normal browser and click **Connect AI** after the agent starts the companion. The MCP includes required visual-design guidance and can create projects/slides, edit every text and image property, manage assets/layers/history, return temporary rendered previews to the agent, and export PNG files locally.
+Open [carousel.bot](https://carousel.bot) in a normal local browser and click **Connect AI** after the agent starts the companion. The MCP can create projects and slides, edit text and image properties, manage assets and history, render temporary previews for visual inspection, and export PNG files locally.
 
-The npm package is only a distribution surface. Its complete source, skill, guidance, and tests live under `packages/mcp/` in this repository.
+The npm package is only a distribution surface. Its source, skill, guidance, and tests live under `packages/mcp/` in this repository. Existing `slides-studio-mcp` installations are supported by the compatibility package under `packages/slides-studio-mcp/`.
 
 ## What it does
 
-- Creates projects that persist in the browser with IndexedDB
-- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF photos
-- Crops every photo to TikTok's portrait 9:16 format with drag and zoom controls
-- Shows full slide compositions in the sidebar and supports drag-to-reorder
-- Keeps a project-wide asset library so extra photos can be reused on any slide
-- Adds photo overlays by dragging an uploaded asset onto the main image, then resizing (aspect ratio locked) or rotating
-- Adds multiline text layers that can be dragged and resized
-- Offers text color presets plus a live color wheel with synchronized hex and RGB values
-- Includes clean text, adjustable outlines, per-line rounded backgrounds, and full-box backgrounds
-- Offers white or black background treatments
-- Toggles a semi-transparent TikTok UI placement preview that is never exported
-- Uses the official open-source TikTok Sans font
-- Shares one slide or every slide at once as full-resolution PNGs, with text and image layers included
-- Downloads the selected slide as a 1080 × 1920 PNG
+- Persists projects locally with IndexedDB
+- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF images
+- Crops photos to portrait 9:16 with drag and zoom controls
+- Maintains a reusable project asset library
+- Adds movable and resizable text and image layers
+- Supports text color, outlines, per-line backgrounds, and full-box backgrounds
+- Provides a TikTok placement preview that is never exported
+- Shares or downloads full-resolution 1080 × 1920 PNGs
+- Allows local AI agents to edit through a loopback-only MCP companion
 
-## Run it locally
+## Run locally
 
 ```bash
+npm install
 npm start
 ```
 
 Then open [http://localhost:4173](http://localhost:4173).
+
+## Test
+
+```bash
+npm run test:migration
+npm run test:migration:browser
+npm run test:mcp
+npm run test:mcp:browser:local
+npm run build
+```
 
 ## Deploy to Cloudflare
 
@@ -51,15 +57,15 @@ This project uses Cloudflare Pages Direct Upload. The deployment contains only t
 npm run deploy
 ```
 
-The public site is [slides-editor.pages.dev](https://slides-editor.pages.dev).
+The production deploy command is intentionally main-only. Experimental branches can use the persistent development environment with `npm run deploy:dev`.
 
-The production deploy command is intentionally main-only. Experimental branches can use the separate isolated Pages test project.
+The current Pages project name and legacy `slides-editor.pages.dev` hostname are intentionally retained during the domain migration. See [docs/REBRAND_ROLLOUT.md](docs/REBRAND_ROLLOUT.md) before changing GitHub, npm, Cloudflare, or DNS.
 
-To publish the current checkout to the persistent dev environment without touching production:
+## Domain migration
 
-```bash
-npm run deploy:dev
-```
+The old and new domains have separate browser storage. The legacy origin therefore remains an application page long enough to read its IndexedDB and copy projects to `carousel.bot` through a token-bound, origin-checked `postMessage` protocol. Projects are transferred one at a time, acknowledged by the new origin, and never deleted from the old origin.
+
+Migration rollout flags live in `app-config.js`. They default to a non-forwarding grace period so a code deployment cannot silently strand browser data.
 
 ## License
 

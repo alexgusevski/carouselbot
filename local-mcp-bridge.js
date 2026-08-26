@@ -1,5 +1,5 @@
 const LOCAL_MCP_BRIDGE_URL = (() => {
-  if (window.__SLIDE_STUDIO_MCP_BRIDGE_URL) return window.__SLIDE_STUDIO_MCP_BRIDGE_URL;
+  if (window.__CAROUSELBOT_MCP_BRIDGE_URL || window.__SLIDE_STUDIO_MCP_BRIDGE_URL) return window.__CAROUSELBOT_MCP_BRIDGE_URL || window.__SLIDE_STUDIO_MCP_BRIDGE_URL;
   const localPort = new URLSearchParams(location.search).get("__mcpBridgePort");
   if (["127.0.0.1", "localhost"].includes(location.hostname) && /^\d{2,5}$/.test(localPort || "")) return `http://127.0.0.1:${localPort}`;
   return "http://127.0.0.1:43117";
@@ -10,14 +10,14 @@ const LOCAL_MCP_REQUEST_TIMEOUT_MS = 8_000;
 const LOCAL_MCP_EVENT_REQUEST_TIMEOUT_MS = 1_500;
 const LOCAL_MCP_POLL_INTERVAL_MS = 250;
 const LOCAL_MCP_NOTIFICATION_DURATION_MS = 6_300;
-const LOCAL_MCP_CONNECTION_KEY = "slide-studio:mcp-connected";
-const LOCAL_MCP_EDITOR_KEY = "slide-studio:mcp-editor-id";
-const LOCAL_MCP_ACTIVITY_CHANNEL = "slide-studio:mcp-activity";
-const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/tiktokslideeditor/refs/heads/main/packages/mcp/README.md and install and configure the Slide Studio MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate Slide Studio immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
+const LOCAL_MCP_CONNECTION_KEYS = ["carouselbot:mcp-connected", "slide-studio:mcp-connected"];
+const LOCAL_MCP_EDITOR_KEYS = ["carouselbot:mcp-editor-id", "slide-studio:mcp-editor-id"];
+const LOCAL_MCP_ACTIVITY_CHANNEL = "carouselbot:mcp-activity";
+const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/carouselbot/refs/heads/main/packages/mcp/README.md and install and configure the CarouselBot MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate CarouselBot immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
 function localMcpConnectionWasRemembered() {
   try {
-    return localStorage.getItem(LOCAL_MCP_CONNECTION_KEY) === "1";
+    return LOCAL_MCP_CONNECTION_KEYS.some((key) => localStorage.getItem(key) === "1");
   } catch {
     return false;
   }
@@ -25,22 +25,25 @@ function localMcpConnectionWasRemembered() {
 
 function localMcpRememberConnection() {
   try {
-    localStorage.setItem(LOCAL_MCP_CONNECTION_KEY, "1");
+    LOCAL_MCP_CONNECTION_KEYS.forEach((key) => localStorage.setItem(key, "1"));
   } catch { /* The live connection still works when storage is unavailable. */ }
 }
 
 function localMcpForgetConnection() {
   try {
-    localStorage.removeItem(LOCAL_MCP_CONNECTION_KEY);
+    LOCAL_MCP_CONNECTION_KEYS.forEach((key) => localStorage.removeItem(key));
   } catch { /* The live connection can still be stopped. */ }
 }
 
 function localMcpEditorId() {
   try {
-    const existing = sessionStorage.getItem(LOCAL_MCP_EDITOR_KEY);
-    if (existing) return existing;
+    const existing = LOCAL_MCP_EDITOR_KEYS.map((key) => sessionStorage.getItem(key)).find(Boolean);
+    if (existing) {
+      LOCAL_MCP_EDITOR_KEYS.forEach((key) => sessionStorage.setItem(key, existing));
+      return existing;
+    }
     const created = crypto.randomUUID();
-    sessionStorage.setItem(LOCAL_MCP_EDITOR_KEY, created);
+    LOCAL_MCP_EDITOR_KEYS.forEach((key) => sessionStorage.setItem(key, created));
     return created;
   } catch {
     return crypto.randomUUID();
@@ -332,7 +335,7 @@ async function localMcpConnectFromClick() {
   try {
     const health = await localMcpRequest("/health");
     if (!health.ok) throw new Error(`Local companion returned ${health.status}`);
-    await window.slideStudioReady;
+    await window.carouselBotReady;
     localMcpBridgeState.shouldReconnect = true;
     await localMcpHandshake();
     localMcpRememberConnection();
@@ -378,16 +381,16 @@ async function localMcpHandshake() {
   localMcpBridgeState.sessionToken = null;
   const response = await localMcpSendJson("/connect", {
     editorId: localMcpBridgeState.editorId,
-    protocolVersion: window.slideStudioAgent.protocolVersion,
+    protocolVersion: window.carouselBotAgent.protocolVersion,
     pageUrl: location.href,
     pageOrigin: location.origin,
     visibilityState: document.visibilityState,
     hasFocus: document.hasFocus(),
-    state: window.slideStudioAgent.inspect({ includeAllProjects: false }),
+    state: window.carouselBotAgent.inspect({ includeAllProjects: false }),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `Bridge returned ${response.status}`);
-  if (result.protocolVersion !== window.slideStudioAgent.protocolVersion) throw new Error("The website and local companion versions are incompatible. Update the npm package and reload this page.");
+  if (result.protocolVersion !== window.carouselBotAgent.protocolVersion) throw new Error("The website and local companion versions are incompatible. Update the npm package and reload this page.");
   localMcpBridgeState.sessionToken = result.sessionToken;
   localMcpBridgeState.agents = result.agents || [];
   localMcpBridgeState.editSessions = result.editSessions || [];
@@ -468,7 +471,7 @@ async function localMcpPollWithReconnect() {
 
 async function localMcpResumeRememberedConnection() {
   if (!localMcpBridgeState.connectionRemembered || localMcpBridgeState.connected || localMcpBridgeState.reconnectLoopRunning) return;
-  await window.slideStudioReady;
+  await window.carouselBotReady;
   if (localMcpBridgeState.connected || localMcpBridgeState.connecting || localMcpBridgeState.reconnectLoopRunning) return;
   localMcpBridgeState.shouldReconnect = true;
   localMcpBridgeState.connecting = true;
@@ -500,15 +503,15 @@ async function localMcpPoll() {
     localMcpAddEvent(`Tool call: ${event.toolName}`);
     localMcpBroadcastActivity(event.label || "Editing the current slide…", "agent", event.agent);
     try {
-      const result = await window.slideStudioAgent.execute(event.operation);
-      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: true, result, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
+      const result = await window.carouselBotAgent.execute(event.operation);
+      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: true, result, state: window.carouselBotAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Applied: ${event.toolName}`);
       if (event.toolName === "create_project") {
         const projectName = String(result?.name || event.operation?.name || "New project").trim().slice(0, 160);
         localMcpBroadcastActivity(`Created ${projectName}`, "success", event.agent, { dashboardOnly: true });
       }
     } catch (error) {
-      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: false, error: error.message, state: window.slideStudioAgent.inspect({ includeAllProjects: false }) });
+      await localMcpSendJson("/result", { editorId: localMcpBridgeState.editorId, requestId: event.requestId, ok: false, error: error.message, state: window.carouselBotAgent.inspect({ includeAllProjects: false }) });
       localMcpAddEvent(`Failed: ${event.toolName}`);
       localMcpNotify(error.message, "error", event.agent);
     }
@@ -519,7 +522,7 @@ async function localMcpFetchMedia(mediaId) {
   const response = await localMcpRequest(`/media/${encodeURIComponent(mediaId)}?editorId=${encodeURIComponent(localMcpBridgeState.editorId)}`);
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || "Could not read local image.");
   const blob = await response.blob();
-  const name = decodeURIComponent(response.headers.get("X-Slide-Studio-Filename") || "image");
+  const name = decodeURIComponent(response.headers.get("X-CarouselBot-Filename") || response.headers.get("X-Slide-Studio-Filename") || "image");
   return { file: new File([blob], name, { type: blob.type }), name };
 }
 
@@ -544,7 +547,7 @@ window.addEventListener("beforeunload", () => {
 window.addEventListener("focus", localMcpActivateVisibleEditor);
 document.addEventListener("visibilitychange", localMcpActivateVisibleEditor);
 
-window.slideStudioLocalMcpBridge = {
+window.carouselBotLocalMcpBridge = {
   open: localMcpOpenModal,
   connect: localMcpConnectFromClick,
   disconnect: localMcpDisconnectFromClick,
@@ -552,3 +555,4 @@ window.slideStudioLocalMcpBridge = {
   notify: localMcpNotify,
   getState: () => ({ ...localMcpBridgeState, lastFocusedElement: undefined }),
 };
+window.slideStudioLocalMcpBridge = window.carouselBotLocalMcpBridge;

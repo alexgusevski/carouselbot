@@ -1,13 +1,13 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { detectHostAgent } from "./agent-identity.mjs";
 import { createCompanion } from "./companion.mjs";
-import { createSlideStudioMcpServer } from "./mcp-server.mjs";
+import { createCarouselBotMcpServer } from "./mcp-server.mjs";
 
 export async function serveMcp({ agentName = null } = {}) {
   const companion = await createCompanion(detectHostAgent(agentName));
-  const handle = serveStdio(() => createSlideStudioMcpServer(companion), {
+  const handle = serveStdio(() => createCarouselBotMcpServer(companion), {
     legacy: "serve",
-    onerror: (error) => process.stderr.write(`[slides-studio-mcp] ${error.message}\n`),
+    onerror: (error) => process.stderr.write(`[carouselbot] ${error.message}\n`),
   });
   let closing = false;
   const close = async () => {

@@ -1,4 +1,4 @@
-# Slide Studio design guidance
+# CarouselBot design guidance
 
 Read this before creating or editing slides. Use it as a compact quality bar, then inspect the rendered slide instead of assuming code values look good.
 

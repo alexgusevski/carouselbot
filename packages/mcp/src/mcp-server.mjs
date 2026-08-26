@@ -61,7 +61,7 @@ function operationLabel(toolName) {
     update_image: "Updating an image…", delete_layers: "Deleting layers…", duplicate_layers: "Duplicating layers…",
     reorder_layers: "Reordering layers…", undo: "Undoing the last edit…", redo: "Redoing the last edit…",
     set_view: "Updating the editor view…", render_slide: "Rendering the slide…",
-  })[toolName] || "Editing in Slide Studio…";
+  })[toolName] || "Editing in CarouselBot…";
 }
 
 async function browserOperation(companion, toolName, args) {
@@ -94,12 +94,12 @@ async function prepareOperation(companion, toolName, args) {
   return { type, ...operation };
 }
 
-export async function createSlideStudioMcpServer(companion) {
+export async function createCarouselBotMcpServer(companion) {
   const guidance = await readFile(GUIDANCE_PATH, "utf8");
   let guidanceRead = false;
   let identifiedAs = null;
   const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION }, {
-    instructions: `First call list_editors and use the registered local browser tab. Never open or connect Slide Studio through a sandboxed agent browser. If no editor is listed, retry briefly because browser reconnection is automatic, then ask the user to open ${EDITOR_URL} in their normal browser and click Connect AI. Never restart a healthy companion for a transient editor disconnect; restart only for an explicit protocol mismatch or failed daemon health check. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel editing workers require distinct editor sessions. Use render_slide to inspect actual pixels.`,
+    instructions: `First call list_editors and use the registered local browser tab. Never open or connect CarouselBot through a sandboxed agent browser. If no editor is listed, retry briefly because browser reconnection is automatic, then ask the user to open ${EDITOR_URL} in their normal browser and click Connect AI. Never restart a healthy companion for a transient editor disconnect; restart only for an explicit protocol mismatch or failed daemon health check. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel editing workers require distinct editor sessions. Use render_slide to inspect actual pixels.`,
     capabilities: { tools: {}, resources: {} },
   });
 
@@ -128,19 +128,23 @@ export async function createSlideStudioMcpServer(companion) {
     });
   }
 
-  server.registerResource("slide-studio-design-guidance", "slide-studio://guidance/design", {
-    title: "Slide Studio design guidance", description: "Required visual-quality and text-box safety guidance.", mimeType: "text/markdown",
-  }, async (uri) => {
+  const readGuidanceResource = async (uri) => {
     guidanceRead = true;
     return { contents: [{ uri: uri.href, mimeType: "text/markdown", text: guidance }] };
-  });
+  };
+  server.registerResource("carouselbot-design-guidance", "carouselbot://guidance/design", {
+    title: "CarouselBot design guidance", description: "Required visual-quality and text-box safety guidance.", mimeType: "text/markdown",
+  }, readGuidanceResource);
+  server.registerResource("slide-studio-design-guidance", "slide-studio://guidance/design", {
+    title: "CarouselBot design guidance (legacy URI)", description: "Backward-compatible alias for CarouselBot design guidance.", mimeType: "text/markdown",
+  }, readGuidanceResource);
 
   register("get_design_guidance", "Read the required compact design and clipping guidance. Call once before any mutation.", z.object({}).strict(), async () => {
     guidanceRead = true;
     return { __rawMcpResult: true, content: [{ type: "text", text: guidance }], structuredContent: { read: true } };
   }, { readOnlyHint: true, idempotentHint: true });
 
-  register("list_editors", "Check the user's real local browser connection and show which registered Slide Studio tab this session targets. Call this instead of opening a sandboxed browser.", z.object({}).strict(), () => companion.call("list_editors"), { readOnlyHint: true });
+  register("list_editors", "Check the user's real local browser connection and show which registered CarouselBot tab this session targets. Call this instead of opening a sandboxed browser.", z.object({}).strict(), () => companion.call("list_editors"), { readOnlyHint: true });
   register("select_editor", "Select a connected browser tab for this MCP session.", z.object({ editorId: id }).strict(), ({ editorId }) => companion.call("select_editor", { editorId }), { destructiveHint: false, idempotentHint: true });
   register("begin_edit_session", "Atomically reserve one browser tab and optionally one project for an editing agent. Use one session per parallel editing worker and pass editSessionId to every edit.", z.object({ editorId: optionalId, projectId: optionalId, purpose: z.string().min(1).max(160).optional() }).strict(), (args) => companion.call("begin_edit_session", args), { destructiveHint: false });
   register("end_edit_session", "Release a browser-tab/project reservation as soon as an editing task finishes or fails.", z.object({ editSessionId: id }).strict(), (args) => companion.call("end_edit_session", args), { destructiveHint: false, idempotentHint: true });
@@ -223,3 +227,5 @@ export async function createSlideStudioMcpServer(companion) {
 
   return server;
 }
+
+export const createSlideStudioMcpServer = createCarouselBotMcpServer;

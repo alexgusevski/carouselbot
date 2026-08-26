@@ -16,7 +16,7 @@ async function stdinText() {
 
 async function parseArguments(arguments_) {
   const [toolName, ...rest] = arguments_;
-  if (!toolName) throw new Error("Usage: slides-studio-mcp call <tool> [--json '{\"key\":\"value\"}']");
+  if (!toolName) throw new Error("Usage: carouselbot call <tool> [--json '{\"key\":\"value\"}']");
   const inline = rest.find((value) => value.startsWith("--json="));
   const flagIndex = rest.indexOf("--json");
   const raw = inline?.slice("--json=".length)
@@ -37,7 +37,7 @@ async function printableResult(toolName, result) {
   const image = result.content?.find((item) => item.type === "image" && item.data);
   if (!image) return result.structuredContent ?? { content: result.content || [] };
   const extension = image.mimeType === "image/jpeg" ? "jpg" : "png";
-  const directory = await mkdtemp(join(tmpdir(), "slide-studio-preview-"));
+  const directory = await mkdtemp(join(tmpdir(), "carouselbot-preview-"));
   const previewPath = join(directory, `slide.${extension}`);
   await writeFile(previewPath, Buffer.from(image.data, "base64"));
   return { ...(result.structuredContent || {}), previewPath, temporary: true };
@@ -100,7 +100,7 @@ export async function runCall(arguments_) {
   child.stderr.on("data", (chunk) => { errors = `${errors}${chunk}`.slice(-4000); });
   const rpc = createRpc(child);
   try {
-    await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "Slide Studio CLI fallback", version: "1" } });
+    await rpc.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "CarouselBot CLI fallback", version: "1" } });
     rpc.notify("notifications/initialized");
     if (toolName === "list_tools") {
       const listed = await rpc.request("tools/list");
