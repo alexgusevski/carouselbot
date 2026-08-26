@@ -111,6 +111,16 @@ try {
   })`);
   await legacyCdp.send("Page.reload");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-action=\"migrate-projects\"]')?.textContent.includes('project')"), "Migration prompt did not find the legacy project.");
+  const modalState = await evaluate(legacyCdp, `(() => {
+    const modal = document.querySelector('[data-migration-modal] [role="dialog"]');
+    const close = document.querySelector('[data-action="close-migration-modal"]');
+    return { visible: Boolean(modal), modal: modal?.getAttribute("aria-modal"), hasClose: Boolean(close) };
+  })()`);
+  if (!modalState.visible || modalState.modal !== "true" || !modalState.hasClose) throw new Error(`Migration notice is not an accessible, closeable modal: ${JSON.stringify(modalState)}`);
+  await evaluate(legacyCdp, `document.querySelector('[data-action="close-migration-modal"]').click()`);
+  await waitFor(() => evaluate(legacyCdp, `!document.querySelector('[data-migration-modal]')`), "Migration modal did not close.");
+  await legacyCdp.send("Page.reload");
+  await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-action=\"migrate-projects\"]')?.textContent.includes('project')"), "Migration modal did not return after a fresh page load.");
   await evaluate(legacyCdp, `(() => {
     document.querySelector('[data-action="migrate-projects"]').scrollIntoView({ block: "center" });
     return true;
