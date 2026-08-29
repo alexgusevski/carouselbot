@@ -67,6 +67,10 @@ The old and new domains have separate browser storage. The legacy origin therefo
 
 Migration rollout flags live in `app-config.js`. They default to a non-forwarding grace period so a code deployment cannot silently strand browser data.
 
+## Security
+
+Report suspected vulnerabilities privately through the process in [SECURITY.md](SECURITY.md). Pull requests are checked by CI, CodeQL, dependency review, and OpenSSF Scorecard. Dependency and GitHub Action updates are proposed automatically by Dependabot, and release packages are published from tagged GitHub releases through the provenance-enabled workflow in `.github/workflows/publish.yml`.
+
 ## License
 
 MIT. TikTok Sans is distributed under the SIL Open Font License 1.1; its license is included at `assets/TikTokSans-OFL.txt`. The GitHub Octicons mark is distributed under the MIT License; its notice is included at `assets/Octicons-LICENSE.txt`.
