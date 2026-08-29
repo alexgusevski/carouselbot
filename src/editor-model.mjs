@@ -24,17 +24,15 @@ export const LEGACY_CLIPBOARD_STORAGE_KEY = "slide-studio-layer-clipboard";
 
 export const HISTORY_LIMIT = 200;
 
-export const BOX_TEXT_LINE_HEIGHT = 1.12;
+export const BOX_TEXT_LINE_HEIGHT = 1.17;
 
-export const BOX_LINE_HEIGHT = 1.42;
+export const BOX_LINE_HEIGHT = 1.46;
 
-export const BOX_HORIZONTAL_PADDING = 0.52;
+export const BOX_HORIZONTAL_PADDING = 0.46;
 
 export const TEXT_BOX_EDGE_PADDING = 0.3;
 
-export const BOX_CORNER_RADIUS = 0.27;
-
-export const BOX_JUNCTION_RADIUS = 0.18;
+export const BOX_CORNER_RADIUS = 0.18;
 
 export const FONT_SIZE_MIN = 20;
 
@@ -265,66 +263,95 @@ export function getImageLayout(slide, canvasWidth, canvasHeight) {
   };
 }
 
-export function lineCornerRadii(widths, index, radius) {
-  const width = widths[index] || 0;
-  const above = widths[index - 1];
-  const below = widths[index + 1];
-  const slop = Math.max(2, radius * 0.2);
-  const top = above == null || width > above + slop;
-  const bottom = below == null || width > below + slop;
-  return [top ? radius : 0, top ? radius : 0, bottom ? radius : 0, bottom ? radius : 0];
-}
+export function normalizePerLineBackgroundWidths(widths, align, radius) {
+  const normalized = [...widths];
+  const boundaryScale = align === "center" ? 0.5 : 1;
+  let changed = true;
 
-export function lineJunctionCorners(widths, lineCenters, centerX, boxHeight, radius) {
-  const corners = [];
-  for (let index = 0; index < widths.length - 1; index += 1) {
-    const upperWidth = widths[index] || 0;
-    const lowerWidth = widths[index + 1] || 0;
-    const sideGap = Math.abs(upperWidth - lowerWidth) / 2;
-    if (sideGap <= Math.max(1, radius * 0.1)) continue;
-    const cornerRadius = Math.min(radius, sideGap);
-
-    if (upperWidth < lowerWidth) {
-      const boundaryY = lineCenters[index + 1] - boxHeight / 2;
-      corners.push(
-        { cx: centerX - upperWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "upper-left" },
-        { cx: centerX + upperWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "upper-right" },
-      );
-    } else {
-      const boundaryY = lineCenters[index] + boxHeight / 2;
-      corners.push(
-        { cx: centerX - lowerWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "lower-left" },
-        { cx: centerX + lowerWidth / 2, cy: boundaryY, radius: cornerRadius, quadrant: "lower-right" },
-      );
+  // TikTok merges near-equal neighboring rows when the step cannot hold two
+  // full-radius corners. This preserves one radius instead of pinching it.
+  while (changed) {
+    changed = false;
+    for (let index = 0; index < normalized.length - 1; index += 1) {
+      const boundaryGap = Math.abs(normalized[index] - normalized[index + 1]) * boundaryScale;
+      if (boundaryGap <= 0.01 || boundaryGap > radius * 2 + 0.01) continue;
+      const mergedWidth = Math.max(normalized[index], normalized[index + 1]);
+      if (normalized[index] !== mergedWidth || normalized[index + 1] !== mergedWidth) changed = true;
+      normalized[index] = mergedWidth;
+      normalized[index + 1] = mergedWidth;
     }
   }
-  return corners;
+  return normalized;
 }
 
-export function roundedRectSvgPath(x, y, width, height, radii) {
-  const [tl, tr, br, bl] = radii.map((value) => Math.max(0, Math.min(value, width / 2, height / 2)));
-  return [
-    `M ${x + tl} ${y}`,
-    `H ${x + width - tr}`,
-    `Q ${x + width} ${y} ${x + width} ${y + tr}`,
-    `V ${y + height - br}`,
-    `Q ${x + width} ${y + height} ${x + width - br} ${y + height}`,
-    `H ${x + bl}`,
-    `Q ${x} ${y + height} ${x} ${y + height - bl}`,
-    `V ${y + tl}`,
-    `Q ${x} ${y} ${x + tl} ${y}`,
+function appendRightLineBackgroundTransition(path, current, next, middleY, radius) {
+  const difference = next - current;
+  if (Math.abs(difference) <= 0.01) return;
+  const horizontalDirection = Math.sign(difference);
+  path.push(
+    `V ${middleY - radius}`,
+    `A ${radius} ${radius} 0 0 ${horizontalDirection < 0 ? 1 : 0} ${current + horizontalDirection * radius} ${middleY}`,
+    `H ${next - horizontalDirection * radius}`,
+    `A ${radius} ${radius} 0 0 ${horizontalDirection > 0 ? 1 : 0} ${next} ${middleY + radius}`,
+  );
+}
+
+function appendLeftLineBackgroundTransition(path, current, next, middleY, radius) {
+  const difference = next - current;
+  if (Math.abs(difference) <= 0.01) return;
+  const horizontalDirection = Math.sign(difference);
+  path.push(
+    `V ${middleY + radius}`,
+    `A ${radius} ${radius} 0 0 ${horizontalDirection > 0 ? 1 : 0} ${current + horizontalDirection * radius} ${middleY}`,
+    `H ${next - horizontalDirection * radius}`,
+    `A ${radius} ${radius} 0 0 ${horizontalDirection < 0 ? 1 : 0} ${next} ${middleY - radius}`,
+  );
+}
+
+export function perLineBackgroundSvgPath(widths, lineHeight, boxHeight, contentLeft, contentWidth, align, radius, top = 0) {
+  if (!widths.length) return "";
+  const normalizedWidths = normalizePerLineBackgroundWidths(widths, align, radius);
+  const bounds = normalizedWidths.map((width) => {
+    const left = align === "left"
+      ? contentLeft
+      : align === "right"
+        ? contentLeft + contentWidth - width
+        : contentLeft + (contentWidth - width) / 2;
+    return { left, right: left + width };
+  });
+  const first = bounds[0];
+  const last = bounds.at(-1);
+  const bottom = top + (widths.length - 1) * lineHeight + boxHeight;
+  const cornerRadius = Math.min(radius, lineHeight / 2, boxHeight / 2, normalizedWidths[0] / 2, normalizedWidths.at(-1) / 2);
+  const path = [
+    `M ${first.left + cornerRadius} ${top}`,
+    `H ${first.right - cornerRadius}`,
+    `A ${cornerRadius} ${cornerRadius} 0 0 1 ${first.right} ${top + cornerRadius}`,
+  ];
+
+  for (let index = 0; index < bounds.length - 1; index += 1) {
+    const middleY = top + index * lineHeight + (boxHeight + lineHeight) / 2;
+    appendRightLineBackgroundTransition(path, bounds[index].right, bounds[index + 1].right, middleY, cornerRadius);
+  }
+
+  path.push(
+    `V ${bottom - cornerRadius}`,
+    `A ${cornerRadius} ${cornerRadius} 0 0 1 ${last.right - cornerRadius} ${bottom}`,
+    `H ${last.left + cornerRadius}`,
+    `A ${cornerRadius} ${cornerRadius} 0 0 1 ${last.left} ${bottom - cornerRadius}`,
+  );
+
+  for (let index = bounds.length - 2; index >= 0; index -= 1) {
+    const middleY = top + index * lineHeight + (boxHeight + lineHeight) / 2;
+    appendLeftLineBackgroundTransition(path, bounds[index + 1].left, bounds[index].left, middleY, cornerRadius);
+  }
+
+  path.push(
+    `V ${top + cornerRadius}`,
+    `A ${cornerRadius} ${cornerRadius} 0 0 1 ${first.left + cornerRadius} ${top}`,
     "Z",
-  ].join(" ");
-}
-
-export function concaveCornerSvgPath({ cx, cy, radius, quadrant }) {
-  const paths = {
-    "upper-left": `M ${cx} ${cy - radius} L ${cx} ${cy} L ${cx - radius} ${cy} A ${radius} ${radius} 0 0 0 ${cx} ${cy - radius} Z`,
-    "upper-right": `M ${cx} ${cy - radius} L ${cx} ${cy} L ${cx + radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx} ${cy - radius} Z`,
-    "lower-right": `M ${cx} ${cy + radius} L ${cx} ${cy} L ${cx + radius} ${cy} A ${radius} ${radius} 0 0 0 ${cx} ${cy + radius} Z`,
-    "lower-left": `M ${cx} ${cy + radius} L ${cx} ${cy} L ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx} ${cy + radius} Z`,
-  };
-  return paths[quadrant];
+  );
+  return path.join(" ");
 }
 
 export function rotateDelta(dx, dy, degrees) {

@@ -10,15 +10,13 @@ import {
   BOX_HORIZONTAL_PADDING,
   TEXT_BOX_EDGE_PADDING,
   BOX_CORNER_RADIUS,
-  BOX_JUNCTION_RADIUS,
   textColor,
   outlineColorFor,
   overlayCrop,
   textAlignment,
   slideItems,
   getImageLayout,
-  lineCornerRadii,
-  lineJunctionCorners,
+  perLineBackgroundSvgPath,
   wrapText,
 } from "./editor-model.mjs";
 import { activeProject, getOverlayMetrics } from "./editor-state.mjs";
@@ -130,7 +128,6 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
   const contentLeft = x + edgePadding;
   const contentRight = x + width - edgePadding;
   const textX = align === "left" ? contentLeft + alignedTextInset : align === "right" ? contentRight - alignedTextInset : x + width / 2;
-  const pillStart = (pillWidth) => align === "left" ? contentLeft : align === "right" ? contentRight - pillWidth : x + (width - pillWidth) / 2;
 
   if (text.style === "boxed" && text.backgroundShape === "full") {
     context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
@@ -141,24 +138,18 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
   if (perLineBox) {
     const backgroundHeight = fontSize * BOX_LINE_HEIGHT;
     const radius = Math.min(fontSize * BOX_CORNER_RADIUS, backgroundHeight / 2);
-    const junctionRadius = Math.min(fontSize * BOX_JUNCTION_RADIUS, backgroundHeight / 2);
-    const lineCenters = visibleLines.map((_, index) => startY + index * lineHeight);
     context.fillStyle = text.background === "black" ? "#111111" : "#ffffff";
-    visibleLines.forEach((line, index) => {
-      if (!line) return;
-      const backgroundWidth = pillWidths[index];
-      roundedRect(
-        context,
-        pillStart(backgroundWidth),
-        lineCenters[index] - backgroundHeight / 2,
-        backgroundWidth,
-        backgroundHeight,
-        lineCornerRadii(pillWidths, index, radius),
-      );
-      context.fill();
-    });
-    (align === "center" ? lineJunctionCorners(pillWidths, lineCenters, x + width / 2, backgroundHeight, junctionRadius) : [])
-      .forEach((corner) => fillConcaveCorner(context, corner));
+    const backgroundPath = perLineBackgroundSvgPath(
+      pillWidths,
+      lineHeight,
+      backgroundHeight,
+      contentLeft,
+      innerWidth,
+      align,
+      radius,
+      startY - backgroundHeight / 2,
+    );
+    context.fill(new Path2D(backgroundPath));
   }
 
   visibleLines.forEach((line, index) => {
@@ -180,42 +171,6 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
 export function roundedRect(context, x, y, width, height, radius) {
   context.beginPath();
   context.roundRect(x, y, width, height, radius);
-}
-
-export function fillConcaveCorner(context, { cx, cy, radius, quadrant }) {
-  const shapes = {
-    "upper-left": {
-      start: [cx, cy - radius],
-      corner: [cx, cy],
-      arcStart: [cx - radius, cy],
-      arc: [cx - radius, cy - radius, Math.PI * 0.5, 0, true],
-    },
-    "upper-right": {
-      start: [cx, cy - radius],
-      corner: [cx, cy],
-      arcStart: [cx + radius, cy],
-      arc: [cx + radius, cy - radius, Math.PI * 0.5, Math.PI, false],
-    },
-    "lower-right": {
-      start: [cx, cy + radius],
-      corner: [cx, cy],
-      arcStart: [cx + radius, cy],
-      arc: [cx + radius, cy + radius, -Math.PI * 0.5, -Math.PI, true],
-    },
-    "lower-left": {
-      start: [cx, cy + radius],
-      corner: [cx, cy],
-      arcStart: [cx - radius, cy],
-      arc: [cx - radius, cy + radius, -Math.PI * 0.5, 0, false],
-    },
-  }[quadrant];
-  context.beginPath();
-  context.moveTo(...shapes.start);
-  context.lineTo(...shapes.corner);
-  context.lineTo(...shapes.arcStart);
-  context.arc(shapes.arc[0], shapes.arc[1], radius, shapes.arc[2], shapes.arc[3], shapes.arc[4]);
-  context.closePath();
-  context.fill();
 }
 
 export async function fingerprintData(value) {

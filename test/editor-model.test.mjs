@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   applyCropValues,
   cloneProject,
-  concaveCornerSvgPath,
   ensureBoxedTextContrast,
   escapeHtml,
   fontSizeFromSliderPosition,
@@ -17,8 +16,7 @@ import {
   layerClipCss,
   layerKey,
   layerStageInset,
-  lineCornerRadii,
-  lineJunctionCorners,
+  normalizePerLineBackgroundWidths,
   nextLayerZ,
   normalizeHexColor,
   outlineColorFor,
@@ -28,7 +26,7 @@ import {
   projectPath,
   rgbToHex,
   rotateDelta,
-  roundedRectSvgPath,
+  perLineBackgroundSvgPath,
   routeFromPathname,
   safeFilename,
   slideItems,
@@ -153,18 +151,22 @@ test("calculates cover-image layout and clamps pan offsets", () => {
   assert.equal(layout.maxOffsetY, 0);
 });
 
-test("identifies exposed and joined corners for per-line text boxes", () => {
-  assert.deepEqual(lineCornerRadii([100, 80], 0, 10), [10, 10, 10, 10]);
-  assert.deepEqual(lineCornerRadii([80, 100], 1, 10), [10, 10, 10, 10]);
-  assert.deepEqual(lineJunctionCorners([80, 120], [20, 60], 100, 40, 8), [
-    { cx: 60, cy: 40, radius: 8, quadrant: "upper-left" },
-    { cx: 140, cy: 40, radius: 8, quadrant: "upper-right" },
-  ]);
+test("merges only text-row steps that cannot hold uniform corners", () => {
+  assert.deepEqual(normalizePerLineBackgroundWidths([100, 130], "center", 10), [130, 130]);
+  assert.deepEqual(normalizePerLineBackgroundWidths([100, 150], "center", 10), [100, 150]);
+  assert.deepEqual(normalizePerLineBackgroundWidths([100, 130, 160], "center", 10), [160, 160, 160]);
+  assert.deepEqual(normalizePerLineBackgroundWidths([100, 115], "left", 10), [115, 115]);
+  assert.deepEqual(normalizePerLineBackgroundWidths([100, 130], "right", 10), [100, 130]);
 });
 
-test("produces deterministic convex and concave SVG paths", () => {
-  assert.equal(roundedRectSvgPath(0, 0, 100, 50, [10, 10, 10, 10]), "M 10 0 H 90 Q 100 0 100 10 V 40 Q 100 50 90 50 H 10 Q 0 50 0 40 V 10 Q 0 0 10 0 Z");
-  assert.equal(concaveCornerSvgPath({ cx: 10, cy: 20, radius: 4, quadrant: "upper-left" }), "M 10 16 L 10 20 L 6 20 A 4 4 0 0 0 10 16 Z");
+test("produces one deterministic circular-arc path for per-line text backgrounds", () => {
+  assert.equal(
+    perLineBackgroundSvgPath([100], 30, 40, 0, 100, "center", 10),
+    "M 10 0 H 90 A 10 10 0 0 1 100 10 V 30 A 10 10 0 0 1 90 40 H 10 A 10 10 0 0 1 0 30 V 10 A 10 10 0 0 1 10 0 Z",
+  );
+  const stepped = perLineBackgroundSvgPath([80, 140], 30, 40, 0, 140, "center", 10);
+  assert.equal((stepped.match(/A 10 10/g) || []).length, 8);
+  assert.equal(stepped.includes(" Q "), false);
 });
 
 test("rotates pointer deltas into layer-local axes", () => {
