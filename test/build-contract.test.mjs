@@ -1,0 +1,61 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { access, readFile, readdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const sourceDirectory = join(root, "src");
+
+test("every local module import resolves to a committed source file", async () => {
+  const moduleNames = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs"));
+  assert.deepEqual(moduleNames.sort(), [
+    "agent-commands.mjs",
+    "editor-model.mjs",
+    "editor-state.mjs",
+    "editor-view.mjs",
+    "editor.mjs",
+    "layer-interactions.mjs",
+    "main.mjs",
+    "project-store.mjs",
+    "slide-renderer.mjs",
+  ]);
+
+  for (const name of moduleNames) {
+    const path = join(sourceDirectory, name);
+    const source = await readFile(path, "utf8");
+    for (const match of source.matchAll(/from\s+["'](\.\/.+?)["']/g)) {
+      await assert.doesNotReject(access(resolve(dirname(path), match[1])), `${name} imports missing ${match[1]}`);
+    }
+  }
+});
+
+test("the browser bootloader preserves readiness compatibility aliases", async () => {
+  const source = await readFile(join(root, "app.js"), "utf8");
+  assert.match(source, /import\("\/src\/main\.mjs"\)/);
+  assert.match(source, /window\.carouselBotReady/);
+  assert.match(source, /window\.slideStudioReady = window\.carouselBotReady/);
+});
+
+test("the production build copies the complete module graph and versions the entry assets", async () => {
+  execFileSync(process.execPath, ["scripts/build.mjs"], { cwd: root, stdio: "pipe" });
+  const sourceModules = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs")).sort();
+  const builtModules = (await readdir(join(root, "dist", "src"))).filter((name) => name.endsWith(".mjs")).sort();
+  assert.deepEqual(builtModules, sourceModules);
+
+  const index = await readFile(join(root, "dist", "index.html"), "utf8");
+  assert.doesNotMatch(index, /\?v=dev/);
+  assert.match(index, /\/app\.js\?v=[0-9a-f]{12}/);
+  assert.doesNotMatch(index, /agent-commands\.js/);
+});
+
+test("deployment headers prevent mixed-version module graphs", async () => {
+  const headers = await readFile(join(root, "deploy", "_headers"), "utf8");
+  const blocks = new Map(headers.trim().split(/\n(?=\/)/).map((block) => {
+    const [path, ...rules] = block.split("\n");
+    return [path.trim(), rules.map((rule) => rule.trim()).filter(Boolean)];
+  }));
+  assert.ok(blocks.get("/src/*")?.includes("Cache-Control: no-cache"));
+  assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
+});

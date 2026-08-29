@@ -189,6 +189,8 @@ async function boxedLineGeometry(cdp, textId) {
       pathLeft: pathRect.left,
       pathRight: pathRect.right,
       pathWidth: pathRect.width,
+      cssPaddingLeft: parseFloat(lineStyle.paddingLeft) || 0,
+      cssPaddingRight: parseFloat(lineStyle.paddingRight) || 0,
       leftPadding: textRect.left - pathRect.left,
       rightPadding: pathRect.right - textRect.right,
     };
@@ -209,7 +211,8 @@ try {
   await cdp.send("Runtime.enable");
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
   await cdp.send("Page.navigate", { url: browserPageUrl });
-  await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent)"), "Editor scripts did not load.");
+  await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent) && Boolean(document.querySelector('[data-action=\"connect-agent\"]'))"), "Editor scripts did not load.");
+  await evaluate(cdp, "window.carouselBotReady");
   const initialConnection = await evaluate(cdp, `({
     buttonStatus: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus || "idle",
     remembered: localStorage.getItem("carouselbot:mcp-connected"),
@@ -324,10 +327,13 @@ try {
     }
     await cdp.send("Page.reload", { ignoreCache: true });
     await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('.project-title-input')?.value === "Full MCP browser test" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), `Editor did not restore after the ${align}-alignment reload.`);
+    await evaluate(cdp, `document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`);
     let latestGeometry = null;
     const geometry = await waitFor(async () => {
       latestGeometry = await boxedLineGeometry(cdp, addedText.createdTextId);
-      return latestGeometry?.ready ? latestGeometry : null;
+      return latestGeometry?.ready && Math.abs(latestGeometry.leftPadding - latestGeometry.rightPadding) <= 2
+        ? latestGeometry
+        : null;
     }, `Boxed ${align}-aligned text did not render after reload.`).catch((error) => {
       throw new Error(`${error.message}\nLast geometry state: ${JSON.stringify(latestGeometry)}`);
     });

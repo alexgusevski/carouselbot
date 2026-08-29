@@ -1,0 +1,136 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+globalThis.document = { querySelector: () => null };
+
+const {
+  activeProject,
+  activeSlide,
+  constrainImagePosition,
+  constrainOverlay,
+  getOverlayMetrics,
+  isLayerSelected,
+  projectAsset,
+  selectedLayers,
+  selectedOverlay,
+  selectedText,
+  selectOnlyLayer,
+  setLayerSelection,
+  state,
+  toggleLayerSelection,
+} = await import("../src/editor-state.mjs");
+
+function resetState() {
+  state.projects = [];
+  state.activeProjectId = null;
+  state.activeSlideId = null;
+  state.selectedTextId = null;
+  state.selectedOverlayId = null;
+  state.selectedLayerKeys = [];
+  state.croppingOverlayId = null;
+  state.stageWidth = 0;
+  state.stageHeight = 0;
+}
+
+function installProject() {
+  const project = {
+    id: "project-1",
+    assets: [{ id: "asset-1", width: 800, height: 600 }],
+    slides: [{
+      id: "slide-1",
+      width: 1000,
+      height: 1000,
+      imageScale: 1,
+      imageX: 0,
+      imageY: 0,
+      texts: [{ id: "text-1", z: 1 }],
+      overlays: [{ id: "overlay-1", assetId: "asset-1", x: 0.1, y: 0.2, width: 0.4, z: 2 }],
+    }],
+  };
+  state.projects = [project];
+  state.activeProjectId = project.id;
+  state.activeSlideId = project.slides[0].id;
+  return project;
+}
+
+test.beforeEach(resetState);
+
+test("resolves the active project, slide, asset, and selected layers", () => {
+  installProject();
+  setLayerSelection(["text:text-1", "overlay:overlay-1"]);
+  assert.equal(activeProject().id, "project-1");
+  assert.equal(activeSlide().id, "slide-1");
+  assert.equal(projectAsset("asset-1").width, 800);
+  assert.equal(selectedText(), null);
+  assert.equal(selectedOverlay().id, "overlay-1");
+  assert.deepEqual(selectedLayers().map(({ kind, item }) => `${kind}:${item.id}`), ["text:text-1", "overlay:overlay-1"]);
+});
+
+test("filters duplicate, missing, and malformed selection keys", () => {
+  installProject();
+  setLayerSelection(["text:text-1", "text:text-1", "overlay:missing", "bad"], "text:text-1");
+  assert.deepEqual(state.selectedLayerKeys, ["text:text-1"]);
+  assert.equal(state.selectedTextId, "text-1");
+  assert.equal(state.selectedOverlayId, null);
+});
+
+test("selects one layer and toggles additive selection", () => {
+  installProject();
+  selectOnlyLayer("text", "text-1");
+  assert.equal(isLayerSelected("text", "text-1"), true);
+  toggleLayerSelection("overlay", "overlay-1");
+  assert.deepEqual(state.selectedLayerKeys, ["text:text-1", "overlay:overlay-1"]);
+  assert.equal(state.selectedOverlayId, "overlay-1");
+  toggleLayerSelection("overlay", "overlay-1");
+  assert.deepEqual(state.selectedLayerKeys, ["text:text-1"]);
+  assert.equal(state.selectedTextId, "text-1");
+});
+
+test("uses cropped aspect ratio outside crop mode", () => {
+  installProject();
+  const overlay = { id: "overlay-1", assetId: "asset-1", width: 0.4, cropX: 0, cropY: 0, cropW: 0.5, cropH: 1 };
+  const asset = projectAsset("asset-1");
+  const cropped = getOverlayMetrics(overlay, asset);
+  state.croppingOverlayId = overlay.id;
+  const full = getOverlayMetrics(overlay, asset);
+  assert.equal(cropped.width, 0.4);
+  assert.equal(cropped.height, 0.3375);
+  assert.equal(full.height, 0.16875);
+  assert.deepEqual(getOverlayMetrics(overlay, asset, { full: true }), full);
+});
+
+test("preserves an explicit overlay height while normalizing dimensions and rotation", () => {
+  installProject();
+  const overlay = { assetId: "asset-1", width: 99, height: 0.5, rotation: -45 };
+  constrainOverlay(overlay, projectAsset("asset-1"));
+  assert.equal(overlay.width, 2.4);
+  assert.equal(overlay.height, 0.5);
+  assert.equal(overlay.rotation, 315);
+});
+
+test("derives and clamps a missing overlay height", () => {
+  installProject();
+  const overlay = { assetId: "asset-1", width: 0.4, height: 0, cropW: 1, cropH: 1 };
+  constrainOverlay(overlay, projectAsset("asset-1"));
+  assert.equal(overlay.height, 0.16875);
+});
+
+test("clamps photo pan to the visible cover-image range", () => {
+  const project = installProject();
+  const slide = project.slides[0];
+  state.stageWidth = 1000;
+  state.stageHeight = 2000;
+  slide.imageX = 5;
+  slide.imageY = -5;
+  constrainImagePosition(slide);
+  assert.equal(slide.imageX, 0.5);
+  assert.equal(Math.abs(slide.imageY), 0);
+});
+
+test("returns null selectors when no project is active", () => {
+  assert.equal(activeProject(), null);
+  assert.equal(activeSlide(), null);
+  assert.equal(selectedText(), null);
+  assert.equal(selectedOverlay(), null);
+  assert.deepEqual(selectedLayers(), []);
+});

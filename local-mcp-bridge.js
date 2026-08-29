@@ -15,6 +15,15 @@ const LOCAL_MCP_EDITOR_KEYS = ["carouselbot:mcp-editor-id", "slide-studio:mcp-ed
 const LOCAL_MCP_ACTIVITY_CHANNEL = "carouselbot:mcp-activity";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/carouselbot/refs/heads/main/packages/mcp/README.md and install and configure the CarouselBot MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate CarouselBot immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
+function localMcpEscapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function localMcpConnectionWasRemembered() {
   try {
     return LOCAL_MCP_CONNECTION_KEYS.some((key) => localStorage.getItem(key) === "1");
@@ -125,7 +134,7 @@ function localMcpAgentIcon(agent) {
   if (presentation.icon) {
     return `<span class="agent-activity-icon" aria-hidden="true"><img src="${presentation.icon}" alt="" /></span>`;
   }
-  return `<span class="agent-activity-icon agent-activity-icon--generic" aria-hidden="true">${escapeHtml(presentation.initials || "AI")}</span>`;
+  return `<span class="agent-activity-icon agent-activity-icon--generic" aria-hidden="true">${localMcpEscapeHtml(presentation.initials || "AI")}</span>`;
 }
 
 function localMcpConnectionMessage() {
@@ -180,7 +189,7 @@ function localMcpNotify(message, tone = "agent", agent = null) {
   }
   const item = document.createElement("div");
   item.className = `agent-activity agent-activity--${["success", "error", "info"].includes(tone) ? tone : "agent"}`;
-  item.innerHTML = `${localMcpAgentIcon(agent)}<span><strong>${escapeHtml(localMcpAgentLabel(agent))}</strong>${escapeHtml(value)}</span>`;
+  item.innerHTML = `${localMcpAgentIcon(agent)}<span><strong>${localMcpEscapeHtml(localMcpAgentLabel(agent))}</strong>${localMcpEscapeHtml(value)}</span>`;
   stack.appendChild(item);
   requestAnimationFrame(() => item.classList.add("is-visible"));
   window.setTimeout(() => {

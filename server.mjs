@@ -14,7 +14,6 @@ const files = new Map([
   ["/app-config.js", ["app-config.js", "text/javascript; charset=utf-8"]],
   ["/domain-migration.js", ["domain-migration.js", "text/javascript; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
-  ["/agent-commands.js", ["agent-commands.js", "text/javascript; charset=utf-8"]],
   ["/local-mcp-bridge.js", ["local-mcp-bridge.js", "text/javascript; charset=utf-8"]],
   ["/assets/TikTokSans.ttf", ["assets/TikTokSans.ttf", "font/ttf"]],
   ["/assets/airdrop.svg", ["assets/airdrop.svg", "image/svg+xml"]],
@@ -27,7 +26,11 @@ const files = new Map([
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${host}:${port}`);
+  const sourceModule = /^\/src\/[a-z0-9-]+\.mjs$/.test(url.pathname)
+    ? [url.pathname.slice(1), "text/javascript; charset=utf-8"]
+    : null;
   const entry = files.get(url.pathname)
+    || sourceModule
     || (/^\/projects\/[^/]+\/?$/.test(url.pathname) ? files.get("/") : null);
 
   if (!entry || (request.method !== "GET" && request.method !== "HEAD")) {
