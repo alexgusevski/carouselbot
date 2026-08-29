@@ -20,7 +20,8 @@ applied to the latest release line.
   protected `main`, matching package versions, tests before publishing, and an
   `npm-release` environment restricted to release tags.
 - **Package identity:** npm trusted publishing uses a short-lived GitHub OIDC
-  credential instead of a stored npm token. Publishing requests npm provenance.
+  credential instead of a stored npm token. Both packages require 2FA and
+  disallow bypass-2FA tokens. Publishing requests npm provenance.
   The canonical and compatibility packages publish in separate jobs so a failed
   compatibility publish can be retried without republishing the canonical package.
 - **Installed MCP version:** setup writes an exact package version into the local
