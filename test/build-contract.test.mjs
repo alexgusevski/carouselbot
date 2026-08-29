@@ -12,8 +12,12 @@ test("every local module import resolves to a committed source file", async () =
   const moduleNames = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs"));
   assert.deepEqual(moduleNames.sort(), [
     "agent-commands.mjs",
+    "editor-actions.mjs",
     "editor-model.mjs",
+    "editor-output.mjs",
+    "editor-projects.mjs",
     "editor-state.mjs",
+    "editor-ui.mjs",
     "editor-view.mjs",
     "editor.mjs",
     "layer-interactions.mjs",
@@ -29,6 +33,38 @@ test("every local module import resolves to a committed source file", async () =
       await assert.doesNotReject(access(resolve(dirname(path), match[1])), `${name} imports missing ${match[1]}`);
     }
   }
+});
+
+test("the feature-controller dependency graph stays acyclic and facade-owned", async () => {
+  const moduleNames = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs"));
+  const dependencies = new Map();
+  for (const name of moduleNames) {
+    const source = await readFile(join(sourceDirectory, name), "utf8");
+    dependencies.set(name, [...source.matchAll(/from\s+["']\.\/(.+?\.mjs)["']/g)].map((match) => match[1]));
+  }
+
+  const featureControllers = new Set([
+    "editor-actions.mjs",
+    "editor-output.mjs",
+    "editor-projects.mjs",
+    "editor-ui.mjs",
+  ]);
+  for (const name of featureControllers) {
+    const forbidden = dependencies.get(name).filter((dependency) => dependency === "editor.mjs" || featureControllers.has(dependency));
+    assert.deepEqual(forbidden, [], `${name} must receive cross-controller behavior from the facade`);
+  }
+
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (name, path = []) => {
+    if (visiting.has(name)) assert.fail(`module cycle: ${[...path, name].join(" -> ")}`);
+    if (visited.has(name)) return;
+    visiting.add(name);
+    for (const dependency of dependencies.get(name) || []) visit(dependency, [...path, name]);
+    visiting.delete(name);
+    visited.add(name);
+  };
+  moduleNames.forEach((name) => visit(name));
 });
 
 test("the browser bootloader preserves readiness compatibility aliases", async () => {

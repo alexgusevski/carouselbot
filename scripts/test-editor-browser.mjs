@@ -498,6 +498,109 @@ try {
     "Pointer interaction changes were not persisted.",
   );
 
+  const imagePasteBefore = await evaluate(cdp, `(() => {
+    const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="#FE2C55"/></svg>';
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([svg], 'clipboard-image.svg', { type: 'image/svg+xml' }));
+    document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
+    return {
+      assets: inspected.project.assetCount,
+      images: inspected.slide.imageCount,
+    };
+  })()`);
+  const imagePaste = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
+      const asset = inspected.project.assets.find((item) => item.name === 'clipboard-image');
+      return asset && inspected.project.assetCount === ${imagePasteBefore.assets + 1}
+        && inspected.slide.imageCount === ${imagePasteBefore.images + 1}
+        ? { asset, slide: inspected.slide }
+        : null;
+    })()`),
+    "Pasting an image file did not add one reusable asset and overlay.",
+  );
+  if (imagePaste.asset.width !== 160 || imagePaste.asset.height !== 100) {
+    throw new Error(`Clipboard image metadata changed: ${JSON.stringify(imagePaste.asset)}`);
+  }
+
+  const layerCopy = await evaluate(cdp, `(() => {
+    const before = structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }));
+    const textBox = document.querySelector('.text-box');
+    const textRect = textBox.getBoundingClientRect();
+    textBox.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 81,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: textRect.left + 8,
+      clientY: textRect.top + 8,
+      ctrlKey: true,
+    }));
+    const selectedBeforeCopy = [...document.querySelectorAll('.text-box.is-selected, .overlay-box.is-selected')].length;
+    const transfer = new DataTransfer();
+    const copyEvent = new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: transfer });
+    document.dispatchEvent(copyEvent);
+    const canonical = transfer.getData('application/x-carouselbot-layer');
+    const legacy = transfer.getData('application/x-slide-studio-layer');
+    const plain = transfer.getData('text/plain');
+    document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
+    return {
+      before,
+      selectedBeforeCopy,
+      copyPrevented: copyEvent.defaultPrevented,
+      canonical,
+      legacy,
+      plain,
+      storedCanonical: localStorage.getItem('carouselbot-layer-clipboard'),
+      storedLegacy: localStorage.getItem('slide-studio-layer-clipboard'),
+    };
+  })()`);
+  const canonicalCopy = JSON.parse(layerCopy.canonical);
+  const legacyCopy = JSON.parse(layerCopy.legacy);
+  if (
+    !layerCopy.copyPrevented
+    || layerCopy.selectedBeforeCopy !== 2
+    || canonicalCopy.layers.length !== 2
+    || legacyCopy.token !== canonicalCopy.token
+    || !layerCopy.plain.startsWith("carouselbot-layer:")
+    || JSON.parse(layerCopy.storedCanonical).token !== canonicalCopy.token
+    || JSON.parse(layerCopy.storedLegacy).token !== canonicalCopy.token
+  ) {
+    throw new Error(`Layer clipboard compatibility payload changed: ${JSON.stringify(layerCopy)}`);
+  }
+  const layerPaste = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
+      return inspected.slide.textCount === ${layerCopy.before.slide.textCount + 1}
+        && inspected.slide.imageCount === ${layerCopy.before.slide.imageCount + 1}
+        ? {
+            inspected,
+            selected: [...document.querySelectorAll('.text-box.is-selected, .overlay-box.is-selected')].map((item) => item.dataset.textId || item.dataset.overlayId),
+          }
+        : null;
+    })()`),
+    "Pasting the copied mixed layer selection did not duplicate both layers.",
+  );
+  const originalText = layerCopy.before.slide.texts[0];
+  const pastedText = layerPaste.inspected.slide.texts.at(-1);
+  const originalImage = layerCopy.before.slide.images[0];
+  const pastedImage = layerPaste.inspected.slide.images.at(-1);
+  if (
+    layerPaste.inspected.project.assetCount !== layerCopy.before.project.assetCount
+    || Math.abs(pastedText.x - Math.min(originalText.x + 0.03, 1 - originalText.width)) > 0.0001
+    || Math.abs(pastedText.y - Math.min(originalText.y + 0.03, 1 - originalText.height)) > 0.0001
+    || Math.abs(pastedImage.x - Math.min(originalImage.x + 0.03, 1 - originalImage.width)) > 0.0001
+    || pastedText.z <= originalText.z
+    || pastedImage.z <= originalImage.z
+    || !layerPaste.selected.includes(pastedText.id)
+    || !layerPaste.selected.includes(pastedImage.id)
+  ) {
+    throw new Error(`Mixed layer paste semantics changed: ${JSON.stringify({ layerCopy, layerPaste })}`);
+  }
+
   await evaluate(cdp, `(() => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="#25F4EE"/></svg>';
     const file = new File([svg], 'browser-upload.svg', { type: 'image/svg+xml' });
@@ -518,6 +621,135 @@ try {
   );
   if (uploadedSlide.name !== "browser-upload" || uploadedSlide.width !== 600 || uploadedSlide.height !== 900) {
     throw new Error(`The uploaded slide metadata changed: ${JSON.stringify(uploadedSlide)}`);
+  }
+
+  const slideReordering = await evaluate(cdp, `(() => {
+    const drag = (sourceId, targetId, placement) => {
+      const source = document.querySelector('.slide-thumb[data-slide-id="' + sourceId + '"]');
+      const target = document.querySelector('.slide-thumb[data-slide-id="' + targetId + '"]');
+      const transfer = new DataTransfer();
+      const targetRect = target.getBoundingClientRect();
+      source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      const clientY = placement === 'before' ? targetRect.top + 1 : targetRect.bottom - 1;
+      target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer, clientY }));
+      target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer, clientY }));
+      source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: transfer }));
+      return window.carouselBotAgent.inspect({ includeAllProjects: false }).project.slides.map((item) => item.id);
+    };
+    const movedBefore = drag(${JSON.stringify(uploadedSlide.id)}, ${JSON.stringify(slide.createdSlideId)}, 'before');
+    const restored = drag(${JSON.stringify(uploadedSlide.id)}, ${JSON.stringify(slide.createdSlideId)}, 'after');
+    return { movedBefore, restored };
+  })()`);
+  if (
+    slideReordering.movedBefore[0] !== uploadedSlide.id
+    || slideReordering.restored[0] !== slide.createdSlideId
+    || slideReordering.restored[1] !== uploadedSlide.id
+  ) {
+    throw new Error(`Native slide drag ordering changed: ${JSON.stringify(slideReordering)}`);
+  }
+
+  await evaluate(cdp, `(() => {
+    const button = document.querySelector('.slide-thumb[data-slide-id="${slide.createdSlideId}"]');
+    const rect = button.getBoundingClientRect();
+    button.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.trim() === 'Change').click();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="640"><rect width="320" height="640" fill="#E7E2D8"/></svg>';
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([svg], 'replacement-background.svg', { type: 'image/svg+xml' }));
+    const input = document.querySelector('#slide-background-upload');
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  await waitFor(
+    () => evaluate(cdp, `(() => {
+      const project = window.carouselBotAgent.inspect({ includeAllProjects: false }).project;
+      const changed = project.slides.find((item) => item.id === ${JSON.stringify(slide.createdSlideId)});
+      return changed?.width === 320 && changed?.height === 640 && changed.name === 'Agent-created base';
+    })()`),
+    "Changing a slide background through its native context menu did not preserve the slide while replacing its image.",
+  );
+
+  const outputLabels = await evaluate(cdp, `(() => {
+    window.__browserOutput = { downloads: [], shares: [], activation: false };
+    const output = window.__browserOutput;
+    window.__browserOriginalAnchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      output.downloads.push({ download: this.download, href: this.href });
+    };
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: ({ files } = {}) => Boolean(files?.length) });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async ({ files = [], title = null } = {}) => {
+        output.shares.push({ title, files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })) });
+      },
+    });
+    const activation = {};
+    Object.defineProperty(activation, 'isActive', { get: () => output.activation });
+    Object.defineProperty(navigator, 'userActivation', { configurable: true, value: activation });
+    const labels = Object.fromEntries(['export', 'share', 'share-all'].map((action) => {
+      const button = document.querySelector('[data-action="' + action + '"]');
+      return [action, button.innerHTML];
+    }));
+    document.querySelector('[data-action="export"]').click();
+    return labels;
+  })()`);
+  await waitFor(
+    () => evaluate(cdp, `window.__browserOutput.downloads.length === 1 && !document.querySelector('[data-action="export"]').disabled`),
+    "Downloading from the native toolbar did not finish.",
+  );
+  await evaluate(cdp, `document.querySelector('[data-action="share"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `window.__browserOutput.shares.length === 1 && !document.querySelector('[data-action="share"]').disabled`),
+    "Sharing the active slide from the native toolbar did not finish.",
+  );
+  await evaluate(cdp, `document.querySelector('[data-action="share-all"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.toast')?.textContent.includes('Slides are ready') && !document.querySelector('[data-action="share-all"]').disabled`),
+    "The first multi-slide share did not prepare and cache the rendered files.",
+  );
+  const shareCountBeforeActivation = await evaluate(cdp, `window.__browserOutput.shares.length`);
+  await evaluate(cdp, `(() => {
+    window.__browserOutput.activation = true;
+    document.querySelector('[data-action="share-all"]').click();
+    return true;
+  })()`, { userGesture: true });
+  const nativeOutput = await waitFor(
+    () => evaluate(cdp, `window.__browserOutput.shares.length === 2 ? ({
+      ...window.__browserOutput,
+      buttons: Object.fromEntries(['export', 'share', 'share-all'].map((action) => {
+        const button = document.querySelector('[data-action="' + action + '"]');
+        return [action, { disabled: button.disabled, html: button.innerHTML }];
+      })),
+    }) : null`),
+    "The prepared multi-slide share did not use the cached files on the next gesture.",
+  );
+  await evaluate(cdp, `HTMLAnchorElement.prototype.click = window.__browserOriginalAnchorClick`);
+  const expectedSingleName = "browser-regression-project-agent-created-base.png";
+  const expectedAllNames = [
+    "01-browser-regression-project-agent-created-base.png",
+    "02-browser-regression-project-browser-upload.png",
+  ];
+  if (
+    shareCountBeforeActivation !== 1
+    || nativeOutput.downloads[0].download !== expectedSingleName
+    || !nativeOutput.downloads[0].href.startsWith("blob:")
+    || nativeOutput.shares[0].title !== "Browser regression project"
+    || nativeOutput.shares[0].files.length !== 1
+    || nativeOutput.shares[0].files[0].name !== expectedSingleName
+    || nativeOutput.shares[0].files[0].type !== "image/png"
+    || nativeOutput.shares[0].files[0].size < 1000
+    || JSON.stringify(nativeOutput.shares[1].files.map((file) => file.name)) !== JSON.stringify(expectedAllNames)
+    || nativeOutput.shares[1].files.some((file) => file.type !== "image/png" || file.size < 1000)
+    || Object.entries(nativeOutput.buttons).some(([action, button]) => button.disabled || button.html !== outputLabels[action])
+  ) {
+    throw new Error(`Native download/share behavior changed: ${JSON.stringify({ outputLabels, nativeOutput, shareCountBeforeActivation })}`);
   }
 
   const rendered = await evaluate(cdp, `(() => {
@@ -558,9 +790,10 @@ try {
     })`),
     "The uploaded slide was not persisted before reload.",
   );
+  await evaluate(cdp, "window.__carouselBotReloadSentinel = true");
   await cdp.send("Page.reload");
   await waitFor(
-    () => evaluate(cdp, `document.readyState === 'complete' && location.pathname === '/projects/${encodeURIComponent(projectId)}' && window.carouselBotAgent?.inspect({ includeAllProjects: false }).project?.slideCount === 2`),
+    () => evaluate(cdp, `document.readyState === 'complete' && !window.__carouselBotReloadSentinel && location.pathname === '/projects/${encodeURIComponent(projectId)}' && window.carouselBotAgent?.inspect({ includeAllProjects: false }).project?.slideCount === 2`),
     "The project did not survive a hard reload of its deep route.",
   );
   const persisted = await evaluate(cdp, `(() => {
@@ -571,10 +804,75 @@ try {
     throw new Error(`Reloaded project data changed: ${JSON.stringify(persisted)}`);
   }
 
+  await evaluate(cdp, `(() => {
+    const button = document.querySelector('.slide-thumb[data-slide-id="${uploadedSlide.id}"]');
+    const rect = button.getBoundingClientRect();
+    button.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.trim() === 'Remove').click();
+    return true;
+  })()`);
+  await waitFor(
+    () => evaluate(cdp, `(() => {
+      const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
+      return inspected.project.slideCount === 1
+        && !inspected.project.slides.some((item) => item.id === ${JSON.stringify(uploadedSlide.id)});
+    })()`),
+    "Removing a slide through its native context menu did not update the project.",
+  );
+
   await cdp.send("Page.navigate", { url: `${pageUrl}/projects/missing-project` });
   await waitFor(
     () => evaluate(cdp, `document.readyState === 'complete' && location.pathname === '/' && document.querySelector('.toast')?.textContent.includes('isn’t available')`),
     "A missing deep route did not return to the dashboard with feedback.",
+  );
+
+  const deletionProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Dashboard deletion check' })`);
+  await waitFor(
+    () => evaluate(cdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Dashboard deletion check')`),
+    "The dashboard did not render the project used for native deletion coverage.",
+  );
+  const openProjectDeleteConfirmation = `(() => {
+    const card = [...document.querySelectorAll('.project-card')].find((item) => item.querySelector('.project-meta strong')?.textContent === 'Dashboard deletion check');
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+    }));
+    document.querySelector('.layer-menu-item[aria-label="Remove Dashboard deletion check"]').click();
+    return Boolean(document.querySelector('.project-delete-confirmation'));
+  })()`;
+  if (!await evaluate(cdp, openProjectDeleteConfirmation)) throw new Error("The dashboard project delete confirmation did not open.");
+  await evaluate(cdp, `document.querySelector('[data-action="cancel-project-delete"]').click()`);
+  const cancellation = await evaluate(cdp, `({
+    modalClosed: !document.querySelector('.project-delete-confirmation'),
+    projectPresent: window.carouselBotAgent.inspect().projects.some((item) => item.id === ${JSON.stringify(deletionProject.projectId)}),
+  })`);
+  if (!cancellation.modalClosed || !cancellation.projectPresent) {
+    throw new Error(`Cancelling native project deletion changed the project: ${JSON.stringify(cancellation)}`);
+  }
+  if (!await evaluate(cdp, openProjectDeleteConfirmation)) throw new Error("The dashboard project delete confirmation did not reopen.");
+  await evaluate(cdp, `document.querySelector('[data-action="confirm-project-delete"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `new Promise((resolve) => {
+      if (window.carouselBotAgent.inspect().projects.some((item) => item.id === ${JSON.stringify(deletionProject.projectId)})) return resolve(false);
+      const request = indexedDB.open('carouselbot-db');
+      request.onerror = () => resolve(false);
+      request.onsuccess = () => {
+        const item = request.result.transaction('projects', 'readonly').objectStore('projects').get(${JSON.stringify(deletionProject.projectId)});
+        item.onerror = () => resolve(false);
+        item.onsuccess = () => resolve(item.result == null && ![...document.querySelectorAll('.project-card')].some((card) => card.dataset.projectId === ${JSON.stringify(deletionProject.projectId)}));
+      };
+    })`),
+    "Confirming native project deletion did not remove it from IndexedDB and the dashboard.",
   );
 
   const failedResources = await evaluate(cdp, `performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/') && entry.responseStatus >= 400).map((entry) => ({ name: entry.name, status: entry.responseStatus }))`);
@@ -589,7 +887,11 @@ try {
     directUiTextEditing: true,
     pointerDragResize: true,
     undoRedo: true,
+    nativeClipboard: true,
     imageUpload: true,
+    nativeSlideLifecycle: true,
+    nativeOutputActions: true,
+    nativeProjectDeletion: true,
     deepRouteReload: true,
     missingRouteFallback: true,
     agentCompatibility: true,

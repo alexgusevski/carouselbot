@@ -12,11 +12,15 @@ Browser application source lives in `src/`. The root `app.js` is only the compat
 - `src/editor-view.mjs` — markup and DOM/text painting.
 - `src/slide-renderer.mjs` — full-resolution canvas rendering.
 - `src/layer-interactions.mjs` — pointer, crop, drag, resize, rotate, and inline-text interactions. It receives stateful controller callbacks instead of importing the controller.
-- `src/editor.mjs` — stateful coordination, lifecycle, routing, saves, mutations, clipboard, sharing, and exports.
+- `src/editor-projects.mjs` — project history, persistence coordination, routing, migration, and dashboard workflows.
+- `src/editor-actions.mjs` — layer, text, slide, asset, upload, drop, and clipboard workflows.
+- `src/editor-output.mjs` — dashboard covers, slide thumbnails, PNG downloads, and sharing.
+- `src/editor-ui.mjs` — editor/dashboard rendering, DOM event binding, menus, inspector controls, selection, and canvas behavior.
+- `src/editor.mjs` — composition, initialization, global event wiring, and the stable controller facade.
 - `src/agent-commands.mjs` — compatibility agent command surface; it is a leaf module.
-- `src/main.mjs` — composition and startup only.
+- `src/main.mjs` — startup only.
 
-The dependency direction is documented in `docs/ARCHITECTURE.md`. Foundational modules must not import `editor.mjs`; use a narrowly scoped callback when an interaction needs controller behavior.
+The dependency direction is documented in `docs/ARCHITECTURE.md`. Feature controllers receive their cross-workflow dependencies from `editor.mjs`; they must not import one another or the facade. Use narrowly scoped callbacks when a workflow crosses an ownership boundary.
 
 ## Invariants
 
