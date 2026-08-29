@@ -13,7 +13,16 @@
 /app.js
   Cache-Control: no-cache
 
-/agent-commands.js
+/app-config.js
+  Cache-Control: no-cache
+
+/domain-migration.js
+  Cache-Control: no-cache
+
+/local-mcp-bridge.js
+  Cache-Control: no-cache
+
+/src/*
   Cache-Control: no-cache
 
 /styles.css

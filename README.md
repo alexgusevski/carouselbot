@@ -42,12 +42,18 @@ Then open [http://localhost:4173](http://localhost:4173).
 ## Test
 
 ```bash
-npm run test:migration
+npm test
+npm run test:editor:browser
 npm run test:migration:browser
-npm run test:mcp
 npm run test:mcp:browser:local
 npm run build
 ```
+
+Fast editor tests use Node's built-in test runner. Browser suites launch a temporary Chrome profile and exercise the production build, IndexedDB, canvas rendering, domain migration, and the local MCP integration without adding a browser-test framework dependency.
+
+## Architecture
+
+The browser editor is organized as a small ES-module graph under `src/`. Pure model logic, state, persistence, views, final slide rendering, and pointer interactions have explicit boundaries; stateful workflow coordination remains in one controller. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the dependency direction, invariants, and change guide.
 
 ## Deploy to Cloudflare
 

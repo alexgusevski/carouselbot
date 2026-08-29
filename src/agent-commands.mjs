@@ -1,3 +1,69 @@
+import {
+  DESIGN_WIDTH,
+  OUTPUT_WIDTH,
+  OUTPUT_HEIGHT,
+  DEFAULT_OUTLINE_WIDTH,
+  TEXT_WEIGHT,
+  TEXT_LINE_HEIGHT,
+  BOX_TEXT_LINE_HEIGHT,
+  BOX_LINE_HEIGHT,
+  BOX_HORIZONTAL_PADDING,
+  TEXT_BOX_EDGE_PADDING,
+  FONT_SIZE_MIN,
+  FONT_SIZE_MAX,
+  CANVAS_ZOOM_MIN,
+  CANVAS_ZOOM_MAX,
+  uid,
+  projectPath,
+  normalizeHexColor,
+  textColor,
+  ensureBoxedTextContrast,
+  layerKey,
+  overlayCrop,
+  textAlignment,
+  initialOverlayWidth,
+  slideItems,
+  nextLayerZ,
+  clamp,
+  wrapText,
+  safeFilename,
+} from "./editor-model.mjs";
+import {
+  state,
+  history,
+  app,
+  activeProject,
+  selectedLayerKeys,
+  setLayerSelection,
+  selectOnlyLayer,
+  projectAsset,
+  constrainOverlay,
+  constrainImagePosition,
+} from "./editor-state.mjs";
+import {
+  getProjectFromDb,
+  staleProjectError,
+  putProject,
+  deleteProjectFromDb,
+} from "./project-store.mjs";
+import { measureCanvas } from "./editor-view.mjs";
+import { getImageDimensions, renderSlideCanvas, fingerprintData } from "./slide-renderer.mjs";
+import {
+  recordHistory,
+  undo,
+  redo,
+  updateBrowserRoute,
+  reloadProjectFromDb,
+  clearLayerSelection,
+  toast,
+  renderDashboard,
+  clearProjectCover,
+  renderEditor,
+  bindGlobalActions,
+  clearSlideThumbnail,
+  fileToDataUrl,
+} from "./editor.mjs";
+
 const CAROUSELBOT_AGENT_PROTOCOL = 3;
 const AGENT_TEXT_ROLE_SIZES = { title: 104, subtitle: 76, body: 60, caption: 48 };
 const AGENT_TEXT_VERTICAL_SAFETY_PADDING = 0.36;
@@ -604,9 +670,13 @@ async function executeCarouselBotAgentOperation(operation) {
   throw new Error(`Unsupported agent operation: ${operation.type}`);
 }
 
-window.carouselBotAgent = {
-  protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
-  execute: executeCarouselBotAgentOperation,
-  inspect: agentInspect,
-};
-window.slideStudioAgent = window.carouselBotAgent;
+export function installAgentGlobals() {
+  const agent = {
+    protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
+    execute: executeCarouselBotAgentOperation,
+    inspect: agentInspect,
+  };
+  window.carouselBotAgent = agent;
+  window.slideStudioAgent = agent;
+  return agent;
+}

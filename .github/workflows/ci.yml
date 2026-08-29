@@ -38,3 +38,8 @@ jobs:
 
       - name: Build the production bundle
         run: npm run build
+
+      - name: Run the editor browser smoke test
+        run: npm run test:editor:browser
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
