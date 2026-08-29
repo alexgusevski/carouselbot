@@ -72,6 +72,7 @@ The local MCP bridge waits for the readiness promise before processing operation
 - Text wrapping and boxed-line geometry must agree between DOM previews and exported canvas images.
 - TikTok placement chrome is preview-only and is never exported.
 - Project images stay embedded in the local project record; they are not uploaded by the application.
+- Layer geometry is applied with dynamic style attributes. The deployment CSP permits style attributes while keeping stylesheet and script sources restricted to the application origin.
 
 ## Testing strategy
 
