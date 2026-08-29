@@ -10,7 +10,6 @@ import {
   BOX_HORIZONTAL_PADDING,
   TEXT_BOX_EDGE_PADDING,
   BOX_CORNER_RADIUS,
-  BOX_JUNCTION_RADIUS,
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
   FONT_SIZE_SLIDER_MAX,
@@ -27,10 +26,7 @@ import {
   sliderPositionFromFontSize,
   formatFontSize,
   getImageLayout,
-  lineCornerRadii,
-  lineJunctionCorners,
-  roundedRectSvgPath,
-  concaveCornerSvgPath,
+  perLineBackgroundSvgPath,
   wrapText,
 } from "./editor-model.mjs";
 import {
@@ -339,7 +335,7 @@ export function renderTextBox(text) {
       data-background="${background}"
       data-box-shape="${backgroundShape}"
       data-align="${textAlignment(text)}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -521,6 +517,8 @@ export function updateTextBox(text) {
   const color = textColor(text);
   box.style.setProperty("--text-color", color);
   box.style.setProperty("--outline-color", outlineColorFor(color));
+  box.style.setProperty("--box-text-line-height", `${BOX_TEXT_LINE_HEIGHT}em`);
+  box.style.setProperty("--box-horizontal-padding", `${BOX_HORIZONTAL_PADDING}em`);
   const insideVisual = box.querySelector(".text-visual--inside");
   if (insideVisual) insideVisual.style.clipPath = layerClipCss(text.x, text.y, text.width, text.height);
   box.querySelectorAll(".text-content-wrap").forEach((contentWrap) => {
@@ -563,12 +561,9 @@ export function createPerLineBackground(text, widths, lineHeight, fontSize, cont
   const namespace = "http://www.w3.org/2000/svg";
   const boxHeight = fontSize * BOX_LINE_HEIGHT;
   const radius = Math.min(fontSize * BOX_CORNER_RADIUS, boxHeight / 2);
-  const junctionRadius = Math.min(fontSize * BOX_JUNCTION_RADIUS, boxHeight / 2);
   const height = (widths.length - 1) * lineHeight + boxHeight;
-  const lineCenters = widths.map((_, index) => index * lineHeight + boxHeight / 2);
   const fill = text.background === "black" ? "#111111" : "#ffffff";
   const align = textAlignment(text);
-  const lineStart = (width) => align === "left" ? 0 : align === "right" ? contentWidth - width : (contentWidth - width) / 2;
   const svg = document.createElementNS(namespace, "svg");
   svg.setAttribute("class", "text-background");
   svg.setAttribute("viewBox", `0 0 ${contentWidth} ${height}`);
@@ -577,25 +572,10 @@ export function createPerLineBackground(text, widths, lineHeight, fontSize, cont
   svg.style.height = `${height}px`;
   svg.style.top = `${(lineHeight - boxHeight) / 2}px`;
 
-  widths.forEach((width, index) => {
-    const path = document.createElementNS(namespace, "path");
-    path.setAttribute("d", roundedRectSvgPath(
-      lineStart(width),
-      index * lineHeight,
-      width,
-      boxHeight,
-      lineCornerRadii(widths, index, radius),
-    ));
-    path.setAttribute("fill", fill);
-    svg.appendChild(path);
-  });
-
-  (align === "center" ? lineJunctionCorners(widths, lineCenters, contentWidth / 2, boxHeight, junctionRadius) : []).forEach((corner) => {
-    const path = document.createElementNS(namespace, "path");
-    path.setAttribute("d", concaveCornerSvgPath(corner));
-    path.setAttribute("fill", fill);
-    svg.appendChild(path);
-  });
+  const path = document.createElementNS(namespace, "path");
+  path.setAttribute("d", perLineBackgroundSvgPath(widths, lineHeight, boxHeight, 0, contentWidth, align, radius));
+  path.setAttribute("fill", fill);
+  svg.appendChild(path);
   return svg;
 }
 
