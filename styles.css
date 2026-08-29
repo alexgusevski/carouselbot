@@ -632,23 +632,33 @@ button:disabled {
 
 .brand-mark {
   position: relative;
-  width: 29px;
-  height: 34px;
-  border-radius: 6px;
+  width: 32px;
+  height: 29px;
+  border-radius: 10px;
   background: var(--ink);
   transform: rotate(-4deg);
-  box-shadow: 4px 2px 0 var(--cyan), -3px -2px 0 var(--red);
+  box-shadow: 4px 3px 0 var(--cyan), -3px -2px 0 var(--red);
+}
+
+.brand-mark::before,
+.brand-mark::after {
+  position: absolute;
+  top: 9px;
+  width: 3px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--paper);
+  content: "";
+}
+
+.brand-mark::before {
+  left: 10px;
+  transform: rotate(-5deg);
 }
 
 .brand-mark::after {
-  position: absolute;
-  top: 8px;
-  right: -5px;
-  width: 11px;
-  height: 18px;
-  border-radius: 3px;
-  background: var(--ink);
-  content: "";
+  right: 10px;
+  transform: rotate(5deg);
 }
 
 .brand-copy {
