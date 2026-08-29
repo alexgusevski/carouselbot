@@ -1,0 +1,496 @@
+import {
+  OUTPUT_WIDTH,
+  OUTPUT_HEIGHT,
+  DEFAULT_OUTLINE_WIDTH,
+  HISTORY_LIMIT,
+  cloneProject,
+  uid,
+  projectPath,
+  routeFromPathname,
+  escapeHtml,
+  normalizeHexColor,
+  textColor,
+  overlayCrop,
+  clamp,
+  isEditingTextTarget,
+} from "./editor-model.mjs";
+import {
+  state,
+  history,
+  app,
+  activeProject,
+  selectedLayerKeys,
+  setLayerSelection,
+} from "./editor-state.mjs";
+import { icon } from "./editor-view.mjs";
+import {
+  STORE_NAME,
+  PROJECT_SYNC_STORAGE_KEY,
+  projectChannel,
+  projectChannelSource,
+  getAllProjects,
+  getProjectFromDb,
+  announceProjectChange,
+  putProject,
+  deleteProjectFromDb,
+} from "./project-store.mjs";
+
+export function normalizeLoadedProjects(projects) {
+  projects.forEach((project) => {
+    if (!Number.isFinite(Number(project.revision))) project.revision = 0;
+    if (!Array.isArray(project.assets)) project.assets = [];
+    project.slides.forEach((slide) => {
+      if (slide.imageScale == null) slide.imageScale = 1;
+      if (slide.imageX == null) slide.imageX = 0;
+      if (slide.imageY == null) slide.imageY = 0;
+      if (!Array.isArray(slide.overlays)) slide.overlays = [];
+      slide.overlays.forEach((overlay, index) => {
+        const asset = project.assets.find((item) => item.id === overlay.assetId);
+        if (overlay.height == null && asset) {
+          const crop = overlayCrop(overlay);
+          overlay.height = overlay.width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * ((asset.height * crop.h) / (asset.width * crop.w));
+        }
+        if (overlay.z == null) overlay.z = index + 1;
+      });
+      if (!Array.isArray(slide.texts)) slide.texts = [];
+      slide.texts.forEach((text, index) => {
+        if (text.outlineWidth == null) text.outlineWidth = DEFAULT_OUTLINE_WIDTH;
+        if (!normalizeHexColor(text.color)) text.color = textColor(text);
+        if (!text.background) text.background = "white";
+        if (!text.backgroundShape) text.backgroundShape = "full";
+        if (!text.align) text.align = "center";
+        if (text.rotation == null) text.rotation = 0;
+        if (text.z == null) text.z = (slide.overlays?.length || 0) + index + 1;
+      });
+    });
+  });
+  return projects;
+}
+
+export function createEditorProjects({
+  domainMigration,
+  renderDashboard,
+  renderEditor,
+  clearLayerSelection,
+  toast,
+  scheduleThumbnailRefresh,
+  clearProjectCover,
+  clearSlideThumbnail,
+}) {
+  let migrationModalDismissed = false;
+  let dashboardRefreshPromise = null;
+
+  function recordHistory(project = activeProject()) {
+    if (!project || history.applying) return;
+    history.past.push(cloneProject(project));
+    if (history.past.length > HISTORY_LIMIT) history.past.shift();
+    history.future = history.future.filter((snapshot) => snapshot.id !== project.id);
+  }
+
+  function takeProjectHistorySnapshot(stack, projectId) {
+    const index = stack.findLastIndex((snapshot) => snapshot.id === projectId);
+    return index < 0 ? null : stack.splice(index, 1)[0];
+  }
+
+  async function applyHistorySnapshot(snapshot) {
+    const index = state.projects.findIndex((project) => project.id === snapshot.id);
+    if (index < 0) return;
+    const expectedRevision = Number(state.projects[index].revision) || 0;
+    history.applying = true;
+    state.projects[index] = { ...cloneProject(snapshot), revision: expectedRevision + 1, updatedAt: Date.now() };
+    state.activeProjectId = snapshot.id;
+    if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
+      state.activeSlideId = state.projects[index].slides[0]?.id || null;
+    }
+    setLayerSelection(selectedLayerKeys());
+    state.croppingOverlayId = null;
+    renderEditor();
+    try {
+      await putProject(state.projects[index], { expectedRevision });
+    } catch (error) {
+      console.error(error);
+      if (error.code === "STALE_PROJECT") await reloadProjectFromDb(snapshot.id);
+      throw error;
+    } finally {
+      history.applying = false;
+    }
+  }
+
+  function undo() {
+    if (isEditingTextTarget(document.activeElement)) return;
+    const project = activeProject();
+    if (!project) return;
+    const snapshot = takeProjectHistorySnapshot(history.past, project.id);
+    if (!snapshot) return;
+    history.future.push(cloneProject(project));
+    return applyHistorySnapshot(snapshot);
+  }
+
+  function redo() {
+    if (isEditingTextTarget(document.activeElement)) return;
+    const project = activeProject();
+    if (!project) return;
+    const snapshot = takeProjectHistorySnapshot(history.future, project.id);
+    if (!snapshot) return;
+    history.past.push(cloneProject(project));
+    return applyHistorySnapshot(snapshot);
+  }
+
+  function updateBrowserRoute(path, historyMode) {
+    if (historyMode === "none" || window.location.pathname === path) return;
+    window.history[historyMode === "replace" ? "replaceState" : "pushState"]({}, "", `${path}${window.location.search}${window.location.hash}`);
+  }
+
+  async function importMigratedProject(project) {
+    const incoming = structuredClone(project);
+    const result = await new Promise((resolve, reject) => {
+      const transaction = state.db.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      let outcome = "invalid";
+      const read = store.get(incoming.id);
+      read.onerror = () => reject(read.error);
+      read.onsuccess = () => {
+        outcome = domainMigration.migrationResult(read.result || null, incoming);
+        if (outcome === "invalid") {
+          transaction.abort();
+          return;
+        }
+        if (outcome !== "skipped") store.put(incoming);
+      };
+      transaction.oncomplete = () => resolve(outcome);
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(outcome === "invalid"
+        ? new Error(`Project ${incoming.id || "unknown"} is not a valid CarouselBot project.`)
+        : transaction.error || new Error("Project import was aborted."));
+    });
+    if (result === "skipped") return result;
+    announceProjectChange("project.updated", incoming);
+    const index = state.projects.findIndex((item) => item.id === incoming.id);
+    if (index >= 0) state.projects[index] = incoming;
+    else state.projects.push(incoming);
+    return result;
+  }
+
+  async function reloadProjectFromDb(projectId, { render = true } = {}) {
+    const latest = await getProjectFromDb(projectId);
+    const index = state.projects.findIndex((project) => project.id === projectId);
+    if (!latest) {
+      if (index >= 0) state.projects.splice(index, 1);
+      clearProjectCover(projectId);
+      if (state.activeProjectId === projectId) {
+        state.activeProjectId = null;
+        state.activeSlideId = null;
+        updateBrowserRoute("/", "replace");
+      }
+    } else if (index >= 0) {
+      state.projects[index] = latest;
+      if (state.activeProjectId === projectId && !latest.slides.some((slide) => slide.id === state.activeSlideId)) state.activeSlideId = latest.slides[0]?.id || null;
+    } else state.projects.push(latest);
+    if (render) {
+      if (!state.activeProjectId) renderDashboard();
+      else if (state.activeProjectId === projectId) renderEditor();
+    }
+    return latest;
+  }
+
+  async function handleExternalProjectEvent(data) {
+    if (!data || data.source === projectChannelSource || !data.projectId || !state.db) return;
+    const local = state.projects.find((project) => project.id === data.projectId);
+    if (data.type === "project.deleted" || !local || Number(data.revision) > (Number(local.revision) || 0) || Number(data.updatedAt) > (Number(local.updatedAt) || 0)) {
+      await reloadProjectFromDb(data.projectId).catch((error) => console.error("Could not synchronize project", error));
+    }
+  }
+
+  projectChannel?.addEventListener("message", ({ data }) => { void handleExternalProjectEvent(data); });
+
+  window.addEventListener("storage", (event) => {
+    if (event.key !== PROJECT_SYNC_STORAGE_KEY || !event.newValue) return;
+    try {
+      void handleExternalProjectEvent(JSON.parse(event.newValue));
+    } catch (error) {
+      console.error("Could not read project synchronization event", error);
+    }
+  });
+
+  function scheduleSave() {
+    const project = activeProject();
+    if (!project) return;
+    project.updatedAt = Date.now();
+    scheduleThumbnailRefresh();
+    state.shareAllCache = null;
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(async () => {
+      try {
+        const baseRevision = Number(project.revision) || 0;
+        project.revision = baseRevision + 1;
+        await putProject(project, { expectedRevision: baseRevision });
+      } catch (error) {
+        console.error(error);
+        if (error.code === "STALE_PROJECT") {
+          await reloadProjectFromDb(project.id);
+          toast("This project changed in another tab. Reloaded the latest version.");
+        } else toast("Couldn’t save this project in your browser.");
+      }
+    }, 180);
+  }
+
+  function closeLayerMenu() {
+    document.querySelector(".layer-menu")?.remove();
+  }
+
+  function positionLayerMenu(menu, clientX, clientY) {
+    const pad = 8;
+    const { width, height } = menu.getBoundingClientRect();
+    const left = clamp(clientX, pad, window.innerWidth - width - pad);
+    const top = clamp(clientY, pad, window.innerHeight - height - pad);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function showProjectMenu(event, projectId) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeLayerMenu();
+
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+
+    const menu = document.createElement("div");
+    menu.className = "layer-menu layer-menu--confirm";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", `Actions for ${project.name}`);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "layer-menu-item is-danger";
+    button.setAttribute("role", "menuitem");
+    button.setAttribute("aria-label", `Remove ${project.name}`);
+    button.innerHTML = `${icon("trash")}<span>Remove</span>`;
+    button.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      closeLayerMenu();
+      showProjectDeleteConfirmation(projectId);
+    });
+    menu.appendChild(button);
+    document.body.appendChild(menu);
+
+    const triggerRect = event.currentTarget.getBoundingClientRect();
+    const clientX = event.clientX || triggerRect.left + triggerRect.width / 2;
+    const clientY = event.clientY || triggerRect.top + triggerRect.height / 2;
+    positionLayerMenu(menu, clientX, clientY);
+  }
+
+  function closeProjectDeleteConfirmation() {
+    document.querySelector(".project-delete-confirmation")?.remove();
+  }
+
+  function showProjectDeleteConfirmation(projectId) {
+    closeProjectDeleteConfirmation();
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop project-delete-confirmation";
+    backdrop.innerHTML = `
+      <section class="modal modal--confirm" role="alertdialog" aria-modal="true" aria-labelledby="delete-project-title" aria-describedby="delete-project-description">
+        <h2 id="delete-project-title">Remove project?</h2>
+        <p id="delete-project-description"><strong>${escapeHtml(project.name)}</strong> and all of its slides will be permanently deleted. This can’t be undone.</p>
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-action="cancel-project-delete">Cancel</button>
+          <button class="button button--danger" type="button" data-action="confirm-project-delete">Remove project</button>
+        </div>
+      </section>
+    `;
+
+    const cancelButton = backdrop.querySelector('[data-action="cancel-project-delete"]');
+    const confirmButton = backdrop.querySelector('[data-action="confirm-project-delete"]');
+    const close = () => closeProjectDeleteConfirmation();
+
+    cancelButton.addEventListener("click", close);
+    backdrop.addEventListener("pointerdown", (event) => {
+      if (event.target === backdrop) close();
+    });
+    backdrop.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    });
+    confirmButton.addEventListener("click", async () => {
+      cancelButton.disabled = true;
+      confirmButton.disabled = true;
+      confirmButton.textContent = "Removing…";
+      try {
+        await deleteProjectFromDb(projectId, { expectedRevision: Number(project.revision) || 0 });
+        project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
+        clearProjectCover(projectId);
+        state.slideRailScrollPositions.delete(projectId);
+        state.projects = state.projects.filter((item) => item.id !== projectId);
+        close();
+        renderDashboard();
+        toast("Project removed");
+      } catch (error) {
+        console.error(error);
+        if (error.code === "STALE_PROJECT") await reloadProjectFromDb(projectId);
+        cancelButton.disabled = false;
+        confirmButton.disabled = false;
+        confirmButton.textContent = "Remove project";
+        toast("Couldn’t remove this project from your browser.");
+      }
+    });
+
+    document.body.appendChild(backdrop);
+    cancelButton.focus();
+  }
+
+  function openProject(projectId, { historyMode = "push" } = {}) {
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return false;
+    updateBrowserRoute(projectPath(projectId), historyMode);
+    state.activeProjectId = projectId;
+    state.activeSlideId = project.slides[0]?.id || null;
+    clearLayerSelection();
+    state.photoAdjustMode = false;
+    renderEditor();
+    return true;
+  }
+
+  function openDashboard({ historyMode = "push" } = {}) {
+    updateBrowserRoute("/", historyMode);
+    renderDashboard();
+  }
+
+  function renderCurrentRoute() {
+    const route = routeFromPathname();
+    if (route.view === "project" && openProject(route.projectId, { historyMode: "none" })) return;
+    const missingProject = route.view === "project";
+    updateBrowserRoute("/", "replace");
+    renderDashboard();
+    if (missingProject) toast("This project isn’t available in this browser.");
+  }
+
+  function createProject() {
+    const now = Date.now();
+    const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [] };
+    state.projects.push(project);
+    openProject(project.id);
+    putProject(project).catch((error) => {
+      console.error(error);
+      toast("Couldn’t save this project in your browser.");
+    });
+  }
+
+  function bindDashboardEvents() {
+    bindGlobalActions();
+    const migrationModal = app.querySelector("[data-migration-modal]");
+    const dismissMigrationModal = () => {
+      if (!migrationModal) return;
+      migrationModalDismissed = true;
+      migrationModal.classList.add("is-closing");
+      window.setTimeout(() => migrationModal.remove(), 150);
+      app.querySelector('[data-action="new-project"]')?.focus({ preventScroll: true });
+    };
+    migrationModal?.querySelector('[data-action="close-migration-modal"]')?.addEventListener("click", dismissMigrationModal);
+    migrationModal?.addEventListener("click", (event) => {
+      if (event.target === migrationModal) dismissMigrationModal();
+    });
+    migrationModal?.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") dismissMigrationModal();
+    });
+    migrationModal?.querySelector('[data-action="close-migration-modal"]')?.focus({ preventScroll: true });
+    app.querySelector('[data-action="migrate-projects"]')?.addEventListener("click", migrateLegacyProjects);
+    app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
+    app.querySelectorAll("[data-project-id]").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        openProject(link.dataset.projectId);
+      });
+      link.addEventListener("contextmenu", (event) => {
+        if (event.ctrlKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          window.open(link.href, "_blank", "noopener");
+          return;
+        }
+        showProjectMenu(event, link.dataset.projectId);
+      });
+    });
+  }
+
+  async function migrateLegacyProjects(event) {
+    const button = event.currentTarget;
+    const status = app.querySelector("[data-migration-status]");
+    button.disabled = true;
+    button.textContent = "Opening CarouselBot…";
+    try {
+      const summary = await domainMigration.start([...state.projects], {
+        onProgress: ({ completed, total }) => {
+          button.textContent = `Copying ${completed} of ${total}…`;
+          if (status) status.textContent = "Keep both tabs open while your projects and images are copied.";
+        },
+      });
+      if (status) status.textContent = `Copied ${summary.projectCount} ${summary.projectCount === 1 ? "project" : "projects"} to carousel.bot. Your originals are still safe here.`;
+      button.textContent = "Projects copied";
+    } catch (error) {
+      console.error(error);
+      if (status) status.textContent = error.message;
+      button.disabled = false;
+      button.textContent = "Try again";
+    }
+  }
+
+  function bindGlobalActions() {
+    const homeLink = app.querySelector('[data-action="home"]');
+    homeLink?.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      openDashboard();
+    });
+    homeLink?.addEventListener("contextmenu", (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      window.open(homeLink.href, "_blank", "noopener");
+    });
+  }
+
+  function refreshDashboardProjects() {
+    if (!state.db || state.activeProjectId) return Promise.resolve();
+    if (dashboardRefreshPromise) return dashboardRefreshPromise;
+    dashboardRefreshPromise = getAllProjects()
+      .then((projects) => {
+        if (state.activeProjectId) return;
+        state.projects = projects;
+        renderDashboard();
+        bindGlobalActions();
+      })
+      .catch((error) => console.error("Could not refresh dashboard projects", error))
+      .finally(() => { dashboardRefreshPromise = null; });
+    return dashboardRefreshPromise;
+  }
+
+  return {
+    domainMigration,
+    recordHistory,
+    undo,
+    redo,
+    updateBrowserRoute,
+    importMigratedProject,
+    reloadProjectFromDb,
+    handleExternalProjectEvent,
+    scheduleSave,
+    showProjectMenu,
+    closeProjectDeleteConfirmation,
+    showProjectDeleteConfirmation,
+    openProject,
+    openDashboard,
+    renderCurrentRoute,
+    createProject,
+    bindDashboardEvents,
+    migrateLegacyProjects,
+    bindGlobalActions,
+    refreshDashboardProjects,
+    isMigrationModalDismissed: () => migrationModalDismissed,
+  };
+}

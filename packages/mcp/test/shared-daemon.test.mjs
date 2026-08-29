@@ -9,7 +9,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const port = 45000 + Math.floor(Math.random() * 1000);
   process.env.CAROUSELBOT_STATE_DIR = stateDirectory;
   process.env.CAROUSELBOT_BRIDGE_PORT = String(port);
-  process.env.CAROUSELBOT_EDITOR_TTL_MS = "120";
+  process.env.CAROUSELBOT_EDITOR_TTL_MS = "1000";
   process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS = "2000";
   const { companionRestart, createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
   const first = await createCompanion("Claude Code", "test");
@@ -77,7 +77,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const command = await nextCommand("editor-a", editorA.sessionToken);
     assert.equal(command.editSessionId, sessionA.id);
     assert.equal(command.operation.projectId, "project-a");
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     assert.ok(
       (await first.call("list_editors")).editors.some((editor) => editor.id === "editor-a"),
       "an editor running a command must stay active beyond the idle TTL",
@@ -118,11 +118,11 @@ test("shares one daemon while preserving per-agent editor selection", async () =
         });
       }
     })().catch(() => null);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     assert.deepEqual((await first.call("list_editors")).editors.map((editor) => editor.id), ["editor-a"], "an open event request should keep a background editor active");
     controller.abort();
     await openPoll;
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     assert.deepEqual((await first.call("list_editors")).editors, [], "a closed event request should expire after the configured grace period");
 
     const previousPid = first.daemon.pid;

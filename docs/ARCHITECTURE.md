@@ -2,22 +2,26 @@
 
 CarouselBot is a static, local-first browser application. There is no application backend: projects and imported images remain in IndexedDB, while the optional MCP companion communicates with the open browser over loopback.
 
-The editor deliberately uses a small ES-module graph rather than a framework or bundler. Each extracted module represents a stable responsibility; stateful workflow coordination stays together in one controller.
+The editor deliberately uses a small ES-module graph rather than a framework or bundler. Each module represents a stable responsibility, while `editor.mjs` remains the composition root and compatibility facade.
 
 ## Dependency direction
 
 ```text
-main ────────────────> editor + agent-commands
-agent-commands ──────> editor + store + view + renderer + state + model
-editor ──────────────> interactions + store + view + renderer + state + model
-layer-interactions ──> editor-view + editor-state + editor-model
-store/view/renderer ─> editor-state + editor-model
-editor-state ────────> editor-model
+main ───────────────> editor + agent-commands
+agent-commands ─────> editor + store + view + renderer + state + model
+editor ─────────────> projects + actions + output + UI + store + state + model
+UI ─────────────────> interactions + view + state + model
+projects ───────────> store + view + state + model
+actions ────────────> store + renderer + state + model
+output ─────────────> renderer + view + state + model
+interactions ───────> view + state + model
+store/view/renderer ─> state + model
+state ──────────────> model
 ```
 
-An arrow points from an importing module toward its dependencies. No foundational module imports the controller, so the graph remains acyclic.
+An arrow points from an importing module toward its dependencies. The four feature controllers do not import one another; `editor.mjs` supplies their cross-workflow callbacks during composition. No foundational module imports a controller or the facade, so the static graph remains acyclic.
 
-`layer-interactions.mjs` receives a small set of controller callbacks when the editor starts. This keeps pointer behavior separate without creating an `editor` ↔ `layer-interactions` import cycle.
+`editor-ui.mjs` creates `layer-interactions.mjs` with a small set of named callbacks. The same explicit injection pattern connects project, action, output, and UI workflows without circular imports or a mutable service locator.
 
 ## Modules
 
@@ -33,19 +37,25 @@ An arrow points from an importing module toward its dependencies. No foundationa
 
 `project-store.mjs` owns the IndexedDB store and cross-tab notification channel. Writes use the project revision as a compare-and-swap value. A stale write must reload the newer stored project rather than overwrite it.
 
-The controller owns the behaviors that combine persistence with rendering, such as migration imports, stale-project reloads, debounced saves, and external project updates.
+`editor-projects.mjs` owns the behaviors that combine persistence with rendering, such as migration imports, stale-project reloads, debounced saves, external project updates, history, routes, and project deletion. It also contains the legacy-record normalization seam exercised by Node tests.
 
 ### Views and rendering
 
 `editor-view.mjs` creates editor markup and updates live layer DOM. `slide-renderer.mjs` draws the export representation onto a canvas. Both use the same model helpers for colors, crops, layer order, text alignment, wrapping, and boxed-text geometry.
 
-Dashboard covers and slide thumbnails also use the final slide renderer. Blob URLs are versioned and revoked by the controller to prevent stale previews and leaks.
+Dashboard covers and slide thumbnails also use the final slide renderer. `editor-output.mjs` versions and revokes their Blob URLs to prevent stale previews and leaks, and owns the related PNG download and Web Share workflows.
 
-### Interactions and controller
+### Actions and UI
 
-`layer-interactions.mjs` contains pointer mechanics and inline text editing. `editor.mjs` remains the single stateful controller for routing, view lifecycle, event binding, history application, mutations, file handling, clipboard behavior, save scheduling, export, and sharing.
+`editor-actions.mjs` owns state-changing editor workflows for layers, text, slides, assets, uploads, drops, and clipboard data. It coordinates the existing model, state, store, and image helpers but does not own DOM binding.
 
-Keeping this coordination together is intentional. Splitting every event handler into a separate module would add callback plumbing or circular imports without creating a meaningful ownership boundary.
+`editor-ui.mjs` owns dashboard/editor rendering and DOM behavior: menus, event binding, inspector controls, selection, stage sizing, and zoom. `layer-interactions.mjs` remains focused on pointer mechanics and inline text editing.
+
+The split stops at these workflow boundaries. Individual controls and event handlers remain together instead of becoming one-file abstractions with no independent ownership.
+
+### Composition and lifecycle
+
+`editor.mjs` constructs the four feature controllers, wires only the callbacks that cross their boundaries, initializes IndexedDB, installs document-level events, and re-exports the stable controller functions used by the agent compatibility layer. Import-time project synchronization listeners remain owned by the project controller; initialization-time browser listeners remain in the facade.
 
 ### Agent compatibility and startup
 
@@ -92,5 +102,9 @@ Avoid committed pixel snapshots. Canvas output can vary across browser and platf
 - Markup or live DOM painting: `editor-view.mjs`.
 - Final exported pixels: `slide-renderer.mjs`.
 - Pointer/crop/resize mechanics: `layer-interactions.mjs`.
-- User workflow spanning multiple responsibilities: `editor.mjs`.
+- Project history, routes, saves, migration, or cross-tab reload: `editor-projects.mjs`.
+- Layer, slide, asset, upload, drop, or clipboard mutation: `editor-actions.mjs`.
+- Preview cache, PNG download, or Web Share workflow: `editor-output.mjs`.
+- DOM rendering, binding, inspector, selection, or canvas interaction: `editor-ui.mjs`.
+- Cross-controller wiring or document-level startup lifecycle: `editor.mjs`.
 - Public automation command: `agent-commands.mjs`, normally backed by an existing model/controller operation.

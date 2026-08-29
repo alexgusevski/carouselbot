@@ -2,12 +2,16 @@ import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 
 const root = new URL("..", import.meta.url);
 const rootPath = root.pathname;
-const pageUrl = process.argv.includes("--deployed")
+const deployed = process.argv.includes("--deployed");
+const configuredPageUrl = process.env.CAROUSELBOT_TEST_URL || process.env.SLIDE_STUDIO_TEST_URL || "";
+const localPagePort = !deployed && !configuredPageUrl ? await availablePort() : null;
+const pageUrl = deployed
   ? "https://slides-editor.pages.dev"
-  : process.env.CAROUSELBOT_TEST_URL || process.env.SLIDE_STUDIO_TEST_URL || "http://127.0.0.1:4173";
+  : configuredPageUrl || `http://127.0.0.1:${localPagePort}`;
 const chromePath = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const debuggingPort = 19229;
 const profile = await mkdtemp(join(tmpdir(), "carouselbot-browser-"));
@@ -16,14 +20,35 @@ const exportPath = join(profile, "agent-export.png");
 const projectExportDirectory = join(profile, "project-export");
 const sharedDaemon = process.argv.includes("--shared-daemon");
 const bridgePort = sharedDaemon ? 43117 : 48000 + Math.floor(Math.random() * 1000);
-const env = sharedDaemon ? process.env : { ...process.env, CAROUSELBOT_STATE_DIR: stateDirectory, CAROUSELBOT_BRIDGE_PORT: String(bridgePort) };
+const env = sharedDaemon ? process.env : {
+  ...process.env,
+  CAROUSELBOT_STATE_DIR: stateDirectory,
+  CAROUSELBOT_BRIDGE_PORT: String(bridgePort),
+  CAROUSELBOT_ALLOWED_ORIGINS: [process.env.CAROUSELBOT_ALLOWED_ORIGINS, new URL(pageUrl).origin].filter(Boolean).join(","),
+};
 const browserPageUrl = sharedDaemon ? pageUrl : `${pageUrl}${pageUrl.includes("?") ? "&" : "?"}__mcpBridgePort=${bridgePort}`;
-const web = new URL(pageUrl).hostname === "127.0.0.1"
-  ? spawn(process.execPath, ["server.mjs"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] })
+const web = localPagePort
+  ? spawn(process.execPath, ["server.mjs"], {
+    cwd: root,
+    env: { ...process.env, CAROUSELBOT_PORT: String(localPagePort) },
+    stdio: ["ignore", "pipe", "pipe"],
+  })
   : null;
 const mcp = spawn(process.execPath, ["packages/mcp/src/cli.mjs", "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 let diagnostics = "";
 let editSessionId = null;
+
+async function availablePort() {
+  const reservation = createServer();
+  await new Promise((resolve, reject) => {
+    reservation.once("error", reject);
+    reservation.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = reservation.address();
+  await new Promise((resolve) => reservation.close(resolve));
+  return port;
+}
+
 for (const child of [web, mcp].filter(Boolean)) {
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => { diagnostics += chunk; });
