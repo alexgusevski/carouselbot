@@ -6,25 +6,72 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: npm-publish-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish with provenance
+  verify:
+    name: Verify protected release source
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: npm-release
+    timeout-minutes: 15
+    outputs:
+      release-sha: ${{ steps.release.outputs.sha }}
+      npm-tag: ${{ steps.release.outputs.npm-tag }}
 
     steps:
+      - name: Validate release metadata before checkout
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$RELEASE_TAG" =~ $tag_pattern ]]; then
+            echo "Release tag must be an exact v-prefixed semantic version." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" == *-* && "$RELEASE_PRERELEASE" != "true" ]]; then
+            echo "A prerelease version must be marked as a GitHub prerelease." >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != *-* && "$RELEASE_PRERELEASE" == "true" ]]; then
+            echo "A stable version cannot be marked as a GitHub prerelease." >&2
+            exit 1
+          fi
+
       - name: Check out the released tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify tag commit belongs to protected main
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "$head_commit" != "$tag_commit" ]]; then
+            echo "Checked-out commit does not match the release tag." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$head_commit" origin/main; then
+            echo "Release commit must belong to protected main." >&2
+            exit 1
+          fi
+          echo "sha=$head_commit" >> "$GITHUB_OUTPUT"
+          if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+            echo "npm-tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm-tag=latest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Node.js and npm registry
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -37,19 +84,70 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Verify release tag and package versions
-        run: node scripts/verify-release.mjs "${{ github.event.release.tag_name }}"
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: node scripts/verify-release.mjs "$RELEASE_TAG" "$RELEASE_PRERELEASE"
 
       - name: Test release source
         run: npm test
 
-      - name: Publish stable packages
-        if: ${{ !github.event.release.prerelease }}
-        run: |
-          npm publish --workspace carouselbot --access public --provenance --tag latest
-          npm publish --workspace slides-studio-mcp --access public --provenance --tag latest
+  publish-carouselbot:
+    name: Publish carouselbot with provenance
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
 
-      - name: Publish prerelease packages
-        if: ${{ github.event.release.prerelease }}
-        run: |
-          npm publish --workspace carouselbot --access public --provenance --tag beta
-          npm publish --workspace slides-studio-mcp --access public --provenance --tag beta
+    steps:
+      - name: Check out verified release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.release-sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Publish canonical package
+        env:
+          NPM_TAG: ${{ needs.verify.outputs.npm-tag }}
+        run: npm publish --workspace carouselbot --access public --provenance --tag "$NPM_TAG"
+
+  publish-compatibility:
+    name: Publish slides-studio-mcp compatibility package
+    needs:
+      - verify
+      - publish-carouselbot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out verified release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.release-sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js and npm registry
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Publish compatibility package
+        env:
+          NPM_TAG: ${{ needs.verify.outputs.npm-tag }}
+        run: npm publish --workspace slides-studio-mcp --access public --provenance --tag "$NPM_TAG"

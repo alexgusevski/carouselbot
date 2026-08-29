@@ -69,7 +69,9 @@ Migration rollout flags live in `app-config.js`. They default to a non-forwardin
 
 ## Security
 
-Report suspected vulnerabilities privately through the process in [SECURITY.md](SECURITY.md). Pull requests are checked by CI, CodeQL, dependency review, and OpenSSF Scorecard. Dependency and GitHub Action updates are proposed automatically by Dependabot, and release packages are published from tagged GitHub releases through the provenance-enabled workflow in `.github/workflows/publish.yml`.
+Report suspected vulnerabilities privately through the process in [SECURITY.md](SECURITY.md). Pull requests run CI, CodeQL, and dependency review; OpenSSF Scorecard monitors the repository separately. Dependabot proposes dependency and GitHub Action updates.
+
+npm releases use GitHub Actions trusted publishing instead of a stored npm token. The release workflow accepts only version tags whose commits belong to protected `main`, tests that source, and requests npm provenance. Running `carouselbot setup` pins the selected package version in the generated MCP configuration; updating is an explicit rerun of the setup command. The active controls and local trust boundaries are documented in [SECURITY.md](SECURITY.md).
 
 ## License
 

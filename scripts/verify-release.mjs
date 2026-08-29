@@ -1,10 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateReleaseMetadata } from "./release-policy.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const tag = process.argv[2];
-if (!tag) throw new Error("Usage: node scripts/verify-release.mjs <vVERSION>");
+const prereleaseArgument = process.argv[3];
+if (!tag || !["true", "false"].includes(prereleaseArgument)) {
+  throw new Error("Usage: node scripts/verify-release.mjs <vVERSION> <true|false>");
+}
+const { version, npmTag } = validateReleaseMetadata(tag, prereleaseArgument === "true");
 
 const paths = [
   join(root, "packages", "mcp", "package.json"),
@@ -17,7 +22,9 @@ if (versions.size !== 1) {
   throw new Error(`Package versions must match: ${packages.map(({ name, version }) => `${name}@${version}`).join(", ")}`);
 }
 
-const [version] = versions;
-if (tag !== `v${version}`) throw new Error(`Release tag ${tag} does not match package version v${version}.`);
+const [packageVersion] = versions;
+if (version !== packageVersion) throw new Error(`Release tag ${tag} does not match package version v${packageVersion}.`);
 
-process.stdout.write(`Verified ${tag}: ${packages.map(({ name, version: packageVersion }) => `${name}@${packageVersion}`).join(", ")}\n`);
+process.stdout.write(
+  `Verified ${tag} for npm tag ${npmTag}: ${packages.map(({ name, version: manifestVersion }) => `${name}@${manifestVersion}`).join(", ")}\n`,
+);
