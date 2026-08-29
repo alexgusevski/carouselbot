@@ -6,6 +6,9 @@ Local-first MCP companion for the hosted [CarouselBot editor](https://carousel.b
 npx carouselbot@latest setup
 ```
 
+Setup pins that exact package version in the generated MCP configuration. Rerun
+the command when you intentionally want to update.
+
 For non-interactive agent setup, select the current client explicitly:
 
 ```bash
