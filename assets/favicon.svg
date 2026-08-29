@@ -1,19 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#f2f1ed"/>
   <g transform="rotate(-4 32 32)">
-    <path
-      d="M16 13a5 5 0 0 1 5-5h23a5 5 0 0 1 5 5v9h3a4 4 0 0 1 4 4v19a4 4 0 0 1-4 4h-3v2a5 5 0 0 1-5 5H21a5 5 0 0 1-5-5Z"
-      fill="#fe2c55"
-      transform="translate(-3 -2)"
-    />
-    <path
-      d="M16 13a5 5 0 0 1 5-5h23a5 5 0 0 1 5 5v9h3a4 4 0 0 1 4 4v19a4 4 0 0 1-4 4h-3v2a5 5 0 0 1-5 5H21a5 5 0 0 1-5-5Z"
-      fill="#25f4ee"
-      transform="translate(4 3)"
-    />
-    <path
-      d="M16 13a5 5 0 0 1 5-5h23a5 5 0 0 1 5 5v9h3a4 4 0 0 1 4 4v19a4 4 0 0 1-4 4h-3v2a5 5 0 0 1-5 5H21a5 5 0 0 1-5-5Z"
-      fill="#151515"
-    />
+    <rect x="12" y="15" width="40" height="35" rx="12" fill="#fe2c55" transform="translate(-3 -3)"/>
+    <rect x="12" y="15" width="40" height="35" rx="12" fill="#25f4ee" transform="translate(5 4)"/>
+    <rect x="12" y="15" width="40" height="35" rx="12" fill="#151515"/>
+    <rect x="25" y="27" width="4" height="10" rx="2" fill="#f2f1ed" transform="rotate(-5 27 32)"/>
+    <rect x="35" y="27" width="4" height="10" rx="2" fill="#f2f1ed" transform="rotate(5 37 32)"/>
   </g>
 </svg>
