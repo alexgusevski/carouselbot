@@ -24,15 +24,17 @@ export const LEGACY_CLIPBOARD_STORAGE_KEY = "slide-studio-layer-clipboard";
 
 export const HISTORY_LIMIT = 200;
 
-export const BOX_TEXT_LINE_HEIGHT = 1.17;
+export const BOX_TEXT_LINE_HEIGHT = 1.24;
 
-export const BOX_LINE_HEIGHT = 1.46;
+export const BOX_LINE_HEIGHT = 1.5;
 
-export const BOX_HORIZONTAL_PADDING = 0.46;
+export const BOX_HORIZONTAL_PADDING = 0.45;
+
+export const BOX_BACKGROUND_VERTICAL_OFFSET = 0.03;
 
 export const TEXT_BOX_EDGE_PADDING = 0.3;
 
-export const BOX_CORNER_RADIUS = 0.18;
+export const BOX_CORNER_RADIUS = 0.225;
 
 export const FONT_SIZE_MIN = 20;
 
@@ -308,6 +310,18 @@ function appendLeftLineBackgroundTransition(path, current, next, middleY, radius
   );
 }
 
+function lineBackgroundTransitionY(widths, index, lineHeight, boxHeight, top) {
+  const upperLineTop = top + index * lineHeight;
+
+  // TikTok lets a wider upper row keep its full background depth before the
+  // contour turns inward. That protects descenders (for example the final
+  // "g" in "long") while preserving the existing placement when the next
+  // row expands outward.
+  return widths[index] > widths[index + 1]
+    ? upperLineTop + boxHeight
+    : upperLineTop + (boxHeight + lineHeight) / 2;
+}
+
 export function perLineBackgroundSvgPath(widths, lineHeight, boxHeight, contentLeft, contentWidth, align, radius, top = 0) {
   if (!widths.length) return "";
   const normalizedWidths = normalizePerLineBackgroundWidths(widths, align, radius);
@@ -330,7 +344,7 @@ export function perLineBackgroundSvgPath(widths, lineHeight, boxHeight, contentL
   ];
 
   for (let index = 0; index < bounds.length - 1; index += 1) {
-    const middleY = top + index * lineHeight + (boxHeight + lineHeight) / 2;
+    const middleY = lineBackgroundTransitionY(normalizedWidths, index, lineHeight, boxHeight, top);
     appendRightLineBackgroundTransition(path, bounds[index].right, bounds[index + 1].right, middleY, cornerRadius);
   }
 
@@ -342,7 +356,7 @@ export function perLineBackgroundSvgPath(widths, lineHeight, boxHeight, contentL
   );
 
   for (let index = bounds.length - 2; index >= 0; index -= 1) {
-    const middleY = top + index * lineHeight + (boxHeight + lineHeight) / 2;
+    const middleY = lineBackgroundTransitionY(normalizedWidths, index, lineHeight, boxHeight, top);
     appendLeftLineBackgroundTransition(path, bounds[index + 1].left, bounds[index].left, middleY, cornerRadius);
   }
 

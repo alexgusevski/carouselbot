@@ -169,6 +169,14 @@ test("produces one deterministic circular-arc path for per-line text backgrounds
   assert.equal(stepped.includes(" Q "), false);
 });
 
+test("keeps a wider upper row behind descenders before narrowing", () => {
+  const narrowing = perLineBackgroundSvgPath([140, 80], 30, 40, 0, 140, "center", 5);
+  const widening = perLineBackgroundSvgPath([80, 140], 30, 40, 0, 140, "center", 5);
+
+  assert.match(narrowing, /V 35 A 5 5 0 0 1 135 40 H 115 A 5 5 0 0 0 110 45/);
+  assert.match(widening, /V 30 A 5 5 0 0 0 115 35 H 135 A 5 5 0 0 1 140 40/);
+});
+
 test("rotates pointer deltas into layer-local axes", () => {
   const result = rotateDelta(10, 0, 90);
   assert.ok(Math.abs(result.x) < 1e-10);

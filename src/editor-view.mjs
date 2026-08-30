@@ -8,6 +8,7 @@ import {
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
   BOX_HORIZONTAL_PADDING,
+  BOX_BACKGROUND_VERTICAL_OFFSET,
   TEXT_BOX_EDGE_PADDING,
   BOX_CORNER_RADIUS,
   FONT_SIZE_MIN,
@@ -570,7 +571,7 @@ export function createPerLineBackground(text, widths, lineHeight, fontSize, cont
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-hidden", "true");
   svg.style.height = `${height}px`;
-  svg.style.top = `${(lineHeight - boxHeight) / 2}px`;
+  svg.style.top = `${(lineHeight - boxHeight) / 2 + fontSize * BOX_BACKGROUND_VERTICAL_OFFSET}px`;
 
   const path = document.createElementNS(namespace, "path");
   path.setAttribute("d", perLineBackgroundSvgPath(widths, lineHeight, boxHeight, 0, contentWidth, align, radius));
