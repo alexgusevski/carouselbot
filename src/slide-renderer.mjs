@@ -8,6 +8,7 @@ import {
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
   BOX_HORIZONTAL_PADDING,
+  BOX_BACKGROUND_VERTICAL_OFFSET,
   TEXT_BOX_EDGE_PADDING,
   BOX_CORNER_RADIUS,
   textColor,
@@ -147,7 +148,7 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
       innerWidth,
       align,
       radius,
-      startY - backgroundHeight / 2,
+      startY - backgroundHeight / 2 + fontSize * BOX_BACKGROUND_VERTICAL_OFFSET,
     );
     context.fill(new Path2D(backgroundPath));
   }
