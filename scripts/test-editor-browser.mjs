@@ -648,6 +648,97 @@ try {
     throw new Error(`Native slide drag ordering changed: ${JSON.stringify(slideReordering)}`);
   }
 
+  const keyboardSlideNavigation = await evaluate(cdp, `(() => {
+    const activeSlideId = () => window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId;
+    const activeThumbId = () => document.querySelector('.slide-thumb.is-active')?.dataset.slideId || null;
+    const press = (key, target = document) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return { key, activeSlideId: activeSlideId(), activeThumbId: activeThumbId(), prevented: event.defaultPrevented };
+    };
+    document.querySelector('.slide-thumb[data-slide-id=${JSON.stringify(slide.createdSlideId)}]').click();
+    const steps = [
+      press('ArrowLeft'),
+      press('ArrowUp'),
+      press('ArrowRight'),
+      press('ArrowRight'),
+      press('ArrowDown'),
+      press('ArrowLeft'),
+      press('ArrowDown'),
+      press('ArrowUp'),
+    ];
+    const activeButton = document.querySelector('.slide-thumb.is-active');
+    const activeRect = activeButton.getBoundingClientRect();
+    activeButton.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: activeRect.left + activeRect.width / 2,
+      clientY: activeRect.top + activeRect.height / 2,
+    }));
+    const menuOpenBeforeNavigation = Boolean(document.querySelector('.layer-menu'));
+    const menuStep = press('ArrowRight');
+    const menuOpenAfterNavigation = Boolean(document.querySelector('.layer-menu'));
+    press('ArrowLeft');
+    const textBox = document.querySelector('.text-box');
+    textBox.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, button: 0 }));
+    const inlineEditor = textBox.querySelector('.text-editor');
+    const inlineEditingStep = press('ArrowRight', inlineEditor);
+    inlineEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    const title = document.querySelector('.project-title-input');
+    const inputSteps = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].map((key) => press(key, title));
+    const textareaStep = press('ArrowRight', document.querySelector('#text-value'));
+    const rangeStep = press('ArrowRight', document.querySelector('#font-size'));
+    return {
+      steps,
+      menuOpenBeforeNavigation,
+      menuStep,
+      menuOpenAfterNavigation,
+      inlineEditingStep,
+      inputSteps,
+      textareaStep,
+      rangeStep,
+    };
+  })()`);
+  const expectedKeyboardSlideIds = [
+    slide.createdSlideId,
+    slide.createdSlideId,
+    uploadedSlide.id,
+    uploadedSlide.id,
+    uploadedSlide.id,
+    slide.createdSlideId,
+    uploadedSlide.id,
+    slide.createdSlideId,
+  ];
+  if (
+    keyboardSlideNavigation.steps.some((step, index) => (
+      step.activeSlideId !== expectedKeyboardSlideIds[index]
+      || step.activeThumbId !== expectedKeyboardSlideIds[index]
+      || !step.prevented
+    ))
+    || !keyboardSlideNavigation.menuOpenBeforeNavigation
+    || keyboardSlideNavigation.menuOpenAfterNavigation
+    || keyboardSlideNavigation.menuStep.activeSlideId !== uploadedSlide.id
+    || keyboardSlideNavigation.menuStep.activeThumbId !== uploadedSlide.id
+    || !keyboardSlideNavigation.menuStep.prevented
+    || keyboardSlideNavigation.inlineEditingStep.activeSlideId !== slide.createdSlideId
+    || keyboardSlideNavigation.inlineEditingStep.activeThumbId !== slide.createdSlideId
+    || keyboardSlideNavigation.inlineEditingStep.prevented
+    || keyboardSlideNavigation.inputSteps.some((step) => (
+      step.activeSlideId !== slide.createdSlideId
+      || step.activeThumbId !== slide.createdSlideId
+      || step.prevented
+    ))
+    || keyboardSlideNavigation.textareaStep.activeSlideId !== slide.createdSlideId
+    || keyboardSlideNavigation.textareaStep.activeThumbId !== slide.createdSlideId
+    || keyboardSlideNavigation.textareaStep.prevented
+    || keyboardSlideNavigation.rangeStep.activeSlideId !== slide.createdSlideId
+    || keyboardSlideNavigation.rangeStep.activeThumbId !== slide.createdSlideId
+    || keyboardSlideNavigation.rangeStep.prevented
+  ) {
+    throw new Error(`Keyboard slide navigation changed: ${JSON.stringify(keyboardSlideNavigation)}`);
+  }
+
   await evaluate(cdp, `(() => {
     const button = document.querySelector('.slide-thumb[data-slide-id="${slide.createdSlideId}"]');
     const rect = button.getBoundingClientRect();
@@ -889,6 +980,7 @@ try {
     undoRedo: true,
     nativeClipboard: true,
     imageUpload: true,
+    keyboardSlideNavigation: true,
     nativeSlideLifecycle: true,
     nativeOutputActions: true,
     nativeProjectDeletion: true,

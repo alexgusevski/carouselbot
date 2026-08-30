@@ -95,6 +95,15 @@ export function routeFromPathname(pathname = window.location.pathname) {
   }
 }
 
+export function adjacentSlideId(slides, activeSlideId, offset) {
+  if (!Array.isArray(slides) || !slides.length) return null;
+  const activeIndex = slides.findIndex((slide) => slide.id === activeSlideId);
+  if (activeIndex < 0) return null;
+  const direction = Math.sign(Number(offset) || 0);
+  const nextIndex = clamp(activeIndex + direction, 0, slides.length - 1);
+  return slides[nextIndex]?.id || null;
+}
+
 export function escapeHtml(value = "") {
   return String(value)
     .replaceAll("&", "&amp;")
