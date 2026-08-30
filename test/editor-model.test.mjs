@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  adjacentSlideId,
   applyCropValues,
   cloneProject,
   ensureBoxedTextContrast,
@@ -35,6 +36,17 @@ import {
   textColor,
   wrapText,
 } from "../src/editor-model.mjs";
+
+test("finds adjacent slides without wrapping past either end", () => {
+  const slides = [{ id: "first" }, { id: "middle" }, { id: "final" }];
+  assert.equal(adjacentSlideId(slides, "middle", -1), "first");
+  assert.equal(adjacentSlideId(slides, "middle", 1), "final");
+  assert.equal(adjacentSlideId(slides, "first", -1), "first");
+  assert.equal(adjacentSlideId(slides, "final", 1), "final");
+  assert.equal(adjacentSlideId(slides, "middle", 0), "middle");
+  assert.equal(adjacentSlideId(slides, "missing", 1), null);
+  assert.equal(adjacentSlideId([], "first", 1), null);
+});
 
 test("routes dashboard and encoded project URLs", () => {
   assert.deepEqual(routeFromPathname("/"), { view: "dashboard" });

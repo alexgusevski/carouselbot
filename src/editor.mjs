@@ -121,6 +121,23 @@ export async function init() {
         editingBox.focus({ preventScroll: true });
       }
     }
+    const slideOffset = {
+      ArrowLeft: -1,
+      ArrowUp: -1,
+      ArrowRight: 1,
+      ArrowDown: 1,
+    }[event.key];
+    if (slideOffset
+      && !event.defaultPrevented
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.shiftKey
+      && !isEditingTextTarget(event.target)
+      && editorUI.navigateSlides(slideOffset)) {
+      event.preventDefault();
+      return;
+    }
     const meta = event.metaKey || event.ctrlKey;
     if (meta && app.querySelector(".stage")) {
       if (event.key === "+" || event.key === "=") {

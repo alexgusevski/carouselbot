@@ -7,6 +7,7 @@ import {
   CANVAS_ZOOM_MIN,
   CANVAS_ZOOM_MAX,
   projectPath,
+  adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
   textColor,
@@ -375,6 +376,28 @@ export function createEditorUI({ projects, actions, output }) {
     });
   }
 
+  function activateSlide(slideId, { reveal = false } = {}) {
+    const project = activeProject();
+    if (!project?.slides.some((slide) => slide.id === slideId)) return false;
+    state.activeSlideId = slideId;
+    clearLayerSelection();
+    state.photoAdjustMode = false;
+    closeLayerMenu();
+    renderEditor();
+    if (reveal) {
+      app.querySelector(".slide-thumb.is-active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    return true;
+  }
+
+  function navigateSlides(offset) {
+    const project = activeProject();
+    const slideId = adjacentSlideId(project?.slides, state.activeSlideId, offset);
+    if (!slideId) return false;
+    if (slideId !== state.activeSlideId) activateSlide(slideId, { reveal: true });
+    return true;
+  }
+
 
   function bindEditorEvents() {
     bindGlobalActions();
@@ -397,10 +420,7 @@ export function createEditorUI({ projects, actions, output }) {
 
     app.querySelectorAll("[data-slide-id]").forEach((button) => {
       button.addEventListener("click", () => {
-        state.activeSlideId = button.dataset.slideId;
-        clearLayerSelection();
-        state.photoAdjustMode = false;
-        renderEditor();
+        activateSlide(button.dataset.slideId);
       });
     });
     bindSlideReordering();
@@ -1137,6 +1157,7 @@ export function createEditorUI({ projects, actions, output }) {
     toast,
     renderDashboard,
     renderEditor,
+    navigateSlides,
     refreshSelection,
     ensureTextFits,
     setCanvasZoom,
