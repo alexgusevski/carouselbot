@@ -38,6 +38,6 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
-    "wrangler": "^4.123.0"
+    "wrangler": "^4.127.0"
   }
 }
