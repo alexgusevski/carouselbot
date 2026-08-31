@@ -17,7 +17,7 @@ test("normalizes migration origins and rollout settings", () => {
 });
 
 test("accepts project records and rejects malformed payloads", () => {
-  assert.equal(validProject({ id: "project-1", name: "Launch", slides: [], assets: [] }), true);
+  assert.equal(validProject({ id: "project-1", name: "Launch", folderPath: "/launch", slides: [], assets: [] }), true);
   assert.equal(validProject({ id: "project-1", name: "Launch", slides: "nope" }), false);
   assert.equal(validProject({ id: "", name: "Launch", slides: [], assets: [] }), false);
 });
@@ -70,16 +70,19 @@ test("copies and acknowledges projects one at a time across configured origins",
   const rawConfig = { ...config, canonicalOrigin: "https://carousel.bot", migration: { projectTimeoutMs: 1_000 } };
   const legacyController = createController(legacy, rawConfig);
   const projects = [
-    { id: "project-1", name: "One", slides: [], assets: [], updatedAt: 1 },
+    { id: "project-1", name: "One", folderPath: "/migration-folder", slides: [], assets: [], updatedAt: 1 },
     { id: "project-2", name: "Two", slides: [], assets: [], updatedAt: 2 },
   ];
   const progress = [];
   const transfer = legacyController.start(projects, { onProgress: (value) => progress.push(value.completed) });
   const canonicalController = createController(canonical, rawConfig);
   const received = [];
-  canonicalController.registerImporter(async (project) => { received.push(project.id); return "imported"; });
+  canonicalController.registerImporter(async (project) => { received.push({ id: project.id, folderPath: project.folderPath || null }); return "imported"; });
   const summary = await transfer;
-  assert.deepEqual(received, ["project-1", "project-2"]);
+  assert.deepEqual(received, [
+    { id: "project-1", folderPath: "/migration-folder" },
+    { id: "project-2", folderPath: null },
+  ]);
   assert.deepEqual(progress, [1, 2]);
   assert.equal(summary.projectCount, 2);
   assert.equal(legacyController.completedMigration().destination, "https://carousel.bot");

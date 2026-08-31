@@ -369,7 +369,7 @@ try {
   })()`);
   let createdProject;
   try {
-    createdProject = (await tool("create_project", { name: "Full MCP browser test" })).structuredContent;
+    createdProject = (await tool("create_project", { name: "Full MCP browser test", folderPath: "/mcp-folder" })).structuredContent;
   } finally {
     await evaluate(cdp, `(() => {
       window.requestAnimationFrame = window.__carouselBotOriginalRequestAnimationFrame;
@@ -379,17 +379,56 @@ try {
   }
   const dashboardUpdated = await evaluate(cdp, `({
     dashboardVisible: Boolean(document.querySelector('.dashboard')),
-    projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent)
+    projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent),
+    folderNames: [...document.querySelectorAll('.folder-card .folder-meta-name')].map((item) => item.textContent.trim()),
+    folderSlots: document.querySelector('.folder-card[data-folder-path="/mcp-folder"]')?.querySelectorAll('.folder-preview-slot').length,
+    folderIcon: Boolean(document.querySelector('.folder-card[data-folder-path="/mcp-folder"] .folder-meta-name svg'))
   })`);
-  if (!dashboardUpdated.dashboardVisible || !dashboardUpdated.projectNames.includes("Full MCP browser test")) throw new Error(`Dashboard did not update live: ${JSON.stringify(dashboardUpdated)}`);
+  if (!dashboardUpdated.dashboardVisible || dashboardUpdated.projectNames.includes("Full MCP browser test") || !dashboardUpdated.folderNames.includes("/mcp-folder") || dashboardUpdated.folderSlots !== 8 || !dashboardUpdated.folderIcon || createdProject.folderPath !== "/mcp-folder") throw new Error(`Dashboard folder did not update live: ${JSON.stringify({ createdProject, dashboardUpdated })}`);
+  const folderInspection = (await tool("inspect_editor")).structuredContent;
+  const inspectedFolder = folderInspection.folders.find((folder) => folder.path === "/mcp-folder");
+  if (folderInspection.projects.find((project) => project.id === createdProject.projectId)?.folderPath !== "/mcp-folder" || inspectedFolder?.projectCount !== 1 || inspectedFolder.projectIds[0] !== createdProject.projectId) throw new Error(`Folder membership was not inspectable: ${JSON.stringify(folderInspection)}`);
   const dashboardProjectNotification = await waitFor(() => evaluate(cdp, `(() => {
     const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity--success")].find((entry) => entry.textContent.includes("Created Full MCP browser test"));
     return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
   })()`), "MCP-created project did not show a dashboard notification.");
   if (dashboardProjectNotification.label !== "Codex" || !dashboardProjectNotification.icon?.includes("codex-logo-colored")) throw new Error(`Dashboard project notification used the wrong client identity: ${JSON.stringify(dashboardProjectNotification)}`);
   const addedSlide = (await tool("add_slide", { projectId: createdProject.projectId, name: "Live automation", backgroundColor: "#25282E" })).structuredContent;
-  const dashboardAfterSlide = await evaluate(cdp, `({ pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), slideCount: [...document.querySelectorAll('.project-card')].find((card) => card.querySelector('.project-meta strong')?.textContent === 'Full MCP browser test')?.querySelector('.project-meta span')?.textContent })`);
-  if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.slideCount?.startsWith("1 slide")) throw new Error(`Adding a slide changed the dashboard view: ${JSON.stringify(dashboardAfterSlide)}`);
+  const dashboardAfterSlide = await waitFor(() => evaluate(cdp, `(() => {
+    const card = document.querySelector('.folder-card[data-folder-path="/mcp-folder"]');
+    const value = { pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), composedCover: Boolean(card?.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')) };
+    return value.composedCover ? value : false;
+  })()`), "Adding a slide did not update the folder mosaic.");
+  if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.composedCover) throw new Error(`Adding a slide changed the dashboard folder view: ${JSON.stringify(dashboardAfterSlide)}`);
+  const movedBetweenFolders = (await tool("move_project", { projectId: createdProject.projectId, folderPath: "/mcp-other" })).structuredContent;
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/mcp-other"]')) && !document.querySelector('.folder-card[data-folder-path="/mcp-folder"]')`), "Moving a project between folders did not update the dashboard cards.");
+
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/mcp-other"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === "/folders/mcp-other" && Boolean(document.querySelector('.project-card[data-project-id="${createdProject.projectId}"]'))`), "The MCP-created folder did not open before the pending-save regression check.");
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${createdProject.projectId}"]').click()`);
+  await waitFor(() => evaluate(cdp, `document.querySelector('.project-title-input')?.value === "Full MCP browser test"`), "The folder project did not open before the pending-save regression check.");
+  await evaluate(cdp, `(() => {
+    const title = document.querySelector('.project-title-input');
+    title.value = 'Debounced UI title preserved';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-action="home"]')?.click();
+    return true;
+  })()`);
+  const movedToRoot = (await tool("move_project", { projectId: createdProject.projectId, folderPath: null })).structuredContent;
+  const pendingSaveInspection = (await tool("inspect_editor", { projectId: createdProject.projectId })).structuredContent;
+  if (pendingSaveInspection.project.name !== "Debounced UI title preserved" || pendingSaveInspection.project.folderPath !== null || pendingSaveInspection.activeFolderPath !== null || pendingSaveInspection.folders.some((folder) => folder.path === "/mcp-other")) {
+    throw new Error(`Moving through MCP lost a pending UI edit or left stale folder state: ${JSON.stringify(pendingSaveInspection)}`);
+  }
+  await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP browser test" });
+  await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
+  const dashboardAfterUnfile = await waitFor(() => evaluate(cdp, `(() => {
+    const value = {
+      rootProject: [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Full MCP browser test'),
+      folders: document.querySelectorAll('.folder-card').length
+    };
+    return value.rootProject ? value : false;
+  })()`), "Moving a project out of its folder did not update the dashboard.");
+  if (movedBetweenFolders.folderPath !== "/mcp-other" || movedToRoot.folderPath !== null || !dashboardAfterUnfile.rootProject || dashboardAfterUnfile.folders !== 0) throw new Error(`MCP folder moves returned an unexpected state: ${JSON.stringify({ movedBetweenFolders, movedToRoot, dashboardAfterUnfile })}`);
   await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
   await waitFor(() => evaluate(cdp, "document.querySelector('.project-title-input')?.value === 'Full MCP browser test'"), "Explicitly opening the project did not show the editor.");
 
@@ -763,7 +802,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 41, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 45, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

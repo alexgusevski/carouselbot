@@ -20,7 +20,7 @@ The npm package is only a distribution surface. Its source, skill, guidance, and
 
 ## What it does
 
-- Persists projects locally with IndexedDB
+- Persists projects and slash-path folder organization locally with IndexedDB
 - Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF images
 - Crops photos to portrait 9:16 with drag and zoom controls
 - Maintains a reusable project asset library
@@ -28,7 +28,7 @@ The npm package is only a distribution surface. Its source, skill, guidance, and
 - Supports text color, outlines, per-line backgrounds, and full-box backgrounds
 - Provides a TikTok placement preview that is never exported
 - Shares or downloads full-resolution 1080 × 1920 PNGs
-- Allows local AI agents to edit through a loopback-only MCP companion
+- Allows local AI agents to create projects in folders and move them through a loopback-only MCP companion
 
 ## Run locally
 

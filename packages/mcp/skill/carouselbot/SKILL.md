@@ -23,8 +23,8 @@ If the native MCP tools are not registered in the current session, do not stop o
 ```bash
 npx -y carouselbot@latest call get_design_guidance
 npx -y carouselbot@latest call list_editors
-npx -y carouselbot@latest call list_tools --json '{"names":["add_slide","add_text"]}'
-npx -y carouselbot@latest call create_project --json '{"name":"My presentation"}'
+npx -y carouselbot@latest call list_tools --json '{"names":["create_project","move_project","add_slide","add_text"]}'
+npx -y carouselbot@latest call create_project --json '{"name":"My presentation","folderPath":"/campaigns"}'
 ```
 
 Every tool accepts the same JSON arguments as MCP. Use `list_tools` without arguments for compact discovery or pass `{"names":[...]}` to retrieve selected schemas. Prefer `apply_operations` for batches. `render_slide` writes its returned image to a temporary local `previewPath`; inspect that file and remove the temporary directory after the review. Hermes can load the native tools in place with `/reload-mcp` and refresh this skill with `/reload-skills`.
@@ -54,6 +54,8 @@ When the user asks for a font installed on their Mac, use the deterministic two-
 4. Render and inspect the result. Use `list_project_fonts` to reuse faces already embedded in the project.
 
 If listing returns `FONT_PERMISSION_REQUIRED`, ask the user to open the real CarouselBot tab and choose **Allow local fonts** from the text font control, then retry. Do not bypass this with browser automation. Font paths and bytes are intentionally unavailable to agents. If rendering reports `FONT_UNAVAILABLE`, preserve the editable text, report the missing face, and ask the user to replace or re-import it rather than accepting fallback pixels.
+
+Dashboard folders are implicit and use exact canonical slash paths such as `/campaigns`. Set `folderPath` when calling `create_project` to create the project inside a folder. Call `move_project` with another slash path to move it between folders, or with `folderPath: null` to move it back to the dashboard root. Embedded slashes remain part of one virtual path rather than creating a nested UI hierarchy. Moving the final project out of a folder removes that empty folder automatically. Use `inspect_editor` to read each project's current `folderPath`.
 
 Use readable role-based type ranges: title `92–124`, subtitle `68–84`, body `54–68`, caption `44–52`. Do not solve dense copy by dropping below the body range; shorten it or split it across slides. `add_text` and `update_text` automatically preserve width and fit height around every wrapped line with safe padding. For highlighted text, prefer `style: "boxed"` with `backgroundShape: "lines"`. Use `backgroundShape: "full"` only for a deliberate card. Call `fit_text_boxes` with `mode: "both"` only when you intentionally want the width to shrink too.
 

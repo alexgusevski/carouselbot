@@ -51,6 +51,7 @@ export const undo = editorProjects.undo;
 export const redo = editorProjects.redo;
 export const updateBrowserRoute = editorProjects.updateBrowserRoute;
 export const reloadProjectFromDb = editorProjects.reloadProjectFromDb;
+export const flushPendingSave = editorProjects.flushPendingSave;
 export const clearLayerSelection = editorActions.clearLayerSelection;
 export const toast = editorUI.toast;
 export const renderDashboard = editorUI.renderDashboard;

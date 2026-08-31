@@ -29,7 +29,7 @@ let pageUrl = remoteUrl;
 if (!pageUrl) {
   web = createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    const relativePath = url.pathname === "/" || /^\/projects\/[^/]+\/?$/.test(url.pathname)
+    const relativePath = url.pathname === "/" || /^\/(?:projects|folders)\/[^/]+\/?$/.test(url.pathname)
       ? "index.html"
       : url.pathname.slice(1);
     if (!/^(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+$/.test(relativePath)) {
@@ -923,6 +923,66 @@ try {
     "A missing deep route did not return to the dashboard with feedback.",
   );
 
+  const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
+  const folderUiSlide = await evaluate(cdp, `window.carouselBotAgent.execute({
+    type: 'slide.add',
+    projectId: ${JSON.stringify(folderUiProject.projectId)},
+    name: 'Folder cover',
+    backgroundColor: '#25F4EE'
+  })`);
+  if (!folderUiSlide?.createdSlideId) throw new Error(`Could not create the folder UI cover slide: ${JSON.stringify(folderUiSlide)}`);
+  await waitFor(
+    () => evaluate(cdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
+    "The dashboard did not render the project used for folder UI coverage.",
+  );
+  await evaluate(cdp, `(() => {
+    const card = [...document.querySelectorAll('.project-card')].find((item) => item.querySelector('.project-meta strong')?.textContent === 'Folder UI project');
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.includes('Move to folder')).click();
+    const input = document.querySelector('[data-folder-move-form] input[name="folderPath"]');
+    input.value = '/native-folder';
+    document.querySelector('[data-folder-move-form]').requestSubmit();
+    return true;
+  })()`);
+  const nativeFolderCard = await waitFor(() => evaluate(cdp, `(() => {
+    const card = document.querySelector('.folder-card[data-folder-path="/native-folder"]');
+    if (!card || card.querySelectorAll('.folder-preview-slot').length !== 8 || !card.querySelector('.folder-meta-name svg')) return false;
+    if ([...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')) return false;
+    return { href: card.getAttribute('href'), name: card.querySelector('.folder-meta-name')?.textContent.trim() };
+  })()`), "Moving a project into a new folder did not render its eight-slot folder card.");
+  if (nativeFolderCard.name !== "/native-folder" || nativeFolderCard.href !== "/folders/native-folder") throw new Error(`Folder card metadata was incorrect: ${JSON.stringify(nativeFolderCard)}`);
+  await waitFor(
+    () => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/native-folder"] [data-project-cover-id="${folderUiProject.projectId}"] img[data-composite-cover="true"]'))`),
+    "The folder card did not compose the first slide into its mosaic.",
+  );
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/native-folder"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === '/native-folder'`),
+    "Opening the folder card did not show its dashboard route.",
+  );
+  await evaluate(cdp, "window.__carouselBotFolderReloadSentinel = true");
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(
+    () => evaluate(cdp, `document.readyState === 'complete' && !window.__carouselBotFolderReloadSentinel && window.carouselBotAgent && location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === '/native-folder' && [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
+    "The folder deep route did not survive a reload.",
+  );
+  await evaluate(cdp, `(() => {
+    const card = [...document.querySelectorAll('.project-card')].find((item) => item.querySelector('.project-meta strong')?.textContent === 'Folder UI project');
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.includes('Move to folder')).click();
+    const input = document.querySelector('[data-folder-move-form] input[name="folderPath"]');
+    input.value = '';
+    document.querySelector('[data-folder-move-form]').requestSubmit();
+    return true;
+  })()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/' && !document.querySelector('.folder-card[data-folder-path="/native-folder"]') && window.carouselBotAgent.inspect().projects.find((item) => item.id === ${JSON.stringify(folderUiProject.projectId)})?.folderPath === null`),
+    "Moving the final project out did not remove the implicit folder and return to the dashboard.",
+  );
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: ${JSON.stringify(folderUiProject.projectId)} })`);
+
   const deletionProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Dashboard deletion check' })`);
   await waitFor(
     () => evaluate(cdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Dashboard deletion check')`),
@@ -984,6 +1044,7 @@ try {
     nativeSlideLifecycle: true,
     nativeOutputActions: true,
     nativeProjectDeletion: true,
+    nativeFolderOrganization: true,
     deepRouteReload: true,
     missingRouteFallback: true,
     agentCompatibility: true,

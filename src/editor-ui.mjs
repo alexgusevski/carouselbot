@@ -6,6 +6,7 @@ import {
   CANVAS_ZOOM_MIN,
   CANVAS_ZOOM_MAX,
   projectPath,
+  folderRoutePath,
   adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
@@ -470,44 +471,105 @@ export function createEditorUI({ projects, actions, output }) {
     state.activeProjectId = null;
     state.activeSlideId = null;
     clearLayerSelection();
-    document.title = "CarouselBot";
     const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
+    const activeFolderPath = state.activeFolderPath;
+    document.title = activeFolderPath ? `${activeFolderPath} · CarouselBot` : "CarouselBot";
+    const foldersByPath = new Map();
+    for (const project of sortedProjects) {
+      if (!project.folderPath) continue;
+      if (!foldersByPath.has(project.folderPath)) foldersByPath.set(project.folderPath, []);
+      foldersByPath.get(project.folderPath).push(project);
+    }
+    const folders = [...foldersByPath.entries()].map(([folderPath, folderProjects]) => ({
+      folderPath,
+      projects: folderProjects,
+      updatedAt: Math.max(...folderProjects.map((project) => Number(project.updatedAt) || 0)),
+    }));
+    const visibleProjects = activeFolderPath
+      ? sortedProjects.filter((project) => project.folderPath === activeFolderPath)
+      : sortedProjects.filter((project) => !project.folderPath);
+
+    const renderProjectCard = (project) => {
+      const slide = project.slides[0];
+      const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
+      return `
+        <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
+          <span class="project-preview" data-project-cover-id="${project.id}">
+            ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
+          </span>
+          <span class="project-meta">
+            <strong>${escapeHtml(project.name)}</strong>
+            <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
+          </span>
+        </a>
+      `;
+    };
+
+    const renderFolderCard = (folder) => {
+      const overflow = Math.max(0, folder.projects.length - 8);
+      const slots = Array.from({ length: 8 }, (_, index) => {
+        const project = folder.projects[index];
+        if (!project) return '<span class="folder-preview-slot" aria-hidden="true"></span>';
+        const slide = project.slides[0];
+        const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
+        return `
+          <span class="folder-preview-slot" data-project-cover-id="${project.id}" aria-hidden="true">
+            ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : ""}
+            ${overflow && index === 7 ? `<span class="folder-preview-more">+${overflow}</span>` : ""}
+          </span>
+        `;
+      }).join("");
+      return `
+        <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folder.folderPath)}. Right-click for actions." title="Right-click for actions">
+          <span class="folder-preview">${slots}</span>
+          <span class="project-meta">
+            <strong class="folder-meta-name">${icon("folder")}<span>${escapeHtml(folder.folderPath)}</span></strong>
+            <span>${folder.projects.length} ${folder.projects.length === 1 ? "project" : "projects"}</span>
+          </span>
+        </a>
+      `;
+    };
+
+    const rootItems = [
+      ...visibleProjects.map((project) => ({ type: "project", updatedAt: Number(project.updatedAt) || 0, project })),
+      ...folders.map((folder) => ({ type: "folder", updatedAt: folder.updatedAt, folder })),
+    ].sort((a, b) => b.updatedAt - a.updatedAt);
+    const cards = activeFolderPath
+      ? visibleProjects.map(renderProjectCard).join("")
+      : rootItems.map((item) => item.type === "folder" ? renderFolderCard(item.folder) : renderProjectCard(item.project)).join("");
+    const projectCountLabel = `${visibleProjects.length} ${visibleProjects.length === 1 ? "project" : "projects"}`;
     app.innerHTML = `
       ${renderHeader()}
       ${renderLegacyMigrationNotice(sortedProjects, domainMigration, projects.isMigrationModalDismissed())}
       <main class="dashboard">
-        <section class="dashboard-hero">
-          <div>
-            <p class="eyebrow">Made for your camera roll</p>
-            <h1>Turn photos into<br><em>scroll-stoppers.</em></h1>
-          </div>
-          <p class="dashboard-intro">Upload your photos, place TikTok-style text, and export crisp slideshow images. Nothing else in the way.</p>
-        </section>
+        ${activeFolderPath ? `
+          <section class="folder-dashboard-header">
+            <div>
+              <a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} All projects</a>
+              <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath)}</span></h1>
+            </div>
+            <p class="folder-dashboard-summary">${projectCountLabel}</p>
+          </section>
+        ` : `
+          <section class="dashboard-hero">
+            <div>
+              <p class="eyebrow">Made for your camera roll</p>
+              <h1>Turn photos into<br><em>scroll-stoppers.</em></h1>
+            </div>
+            <p class="dashboard-intro">Upload your photos, place TikTok-style text, and export crisp slideshow images. Nothing else in the way.</p>
+          </section>
+        `}
         <section>
           <div class="section-heading">
-            <h2>Your projects</h2>
-            <span>${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"}</span>
+            <h2>${activeFolderPath ? "Projects" : "Your projects"}</h2>
+            <span>${activeFolderPath ? projectCountLabel : `${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"} · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}`}</span>
           </div>
           <div class="project-grid">
             <button class="new-project-card" type="button" data-action="new-project">
               <span>+</span>
-              <span><strong>Start a project</strong><small>Add photos when you’re ready</small></span>
+              <span><strong>Start a project</strong><small>${activeFolderPath ? `Create it in ${escapeHtml(activeFolderPath)}` : "Add photos when you’re ready"}</small></span>
             </button>
-            ${sortedProjects.map((project) => {
-              const slide = project.slides[0];
-              const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
-              return `
-                <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
-                  <span class="project-preview" data-project-cover-id="${project.id}">
-                    ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
-                  </span>
-                  <span class="project-meta">
-                    <strong>${escapeHtml(project.name)}</strong>
-                    <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
-                  </span>
-                </a>
-              `;
-            }).join("")}
+            ${cards}
           </div>
         </section>
       </main>

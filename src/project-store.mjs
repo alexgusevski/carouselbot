@@ -111,3 +111,33 @@ export function deleteProjectFromDb(projectId, { expectedRevision = null, broadc
     transaction.onabort = () => reject(conflict || transaction.error || new Error("Project deletion was aborted."));
   });
 }
+
+export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath = null) {
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    const moved = [];
+    const read = store.getAll();
+    read.onerror = () => reject(read.error);
+    read.onsuccess = () => {
+      const now = Date.now();
+      for (const project of read.result || []) {
+        if ((project.folderPath || null) !== sourceFolderPath) continue;
+        const updated = {
+          ...project,
+          folderPath: destinationFolderPath,
+          revision: (Number(project.revision) || 0) + 1,
+          updatedAt: now,
+        };
+        moved.push(updated);
+        store.put(updated);
+      }
+    };
+    transaction.oncomplete = () => {
+      moved.forEach((project) => announceProjectChange("project.updated", project));
+      resolve(moved);
+    };
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error("Folder move was aborted."));
+  });
+}

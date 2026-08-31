@@ -1,6 +1,6 @@
 # CarouselBot MCP
 
-Local-first MCP companion for the hosted [CarouselBot editor](https://carousel.bot). It exposes project, slide, text, image, layer, history, rendering, and export controls to any stdio MCP client while the editor remains in the browser.
+Local-first MCP companion for the hosted [CarouselBot editor](https://carousel.bot). It exposes project, folder, slide, text, image, layer, history, rendering, and export controls to any stdio MCP client while the editor remains in the browser.
 
 ```bash
 npx carouselbot@latest setup
@@ -25,10 +25,12 @@ The same validated tool surface is available through the package CLI when a runn
 npx -y carouselbot@latest call get_design_guidance
 npx -y carouselbot@latest call list_editors
 npx -y carouselbot@latest call begin_edit_session --json '{"editorId":"EDITOR_ID","purpose":"Build my deck"}'
-npx -y carouselbot@latest call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation"}'
+npx -y carouselbot@latest call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation","folderPath":"/campaigns"}'
 ```
 
 Every MCP tool name and JSON argument shape works with `call`. The CLI-only `list_tools` helper lists names compactly or returns selected schemas. `render_slide` writes image output to a temporary `previewPath` instead of dumping base64 into the terminal.
+
+Folders use exact canonical slash paths such as `/campaigns` and are derived from project membership. Pass `folderPath` to `create_project` to create a project in a folder. Use `move_project` with another slash path to move it between folders, or with `folderPath: null` to move it back to the dashboard root. Embedded slashes are part of the virtual path and do not create a nested UI hierarchy. Because folders are implicit, moving the last project out removes the empty folder card automatically. `inspect_editor` returns each project's current folder path.
 
 Always use `list_editors` to check the browser connection. Do not open CarouselBot or click **Connect AI** through a sandboxed, remote, or agent-controlled browser: that is a different browser session and may not reach the local companion.
 

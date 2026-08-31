@@ -28,7 +28,7 @@ An arrow points from an importing module toward its dependencies. The four featu
 
 ### Model
 
-`editor-model.mjs` contains constants and behavior that does not depend on mutable editor state or browser lifecycle: routes, color normalization, project cloning, layer ordering, crop normalization, image layout, text wrapping, box geometry, and safe filenames. This is the primary unit-test seam.
+`editor-model.mjs` contains constants and behavior that does not depend on mutable editor state or browser lifecycle: project and virtual-folder routes, folder-path normalization, color normalization, project cloning, layer ordering, crop normalization, image layout, text wrapping, box geometry, and safe filenames. This is the primary unit-test seam.
 
 ### State
 
@@ -39,6 +39,8 @@ An arrow points from an importing module toward its dependencies. The four featu
 `project-store.mjs` owns the IndexedDB store and cross-tab notification channel. Writes use the project revision as a compare-and-swap value. A stale write must reload the newer stored project rather than overwrite it.
 
 `editor-projects.mjs` owns the behaviors that combine persistence with rendering, such as migration imports, stale-project reloads, debounced saves, external project updates, history, routes, and project deletion. It also contains the legacy-record normalization seam exercised by Node tests.
+
+Dashboard folders are derived from each project's optional canonical `folderPath` (for example `/campaigns`). They are intentionally not separate IndexedDB records: moving a project remains one revision-checked project write, cross-tab notifications need no second protocol, and legacy-origin migration copies folder membership with the project. Empty folders therefore disappear automatically.
 
 ### Views and rendering
 

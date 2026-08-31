@@ -30,7 +30,7 @@ async function waitForServer(url, child) {
   throw new Error("Development server did not become ready.");
 }
 
-test("development server serves modules and deep project routes", async () => {
+test("development server serves modules and deep project and folder routes", async () => {
   const port = await availablePort();
   const origin = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ["server.mjs"], {
@@ -52,6 +52,10 @@ test("development server serves modules and deep project routes", async () => {
     const deepRoute = await fetch(`${origin}/projects/server-contract`);
     assert.equal(deepRoute.status, 200);
     assert.match(await deepRoute.text(), /<title>CarouselBot<\/title>/);
+
+    const folderRoute = await fetch(`${origin}/folders/my-folder`);
+    assert.equal(folderRoute.status, 200);
+    assert.match(await folderRoute.text(), /<title>CarouselBot<\/title>/);
 
     assert.equal((await fetch(`${origin}/agent-commands.js`)).status, 404);
     assert.equal((await fetch(`${origin}/src/../server.mjs`)).status, 404);

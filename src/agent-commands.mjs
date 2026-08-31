@@ -14,6 +14,7 @@ import {
   CANVAS_ZOOM_MAX,
   uid,
   projectPath,
+  normalizeFolderPath,
   normalizeHexColor,
   textColor,
   ensureBoxedTextContrast,
@@ -65,6 +66,7 @@ import {
   redo,
   updateBrowserRoute,
   reloadProjectFromDb,
+  flushPendingSave,
   clearLayerSelection,
   toast,
   renderDashboard,
@@ -111,12 +113,31 @@ function agentProjectSummary(project) {
   return {
     id: project.id,
     name: project.name,
+    folderPath: project.folderPath || null,
     revision: Number(project.revision) || 0,
     slideCount: project.slides.length,
     assetCount: (project.assets || []).length,
     fontCount: (project.fonts || []).length,
     updatedAt: project.updatedAt,
   };
+}
+
+function agentFolderSummaries() {
+  const folders = new Map();
+  for (const project of state.projects) {
+    if (!project.folderPath) continue;
+    const folder = folders.get(project.folderPath) || {
+      path: project.folderPath,
+      projectIds: [],
+      projectCount: 0,
+      updatedAt: 0,
+    };
+    folder.projectIds.push(project.id);
+    folder.projectCount += 1;
+    folder.updatedAt = Math.max(folder.updatedAt, Number(project.updatedAt) || 0);
+    folders.set(project.folderPath, folder);
+  }
+  return [...folders.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path));
 }
 
 function agentSlideSummary(slide, index) {
@@ -141,8 +162,9 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
     protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
     activeProjectId: state.activeProjectId,
     activeSlideId: state.activeSlideId,
+    activeFolderPath: state.activeFolderPath,
     view: { canvasZoom: state.canvasZoom, showTikTokOverlay: state.showTikTokOverlay },
-    ...(includeAllProjects ? { projects: state.projects.map(agentProjectSummary) } : {}),
+    ...(includeAllProjects ? { projects: state.projects.map(agentProjectSummary), folders: agentFolderSummaries() } : {}),
     project: project ? {
       ...agentProjectSummary(project),
       slides: project.slides.map(agentSlideSummary),
@@ -229,6 +251,10 @@ async function agentCommit(project, slide, mutate, message) {
   state.shareAllCache = null;
   if (targetIsVisible) renderEditor();
   else if (!visibleView.projectId) {
+    if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
+      state.activeFolderPath = null;
+      updateBrowserRoute("/", "replace");
+    }
     renderDashboard();
     bindGlobalActions();
   }
@@ -403,6 +429,11 @@ async function agentRender(project, slide, { width = 540, format = "png", qualit
 async function executeCarouselBotAgentOperation(operation) {
   if (!operation || typeof operation.type !== "string") throw new Error("Operation type is required.");
 
+  // Agent reads and mutations reload their target from IndexedDB. Flush a
+  // visible project's debounced UI edit first so that reload cannot replace it
+  // with the previous stored revision.
+  if (operation.projectId) await flushPendingSave();
+
   if (operation.type === "editor.inspect") {
     if (operation.projectId) await reloadProjectFromDb(operation.projectId, { render: false });
     const project = state.projects.find((item) => item.id === (operation.projectId || state.activeProjectId));
@@ -425,9 +456,13 @@ async function executeCarouselBotAgentOperation(operation) {
   if (operation.type === "project.create") {
     const dashboardVisible = !state.activeProjectId && Boolean(app.querySelector(".dashboard"));
     const now = Date.now();
+    const folderPath = normalizeFolderPath(operation.folderPath);
+    if (operation.folderPath != null && String(operation.folderPath).trim() && !folderPath) {
+      throw new Error("Folder paths need a name after the slash and cannot be /. or /..");
+    }
     const project = {
       id: uid(), name: String(operation.name || "New Project").slice(0, 160), createdAt: now,
-      updatedAt: now, revision: 1, slides: [], assets: [], fonts: [],
+      folderPath, updatedAt: now, revision: 1, slides: [], assets: [], fonts: [],
     };
     state.projects.push(project);
     await putProject(project);
@@ -437,7 +472,24 @@ async function executeCarouselBotAgentOperation(operation) {
     }
     await agentNextFrame();
     toast("AI agent created a project");
-    return { projectId: project.id, name: project.name, revision: project.revision, opened: false, visibleProjectId: state.activeProjectId };
+    return { projectId: project.id, name: project.name, folderPath: project.folderPath, revision: project.revision, opened: false, visibleProjectId: state.activeProjectId };
+  }
+
+  if (operation.type === "project.move") {
+    const project = agentProject(operation.projectId);
+    const slide = project.slides.find((item) => item.id === state.activeSlideId) || project.slides[0] || null;
+    const folderPath = normalizeFolderPath(operation.folderPath);
+    if (operation.folderPath != null && String(operation.folderPath).trim() && !folderPath) {
+      throw new Error("Folder paths need a name after the slash and cannot be /. or /..");
+    }
+    const result = await agentCommit(project, slide, () => {
+      project.folderPath = folderPath;
+      return { folderPath };
+    }, folderPath ? `AI agent moved the project to ${folderPath}` : "AI agent moved the project to the home screen");
+    if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
+      state.activeFolderPath = null;
+    }
+    return result;
   }
 
   if (operation.type === "project.open") {
@@ -464,7 +516,12 @@ async function executeCarouselBotAgentOperation(operation) {
     await deleteProjectFromDb(project.id, { expectedRevision });
     state.projects = state.projects.filter((item) => item.id !== project.id);
     clearProjectCover(project.id);
+    if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
+      state.activeFolderPath = null;
+      updateBrowserRoute("/", "replace");
+    }
     if (targetIsVisible) {
+      state.activeFolderPath = null;
       state.activeProjectId = null;
       state.activeSlideId = null;
       clearLayerSelection();

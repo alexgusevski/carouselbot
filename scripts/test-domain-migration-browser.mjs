@@ -101,7 +101,7 @@ try {
     request.onsuccess = () => {
       const transaction = request.result.transaction("projects", "readwrite");
       transaction.objectStore("projects").put({
-        id: "migration-browser-project", name: "Migration browser project", createdAt: 1, updatedAt: 2, revision: 3,
+        id: "migration-browser-project", name: "Migration browser project", folderPath: "/migrated-folder", createdAt: 1, updatedAt: 2, revision: 3,
         assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
         slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
       });
@@ -157,7 +157,7 @@ try {
       item.onsuccess = () => resolve(item.result || null);
     };
   })`), "Canonical IndexedDB did not receive the project.");
-  if (imported.name !== "Migration browser project" || imported.assets?.[0]?.id !== "asset-1") throw new Error("Migrated project data did not match the legacy record.");
+  if (imported.name !== "Migration browser project" || imported.folderPath !== "/migrated-folder" || imported.assets?.[0]?.id !== "asset-1") throw new Error("Migrated project data did not match the legacy record.");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-migration-status]')?.textContent.includes('Copied 1 project')"), "Legacy origin did not receive completion acknowledgement.");
   process.stdout.write(`${JSON.stringify({ copied: true, legacyOrigin, canonicalOrigin, projectId: imported.id, assets: imported.assets.length })}\n`);
 } finally {
