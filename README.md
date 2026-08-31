@@ -65,6 +65,13 @@ npm run deploy
 
 The production deploy command is intentionally main-only. Experimental branches can use the persistent development environment with `npm run deploy:dev`.
 
+Protected `main` updates also run the production deployment job after CI passes. The job uses the `production` GitHub environment, which is restricted to `main`, and skips until these environment secrets are configured:
+
+- `CLOUDFLARE_ACCOUNT_ID` — the account that owns the existing `slides-editor` Pages project.
+- `CLOUDFLARE_API_TOKEN` — a custom token limited to that account with **Account → Cloudflare Pages → Edit** permission.
+
+The Cloudflare credentials are exposed only to the final Wrangler upload step; pull-request jobs never receive them. To deploy an already-merged commit after adding or rotating the secrets, manually run the **CI** workflow on `main` from the Actions tab.
+
 The current Pages project name and legacy `slides-editor.pages.dev` hostname are intentionally retained during the domain migration. See [docs/REBRAND_ROLLOUT.md](docs/REBRAND_ROLLOUT.md) before changing GitHub, npm, Cloudflare, or DNS.
 
 ## Domain migration
