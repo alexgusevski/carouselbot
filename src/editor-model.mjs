@@ -70,9 +70,16 @@ export function cloneProject(project) {
   return {
     ...project,
     assets: (project.assets || []).map((asset) => ({ ...asset })),
+    fonts: (project.fonts || []).map((font) => ({
+      ...font,
+      variableAxes: (font.variableAxes || []).map((axis) => ({ ...axis })),
+    })),
     slides: (project.slides || []).map((slide) => ({
       ...slide,
-      texts: (slide.texts || []).map((text) => ({ ...text })),
+      texts: (slide.texts || []).map((text) => ({
+        ...text,
+        ...(text.fontVariationSettings ? { fontVariationSettings: { ...text.fontVariationSettings } } : {}),
+      })),
       overlays: (slide.overlays || []).map((overlay) => ({ ...overlay })),
     })),
   };

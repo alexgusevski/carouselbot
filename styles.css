@@ -2074,13 +2074,39 @@ button:disabled {
   padding: 0.14em 0.3em;
   overflow: hidden;
   color: var(--text-color, #fff);
-  font-family: "TikTok Sans", sans-serif;
-  font-weight: 500;
+  font-family: var(--text-font-family, "TikTok Sans", sans-serif);
+  font-style: var(--text-font-style, normal);
+  font-weight: var(--text-font-weight, 500);
+  font-variation-settings: var(--text-font-variations, normal);
   line-height: 1.12;
   text-align: center;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   pointer-events: none;
+}
+
+.missing-font-badge {
+  position: absolute;
+  z-index: 4;
+  top: -24px;
+  left: 50%;
+  padding: 3px 7px;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  color: #fff;
+  background: var(--danger);
+  font-family: "TikTok Sans", sans-serif;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.text-box.is-font-loading .text-visual {
+  visibility: hidden;
 }
 
 .text-box[data-align="left"] .text-content-wrap,
@@ -2458,6 +2484,32 @@ button:disabled {
 .text-input:focus {
   border-color: var(--ink);
   box-shadow: 0 0 0 3px rgba(37, 244, 238, 0.22);
+}
+
+.font-select {
+  width: 100%;
+  height: 42px;
+  padding: 0 34px 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: 0;
+  color: var(--ink);
+  background: var(--white);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.font-select:focus {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(37, 244, 238, 0.22);
+}
+
+.font-warning {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .style-options {
@@ -2943,6 +2995,119 @@ input[type="range"]::-webkit-slider-thumb {
   gap: 9px;
   margin-top: 20px;
   justify-content: flex-end;
+}
+
+.font-picker-modal {
+  display: flex;
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.font-picker-header {
+  display: flex;
+  padding: 23px 24px 17px;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--soft-line);
+}
+
+.font-picker-header .eyebrow {
+  margin: 0 0 5px;
+}
+
+.font-picker-header h2 {
+  margin: 0;
+}
+
+.font-picker-close {
+  flex: 0 0 auto;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.font-picker-content {
+  min-height: 0;
+  padding: 20px 24px 24px;
+  overflow-y: auto;
+}
+
+.font-search-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.font-picker-modal .font-search {
+  height: 44px;
+  font-size: 14px;
+}
+
+.font-picker-status {
+  min-height: 19px;
+  margin: 10px 2px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.font-results {
+  display: grid;
+  gap: 6px;
+}
+
+.font-result {
+  display: flex;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 11px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--white);
+  text-align: left;
+  cursor: pointer;
+}
+
+.font-result:hover {
+  border-color: var(--ink);
+  box-shadow: 2px 2px 0 var(--cyan);
+}
+
+.font-result > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.font-result strong,
+.font-result small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.font-result strong {
+  font-size: 14px;
+}
+
+.font-result small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.font-result-use {
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .layer-menu {

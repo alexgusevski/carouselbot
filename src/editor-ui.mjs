@@ -1,7 +1,6 @@
 import {
   OUTPUT_WIDTH,
   OUTPUT_HEIGHT,
-  TEXT_WEIGHT,
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
   CANVAS_ZOOM_MIN,
@@ -51,6 +50,11 @@ import {
   updateStageImage,
 } from "./editor-view.mjs";
 import { createLayerInteractions } from "./layer-interactions.mjs";
+import {
+  applyProjectFontToText,
+  createProjectFont,
+  ensureProjectFontsLoaded,
+} from "./project-fonts.mjs";
 
 export function createEditorUI({ projects, actions, output }) {
   const {
@@ -80,6 +84,7 @@ export function createEditorUI({ projects, actions, output }) {
     handleUpload,
     addSlidesFromFiles,
     imageFilesFromTransfer,
+    fileToDataUrl,
   } = actions;
   const {
     refreshAllProjectCovers,
@@ -265,6 +270,201 @@ export function createEditorUI({ projects, actions, output }) {
     state.toastTimer = setTimeout(() => element.remove(), 2600);
   }
 
+  let fontPickerRequest = 0;
+  let fontPickerSearchTimer = null;
+
+  function closeFontPicker() {
+    window.clearTimeout(fontPickerSearchTimer);
+    fontPickerRequest += 1;
+    document.querySelector(".font-picker-backdrop")?.remove();
+  }
+
+  async function applyFontToSelectedText(fontId) {
+    const project = activeProject();
+    const text = selectedText();
+    if (!project || !text) return;
+    const next = { ...text };
+    applyProjectFontToText(project, next, fontId);
+    await ensureProjectFontsLoaded(project, [next]);
+    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id) return;
+    recordHistory(project);
+    Object.assign(text, next);
+    refreshSelection();
+    updateTextBox(text);
+    ensureTextFits(text, { force: true });
+    scheduleSave();
+    const font = fontId ? project.fonts.find((item) => item.id === fontId) : null;
+    if (font?.localFontId) {
+      await window.carouselBotLocalMcpBridge?.markFontUsed?.(font.localFontId).catch((error) => {
+        console.warn(`Could not update recent font usage for ${font.localFontId}:`, error);
+      });
+    }
+  }
+
+  async function addLocalFontToSelectedText(face) {
+    const project = activeProject();
+    const text = selectedText();
+    const bridge = window.carouselBotLocalMcpBridge;
+    if (!project || !text || !bridge) return;
+    const existing = (project.fonts || []).find((item) => item.localFontId === face.localFontId) || null;
+    let font = existing;
+    let repaired = false;
+    if (existing) {
+      try {
+        await ensureProjectFontsLoaded(project, [{ fontId: existing.id }]);
+      } catch (error) {
+        if (error?.code !== "FONT_UNAVAILABLE") throw error;
+        repaired = true;
+      }
+    }
+    if (!font || repaired) {
+      const transfer = await bridge.fetchLocalFont(face.localFontId);
+      const source = transfer?.file instanceof Blob
+        ? transfer.file
+        : transfer instanceof Blob
+          ? transfer
+          : new Blob([transfer?.arrayBuffer || transfer?.buffer || transfer], { type: transfer?.mimeType || "font/otf" });
+      font = createProjectFont(transfer?.font || face, await fileToDataUrl(source), existing
+        ? { id: existing.id, addedAt: existing.addedAt }
+        : undefined);
+    }
+    const candidateFonts = existing && repaired
+      ? (project.fonts || []).map((item) => item.id === existing.id ? font : item)
+      : existing
+        ? project.fonts
+        : [...(project.fonts || []), font];
+    const candidateProject = candidateFonts === project.fonts ? project : { ...project, fonts: candidateFonts };
+    const next = { ...text };
+    applyProjectFontToText(candidateProject, next, font.id);
+    await ensureProjectFontsLoaded(candidateProject, [next]);
+    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id) return;
+    recordHistory(project);
+    if (existing && repaired) project.fonts.splice(project.fonts.findIndex((item) => item.id === existing.id), 1, font);
+    else if (!existing) (project.fonts ||= []).push(font);
+    Object.assign(text, next);
+    closeFontPicker();
+    refreshSelection();
+    updateTextBox(text);
+    ensureTextFits(text, { force: true });
+    scheduleSave();
+    await bridge.markFontUsed?.(font.localFontId).catch((error) => {
+      console.warn(`Could not update recent font usage for ${font.localFontId}:`, error);
+    });
+    toast(`${font.fullName || font.family} ${repaired ? "repaired" : existing ? "selected" : "added"}`);
+  }
+
+  function fontPickerShell() {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop font-picker-backdrop";
+    backdrop.innerHTML = `
+      <section class="modal font-picker-modal" role="dialog" aria-modal="true" aria-labelledby="font-picker-title">
+        <div class="font-picker-header">
+          <div><p class="eyebrow">Local fonts</p><h2 id="font-picker-title">Choose a font</h2></div>
+          <button class="icon-button font-picker-close" type="button" aria-label="Close font picker">×</button>
+        </div>
+        <div class="font-picker-content"></div>
+      </section>`;
+    document.body.appendChild(backdrop);
+    backdrop.querySelector(".font-picker-close").addEventListener("click", closeFontPicker);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) closeFontPicker(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") closeFontPicker(); });
+    return backdrop;
+  }
+
+  async function renderInstalledFontResults(backdrop, query = "") {
+    const content = backdrop.querySelector(".font-picker-content");
+    const request = ++fontPickerRequest;
+    const list = content.querySelector(".font-results");
+    const status = content.querySelector(".font-picker-status");
+    status.textContent = "Looking through fonts on this Mac…";
+    list.replaceChildren();
+    try {
+      const result = await window.carouselBotLocalMcpBridge.listLocalFonts({ query, limit: 80, sort: query ? "alphabetical" : "recent_then_alphabetical" });
+      if (request !== fontPickerRequest || !backdrop.isConnected) return;
+      status.textContent = result.fonts.length ? `${result.fonts.length}${result.nextCursor ? "+" : ""} faces` : "No matching fonts";
+      result.fonts.forEach((face) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "font-result";
+        const names = document.createElement("span");
+        const family = document.createElement("strong");
+        const style = document.createElement("small");
+        family.textContent = face.family;
+        style.textContent = face.subfamily || "Regular";
+        names.append(family, style);
+        const use = document.createElement("span");
+        use.className = "font-result-use";
+        use.textContent = "Use";
+        button.append(names, use);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          status.textContent = `Loading ${face.fullName || face.family}…`;
+          try {
+            await addLocalFontToSelectedText(face);
+          } catch (error) {
+            console.error(error);
+            button.disabled = false;
+            status.textContent = error.message?.replace(/^\[[A-Z_]+\]\s*/, "") || "That font couldn’t be loaded.";
+          }
+        });
+        list.appendChild(button);
+      });
+    } catch (error) {
+      if (request !== fontPickerRequest) return;
+      console.error(error);
+      status.textContent = error.message?.replace(/^\[[A-Z_]+\]\s*/, "") || "Couldn’t list local fonts.";
+    }
+  }
+
+  function showInstalledFontBrowser(backdrop) {
+    const content = backdrop.querySelector(".font-picker-content");
+    content.innerHTML = `
+      <label class="font-search-label" for="font-search">Search installed fonts</label>
+      <input id="font-search" class="font-search" type="search" autocomplete="off" placeholder="Try Didot, Avenir, Helvetica…" />
+      <div class="font-picker-status" role="status"></div>
+      <div class="font-results" role="list"></div>`;
+    const search = content.querySelector("#font-search");
+    search.addEventListener("input", () => {
+      window.clearTimeout(fontPickerSearchTimer);
+      fontPickerSearchTimer = window.setTimeout(() => void renderInstalledFontResults(backdrop, search.value), 140);
+    });
+    void renderInstalledFontResults(backdrop);
+    search.focus();
+  }
+
+  function openFontPicker() {
+    closeFontPicker();
+    const backdrop = fontPickerShell();
+    const bridge = window.carouselBotLocalMcpBridge;
+    const content = backdrop.querySelector(".font-picker-content");
+    const bridgeState = bridge?.getState?.();
+    if (!bridge || !bridgeState?.connected) {
+      content.innerHTML = `<p>Local fonts are provided by the CarouselBot companion. Connect this browser first; font files never leave this computer.</p><div class="modal-actions"><button class="button button--primary" type="button" data-connect-fonts>Connect AI</button></div>`;
+      content.querySelector("[data-connect-fonts]").addEventListener("click", () => {
+        closeFontPicker();
+        bridge?.open?.(app.querySelector('[data-action="connect-agent"]'));
+      });
+      return;
+    }
+    if (!bridgeState.localFontsEnabled) {
+      content.innerHTML = `<p><strong>Allow CarouselBot to use fonts installed on this Mac</strong></p><p>Font names and selected font data stay on this device. Nothing is uploaded.</p><div class="modal-actions"><button class="button button--quiet" type="button" data-cancel-fonts>Not now</button><button class="button button--primary" type="button" data-enable-fonts>Allow local fonts</button></div>`;
+      content.querySelector("[data-cancel-fonts]").addEventListener("click", closeFontPicker);
+      content.querySelector("[data-enable-fonts]").addEventListener("click", async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await bridge.enableLocalFonts();
+          showInstalledFontBrowser(backdrop);
+        } catch (error) {
+          console.error(error);
+          event.currentTarget.disabled = false;
+          content.querySelector("p:last-of-type").textContent = "Couldn’t enable local fonts. Check the companion connection and try again.";
+        }
+      });
+      return;
+    }
+    showInstalledFontBrowser(backdrop);
+  }
+
   function renderDashboard() {
     hideAssetPreview();
     state.activeProjectId = null;
@@ -364,15 +564,17 @@ export function createEditorUI({ projects, actions, output }) {
 
   async function repaintTextAfterFontLoad(projectId, slideId) {
     try {
-      await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
-      await document.fonts.ready;
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      await ensureProjectFontsLoaded(project, project.slides.find((item) => item.id === slideId)?.texts || []);
     } catch {
-      return;
+      // Missing fonts are shown with an explicit badge; the editor can still be
+      // used to replace the unavailable face.
     }
     if (state.activeProjectId !== projectId || state.activeSlideId !== slideId) return;
     requestAnimationFrame(() => {
       if (state.activeProjectId !== projectId || state.activeSlideId !== slideId) return;
-      activeSlide()?.texts.forEach(updateTextBox);
+      activeSlide()?.texts.forEach((text) => updateTextBox(text));
     });
   }
 
@@ -561,6 +763,25 @@ export function createEditorUI({ projects, actions, output }) {
       updateTextBox(text);
       ensureTextFits(text);
       scheduleSave();
+    });
+
+    const fontSelect = app.querySelector("#text-font");
+    fontSelect?.addEventListener("change", async () => {
+      if (fontSelect.value === "__add_local_font__") {
+        fontSelect.value = selectedText()?.fontId || "";
+        openFontPicker();
+        return;
+      }
+      fontSelect.disabled = true;
+      try {
+        await applyFontToSelectedText(fontSelect.value || null);
+      } catch (error) {
+        console.error(error);
+        toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "That font couldn’t be applied.");
+        fontSelect.value = selectedText()?.fontId || "";
+      } finally {
+        fontSelect.disabled = false;
+      }
     });
 
     app.querySelectorAll("[data-text-style]").forEach((button) => {
@@ -902,7 +1123,7 @@ export function createEditorUI({ projects, actions, output }) {
     updateStageImage(slide);
   }
 
-  function ensureTextFits(text) {
+  function ensureTextFits(text, { force = false } = {}) {
     requestAnimationFrame(() => {
       const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
       const contentWrap = box?.querySelector(".text-content-wrap");
@@ -911,9 +1132,10 @@ export function createEditorUI({ projects, actions, output }) {
       contentWrap.style.maxHeight = "none";
       const neededPixels = contentWrap.scrollHeight + 4;
       contentWrap.style.maxHeight = previousMaxHeight;
-      if (neededPixels <= box.clientHeight) return;
+      if (!force && neededPixels <= box.clientHeight) return;
 
-      const nextHeight = Math.min(1, neededPixels / state.stageHeight);
+      const nextHeight = clamp(neededPixels / state.stageHeight, 0.045, 1);
+      if (Math.abs(nextHeight - text.height) < 0.0005) return;
       text.height = nextHeight;
       updateTextBox(text);
       scheduleSave();

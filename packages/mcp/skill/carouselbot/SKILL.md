@@ -46,6 +46,15 @@ With only one agent and one editor, the server can create an implicit session fo
 
 Inspect the assigned editor before editing and keep the returned IDs and revision. Work on the assigned project and slide. Pass `expectedRevision` for sensitive mutations. If `STALE_PROJECT` is returned, the browser has reloaded the canonical IndexedDB copy; inspect again and retry with current IDs. Prefer `apply_operations` for compact related changes while preserving logical order.
 
+When the user asks for a font installed on their Mac, use the deterministic two-ID flow:
+
+1. Call `list_local_fonts` with a family/style query and choose an exact face from its metadata. Never guess a CSS family or construct a `localFontId`.
+2. Call `import_font` with that opaque `localFontId`. Keep the returned project-scoped `fontId`.
+3. Pass the returned `fontId` to `add_text` or `update_text`. Import and application are separate calls for a newly selected face; do not invent a batch placeholder.
+4. Render and inspect the result. Use `list_project_fonts` to reuse faces already embedded in the project.
+
+If listing returns `FONT_PERMISSION_REQUIRED`, ask the user to open the real CarouselBot tab and choose **Allow local fonts** from the text font control, then retry. Do not bypass this with browser automation. Font paths and bytes are intentionally unavailable to agents. If rendering reports `FONT_UNAVAILABLE`, preserve the editable text, report the missing face, and ask the user to replace or re-import it rather than accepting fallback pixels.
+
 Use readable role-based type ranges: title `92–124`, subtitle `68–84`, body `54–68`, caption `44–52`. Do not solve dense copy by dropping below the body range; shorten it or split it across slides. `add_text` and `update_text` automatically preserve width and fit height around every wrapped line with safe padding. For highlighted text, prefer `style: "boxed"` with `backgroundShape: "lines"`. Use `backgroundShape: "full"` only for a deliberate card. Call `fit_text_boxes` with `mode: "both"` only when you intentionally want the width to shrink too.
 
 After each meaningful composition or after a short batch, call `render_slide` and inspect the returned image. Fix clipping, spacing, contrast, unsafe overlay placement, and weak hierarchy before claiming the slide is finished. Use `export_slide` or `export_project` only when local files are requested; do not overwrite existing files unless authorized.

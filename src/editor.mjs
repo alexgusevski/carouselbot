@@ -71,7 +71,7 @@ export async function init() {
     toast("Browser storage is unavailable. Projects won’t persist.");
   }
   window.addEventListener("carouselbot:migration-complete", async (event) => {
-    state.projects = await getAllProjects();
+    state.projects = normalizeLoadedProjects(await getAllProjects());
     renderDashboard();
     const { imported = 0, updated = 0, skipped = 0 } = event.detail || {};
     toast(`Projects ready: ${imported} copied, ${updated} updated${skipped ? `, ${skipped} already current` : ""}.`);

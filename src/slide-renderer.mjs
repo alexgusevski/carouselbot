@@ -3,7 +3,6 @@ import {
   OUTPUT_WIDTH,
   OUTPUT_HEIGHT,
   OUTLINE_RATIO,
-  TEXT_WEIGHT,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -21,6 +20,7 @@ import {
   wrapText,
 } from "./editor-model.mjs";
 import { activeProject, getOverlayMetrics } from "./editor-state.mjs";
+import { ensureProjectFontsLoaded, textCanvasFont, textFontVariationCss } from "./project-fonts.mjs";
 
 export function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
@@ -53,7 +53,7 @@ export function loadImage(src) {
 }
 
 export async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT, project = activeProject()) {
-  await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
+  await ensureProjectFontsLoaded(project, slide.texts || []);
   const image = await loadImage(slide.imageData);
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -68,7 +68,7 @@ export async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OU
 export async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject()) {
   for (const { kind, item } of slideItems(slide)) {
     if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project);
-    else drawTextLayer(context, item, canvasWidth, canvasHeight);
+    else drawTextLayer(context, item, canvasWidth, canvasHeight, project);
   }
 }
 
@@ -93,7 +93,7 @@ export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight
   context.restore();
 }
 
-export function drawTextLayer(context, text, imageWidth, imageHeight) {
+export function drawTextLayer(context, text, imageWidth, imageHeight, project = activeProject()) {
   const width = text.width * imageWidth;
   const height = text.height * imageHeight;
   const centerX = (text.x + text.width / 2) * imageWidth;
@@ -112,7 +112,8 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
   context.save();
   context.translate(centerX, centerY);
   context.rotate(((text.rotation || 0) * Math.PI) / 180);
-  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  context.font = textCanvasFont(project, text, fontSize);
+  if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(project, text);
   context.textAlign = align;
   context.textBaseline = "middle";
   context.lineJoin = "round";

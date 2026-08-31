@@ -17,7 +17,15 @@ const debuggingPort = 19229;
 const profile = await mkdtemp(join(tmpdir(), "carouselbot-browser-"));
 const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-daemon-"));
 const exportPath = join(profile, "agent-export.png");
+const fontExportPath = join(profile, "didot-export.png");
 const projectExportDirectory = join(profile, "project-export");
+const didotPath = "/System/Library/Fonts/Supplemental/Didot.ttc";
+const didotMetadata = await stat(didotPath).catch((error) => {
+  if (error.code === "ENOENT") return null;
+  throw error;
+});
+if (didotMetadata && !didotMetadata.isFile()) throw new Error(`${didotPath} exists but is not a regular file.`);
+const didotAvailable = Boolean(didotMetadata);
 const sharedDaemon = process.argv.includes("--shared-daemon");
 const bridgePort = sharedDaemon ? 43117 : 48000 + Math.floor(Math.random() * 1000);
 const env = sharedDaemon ? process.env : {
@@ -222,6 +230,84 @@ async function boxedLineGeometry(cdp, textId) {
   })()`);
 }
 
+async function textGlyphGeometry(cdp, textId) {
+  return evaluate(cdp, `(() => {
+    const textId = ${JSON.stringify(textId)};
+    const box = [...document.querySelectorAll(".text-box")].find((item) => item.dataset.textId === textId);
+    const content = box?.querySelector(".text-visual--inside .text-content");
+    if (!box || !content || !content.firstChild) return null;
+    const range = document.createRange();
+    range.selectNodeContents(content);
+    const rect = range.getBoundingClientRect();
+    const style = getComputedStyle(content);
+    const measurement = document.createElement("canvas").getContext("2d");
+    measurement.font = style.fontStyle + " " + style.fontWeight + " 104px " + style.fontFamily;
+    measurement.fontVariationSettings = style.fontVariationSettings;
+    const glyphMetrics = measurement.measureText(content.textContent);
+    return {
+      text: content.textContent,
+      renderedWidth: rect.width,
+      renderedHeight: rect.height,
+      glyphWidth: glyphMetrics.width,
+      glyphLeft: glyphMetrics.actualBoundingBoxLeft,
+      glyphRight: glyphMetrics.actualBoundingBoxRight,
+      family: style.fontFamily,
+      weight: style.fontWeight,
+      fontStyle: style.fontStyle,
+      fontReady: document.fonts.check(style.fontStyle + " " + style.fontWeight + " 104px " + style.fontFamily),
+      missing: box.classList.contains("is-font-missing"),
+    };
+  })()`);
+}
+
+async function renderedPixelDifference(cdp, leftBase64, rightBase64) {
+  return evaluate(cdp, `(async () => {
+    const load = (data) => new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Could not decode rendered PNG."));
+      image.src = "data:image/png;base64," + data;
+    });
+    const [left, right] = await Promise.all([load(${JSON.stringify(leftBase64)}), load(${JSON.stringify(rightBase64)})]);
+    if (left.width !== right.width || left.height !== right.height) return {
+      sameDimensions: false,
+      left: [left.width, left.height],
+      right: [right.width, right.height],
+    };
+    const canvas = document.createElement("canvas");
+    canvas.width = left.width;
+    canvas.height = left.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(left, 0, 0);
+    const leftPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(right, 0, 0);
+    const rightPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let changedPixels = 0;
+    let totalChannelDelta = 0;
+    let maxChannelDelta = 0;
+    for (let offset = 0; offset < leftPixels.length; offset += 4) {
+      let changed = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const delta = Math.abs(leftPixels[offset + channel] - rightPixels[offset + channel]);
+        changed ||= delta > 0;
+        totalChannelDelta += delta;
+        maxChannelDelta = Math.max(maxChannelDelta, delta);
+      }
+      if (changed) changedPixels += 1;
+    }
+    return {
+      sameDimensions: true,
+      width: left.width,
+      height: left.height,
+      pixels: left.width * left.height,
+      changedPixels,
+      totalChannelDelta,
+      maxChannelDelta,
+    };
+  })()`);
+}
+
 let cdp;
 let secondCdp;
 const additionalCdps = [];
@@ -306,6 +392,191 @@ try {
   if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.slideCount?.startsWith("1 slide")) throw new Error(`Adding a slide changed the dashboard view: ${JSON.stringify(dashboardAfterSlide)}`);
   await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
   await waitFor(() => evaluate(cdp, "document.querySelector('.project-title-input')?.value === 'Full MCP browser test'"), "Explicitly opening the project did not show the editor.");
+
+  const fontProbe = (await tool("add_text", {
+    projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "speed limit",
+    x: 0.1, y: 0.3, width: 0.8, height: 0.16, size: 104, style: "plain", align: "center", color: "#FFFFFF",
+  })).structuredContent;
+  let fontPermissionError = null;
+  try {
+    await tool("list_local_fonts", { query: "Didot", limit: 20, sort: "alphabetical" });
+  } catch (error) {
+    fontPermissionError = error;
+  }
+  if (!fontPermissionError || !/FONT_PERMISSION_REQUIRED|enable local fonts/i.test(fontPermissionError.message)) {
+    throw new Error(`Local font discovery was not refused before consent: ${fontPermissionError?.message || "request succeeded"}`);
+  }
+  const permissionPromptOpened = await evaluate(cdp, `(() => {
+    const select = document.querySelector("#text-font");
+    if (!select) return false;
+    select.value = "__add_local_font__";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+  if (!permissionPromptOpened) throw new Error("The selected text layer did not expose the local-font picker.");
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector(".font-picker-backdrop [data-enable-fonts]"))`), "The local-font permission prompt did not open.");
+  await evaluate(cdp, `document.querySelector(".font-picker-backdrop [data-enable-fonts]").click()`);
+  await waitFor(() => evaluate(cdp, `window.carouselBotLocalMcpBridge.getState().localFontsEnabled === true && Boolean(document.querySelector("#font-search"))`), "Explicit local-font permission was not enabled.", 60_000);
+  const rememberedFontPermission = await evaluate(cdp, `localStorage.getItem("carouselbot:local-fonts-enabled")`);
+  if (rememberedFontPermission !== "1") throw new Error("Explicit local-font permission was not remembered.");
+  await evaluate(cdp, `document.querySelector(".font-picker-close")?.click()`);
+
+  const didotList = (await tool("list_local_fonts", { query: "Didot", limit: 20, sort: "alphabetical" })).structuredContent;
+  let localFontAcceptance = {
+    permissionRefused: true,
+    permissionEnabled: true,
+    didotAvailable,
+    didotFaces: 0,
+    changedPixels: 0,
+  };
+  if (didotAvailable) {
+    const didotFaces = didotList.fonts || [];
+    const expectedPublicKeys = ["localFontId", "family", "fullName", "postscriptName", "subfamily", "weight", "italic", "lastUsedAt", "variableAxes"];
+    if (didotFaces.length !== 3
+      || new Set(didotFaces.map((font) => font.localFontId)).size !== 3
+      || JSON.stringify([...new Set(didotFaces.map((font) => font.subfamily))].sort()) !== JSON.stringify(["Bold", "Italic", "Regular"])
+      || didotFaces.some((font) => JSON.stringify(Object.keys(font)) !== JSON.stringify(expectedPublicKeys))) {
+      throw new Error(`Didot.ttc did not expose its three distinct public faces: ${JSON.stringify(didotFaces)}`);
+    }
+    const listedFontJson = JSON.stringify(didotList);
+    if (/pathInternal|sourcePostscriptName|fileFingerprint|fingerprint|Didot\.ttc|\/System\/Library/.test(listedFontJson)) {
+      throw new Error(`Local font discovery exposed private source details: ${listedFontJson}`);
+    }
+    const regularDidot = didotFaces.find((font) => font.subfamily === "Regular" && font.weight === 400 && font.italic === false);
+    if (!regularDidot) throw new Error(`Didot Regular metadata was not exact: ${JSON.stringify(didotFaces)}`);
+
+    await evaluate(cdp, `document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`);
+    const defaultGeometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+    if (defaultGeometry?.text !== "speed limit" || !defaultGeometry.family.includes("TikTok Sans") || !defaultGeometry.fontReady || defaultGeometry.glyphWidth <= 0) {
+      throw new Error(`The default speed-limit probe did not render in TikTok Sans: ${JSON.stringify(defaultGeometry)}`);
+    }
+    const defaultRendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    const defaultImage = defaultRendered.content.find((item) => item.type === "image");
+    if (!defaultImage?.data) throw new Error("Default-font probe did not render an image.");
+
+    const importedDidot = (await tool("import_font", { projectId: createdProject.projectId, localFontId: regularDidot.localFontId })).structuredContent;
+    if (!importedDidot.fontId || importedDidot.localFontId !== regularDidot.localFontId || importedDidot.existing !== false) {
+      throw new Error(`Didot Regular did not import as one project font: ${JSON.stringify(importedDidot)}`);
+    }
+    await tool("update_text", {
+      projectId: createdProject.projectId,
+      slideId: addedSlide.createdSlideId,
+      updates: [{ id: fontProbe.createdTextId, fontId: importedDidot.fontId }],
+    });
+    const recentDidot = (await tool("list_local_fonts", {
+      query: "Didot",
+      limit: 20,
+      sort: "recent_then_alphabetical",
+    })).structuredContent.fonts;
+    if (recentDidot[0]?.localFontId !== regularDidot.localFontId || !(recentDidot[0].lastUsedAt > 0)) {
+      throw new Error(`Applying Didot through MCP did not update recent font usage: ${JSON.stringify(recentDidot)}`);
+    }
+    const didotGeometry = await waitFor(async () => {
+      const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+      return geometry?.family.includes("carousel-font-") && geometry.fontReady && !geometry.missing && geometry.glyphWidth > 0 ? geometry : null;
+    }, "The editable speed-limit text did not repaint with the imported Didot face.");
+    if (didotGeometry.text !== "speed limit" || didotGeometry.weight !== "400" || Math.abs(didotGeometry.glyphWidth - defaultGeometry.glyphWidth) < 0.5) {
+      throw new Error(`Didot did not produce distinct glyph metrics: ${JSON.stringify({ defaultGeometry, didotGeometry })}`);
+    }
+    const didotRendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    const didotImage = didotRendered.content.find((item) => item.type === "image");
+    if (!didotImage?.data) throw new Error("Didot probe did not render an image.");
+    const fontPixelDifference = await renderedPixelDifference(cdp, defaultImage.data, didotImage.data);
+    if (!fontPixelDifference.sameDimensions || fontPixelDifference.changedPixels < 500 || fontPixelDifference.maxChannelDelta < 32) {
+      throw new Error(`Default and Didot speed-limit renders were not measurably different: ${JSON.stringify(fontPixelDifference)}`);
+    }
+
+    let syntheticItalicError = null;
+    try {
+      await tool("update_text", {
+        projectId: createdProject.projectId,
+        slideId: addedSlide.createdSlideId,
+        updates: [{ id: fontProbe.createdTextId, fontStyle: "italic" }],
+      });
+    } catch (error) {
+      syntheticItalicError = error;
+    }
+    if (!syntheticItalicError || !/FONT_FACE_MISMATCH/.test(syntheticItalicError.message)) {
+      throw new Error(`Didot Regular accepted a synthetic italic request: ${syntheticItalicError?.message || "request succeeded"}`);
+    }
+
+    await tool("undo", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+    const undoneFontInspection = (await tool("inspect_editor", {
+      projectId: createdProject.projectId,
+      slideId: addedSlide.createdSlideId,
+      includeAllProjects: false,
+    })).structuredContent;
+    const undoneProbe = undoneFontInspection.slide.texts.find((text) => text.id === fontProbe.createdTextId);
+    if (undoneProbe?.fontId || undoneProbe?.fontFamily !== "TikTok Sans") {
+      throw new Error(`Undo did not restore the built-in font: ${JSON.stringify(undoneProbe)}`);
+    }
+    await tool("redo", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+    const redoneGeometry = await waitFor(async () => {
+      const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+      return geometry?.family.includes("carousel-font-") && geometry.fontReady && !geometry.missing ? geometry : null;
+    }, "Redo did not restore the imported Didot face.");
+    if (Math.abs(redoneGeometry.glyphWidth - didotGeometry.glyphWidth) > 0.1) {
+      throw new Error(`Didot metrics changed across undo/redo: ${JSON.stringify({ didotGeometry, redoneGeometry })}`);
+    }
+
+    const projectFonts = (await tool("list_project_fonts", { projectId: createdProject.projectId })).structuredContent;
+    const fontInspection = (await tool("inspect_editor", {
+      projectId: createdProject.projectId,
+      slideId: addedSlide.createdSlideId,
+      includeAllProjects: false,
+    })).structuredContent;
+    const inspectedProbe = fontInspection.slide.texts.find((text) => text.id === fontProbe.createdTextId);
+    if (projectFonts.fonts?.length !== 1
+      || projectFonts.fonts[0].id !== importedDidot.fontId
+      || projectFonts.fonts[0].available !== true
+      || inspectedProbe?.fontId !== importedDidot.fontId) {
+      throw new Error(`Imported Didot metadata was not attached to the editable text: ${JSON.stringify({ projectFonts, inspectedProbe })}`);
+    }
+    const publicFontJson = JSON.stringify({ projectFonts, fontInspection });
+    if (/fontData|data:font|pathInternal|fileFingerprint|fingerprint|Didot\.ttc|\/System\/Library/.test(publicFontJson)) {
+      throw new Error(`Project inspection exposed local font bytes or paths: ${publicFontJson}`);
+    }
+
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('.project-title-input')?.value === "Full MCP browser test" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "The font project did not restore after reload.");
+    await evaluate(cdp, `document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`);
+    const restoredGeometry = await waitFor(async () => {
+      const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+      return geometry?.family.includes("carousel-font-")
+        && geometry.fontReady
+        && !geometry.missing
+        ? geometry
+        : null;
+    }, "The imported Didot face was not restored from the local project after reload.");
+    if (restoredGeometry.text !== "speed limit" || Math.abs(restoredGeometry.glyphWidth - didotGeometry.glyphWidth) > 0.1) {
+      throw new Error(`Didot editor geometry changed after project reload: ${JSON.stringify({ didotGeometry, restoredGeometry })}`);
+    }
+    const restoredRendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    const restoredImage = restoredRendered.content.find((item) => item.type === "image");
+    const reloadPixelDifference = await renderedPixelDifference(cdp, didotImage.data, restoredImage?.data || "");
+    if (!reloadPixelDifference.sameDimensions || reloadPixelDifference.changedPixels !== 0) {
+      throw new Error(`Didot slide pixels changed after project reload: ${JSON.stringify(reloadPixelDifference)}`);
+    }
+
+    const fullDidotRender = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 1080 });
+    const fullDidotImage = fullDidotRender.content.find((item) => item.type === "image");
+    await tool("export_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, outputPath: fontExportPath });
+    const exportedDidot = await readFile(fontExportPath);
+    if (!fullDidotImage?.data || !exportedDidot.equals(Buffer.from(fullDidotImage.data, "base64"))) {
+      throw new Error("The exported Didot slide did not match the full-resolution editor renderer.");
+    }
+    localFontAcceptance = {
+      ...localFontAcceptance,
+      didotFaces: didotFaces.length,
+      changedPixels: fontPixelDifference.changedPixels,
+      glyphWidthDelta: Math.abs(didotGeometry.glyphWidth - defaultGeometry.glyphWidth),
+      reloadPixelsChanged: reloadPixelDifference.changedPixels,
+      exportBytes: exportedDidot.length,
+    };
+  }
+  await tool("delete_layers", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, layerIds: [fontProbe.createdTextId] });
+  await waitFor(() => evaluate(cdp, `${JSON.stringify(fontProbe.createdTextId)} !== "" && ![...document.querySelectorAll(".text-box")].some((item) => item.dataset.textId === ${JSON.stringify(fontProbe.createdTextId)})`), "The temporary local-font probe was not removed.");
+
   const addedText = (await tool("add_text", {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
     x: 0.1, y: 0.2, width: 0.8, height: 0.16, size: 82, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF",
@@ -489,7 +760,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 41, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

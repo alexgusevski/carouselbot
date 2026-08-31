@@ -2,17 +2,21 @@
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { basename, extname } from "node:path";
+import { basename, delimiter, extname } from "node:path";
 import {
   ALLOWED_ORIGINS, AUDIT_LOG_PATH, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_URL, DAEMON_LOCK_PATH,
   DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION, PROTOCOL_VERSION, STATE_DIRECTORY,
 } from "./config.mjs";
+import { createLocalFontService } from "./local-fonts.mjs";
 
 const MAX_JSON_BYTES = 40 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const EDITOR_TTL_MS = Number(process.env.CAROUSELBOT_EDITOR_TTL_MS || process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
+const FONT_MEDIA_TTL_MS = 5 * 60_000;
+const MAX_FONT_MEDIA_ITEMS = 32;
+const MAX_FONT_MEDIA_BYTES = 256 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 90_000;
 const EDIT_SESSION_TTL_MS = Number(process.env.CAROUSELBOT_EDIT_SESSION_TTL_MS || process.env.SLIDE_STUDIO_EDIT_SESSION_TTL_MS) || 5 * 60_000;
 const MAX_AUDIT_EVENTS = 500;
@@ -24,8 +28,17 @@ const editors = new Map();
 const clients = new Map();
 const inflight = new Map();
 const media = new Map();
+const fontMedia = new Map();
 const editSessions = new Map();
 const auditEvents = [];
+const configuredFontDirectories = String(process.env.CAROUSELBOT_FONT_DIRS || process.env.SLIDE_STUDIO_FONT_DIRS || "")
+  .split(delimiter)
+  .map((value) => value.trim())
+  .filter(Boolean);
+const localFonts = createLocalFontService({
+  cacheDirectory: STATE_DIRECTORY,
+  ...(configuredFontDirectories.length ? { directories: configuredFontDirectories } : {}),
+});
 let focusedEditorId = null;
 let lockHandle = null;
 let idleSince = null;
@@ -189,7 +202,7 @@ function browserCors(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Expose-Headers": "X-CarouselBot-Filename, X-Slide-Studio-Filename",
+    "Access-Control-Expose-Headers": "X-CarouselBot-Filename, X-Slide-Studio-Filename, X-CarouselBot-Local-Font-Id",
     "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "600",
     "Cache-Control": "no-store",
@@ -201,6 +214,18 @@ function sendJson(response, statusCode, value, headers = {}) {
   const body = JSON.stringify(value);
   response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8", "Content-Length": Buffer.byteLength(body), "Cache-Control": "no-store", ...headers });
   response.end(body);
+}
+
+function sendLocalFont(response, item, headers = {}) {
+  response.writeHead(200, {
+    ...headers,
+    "Content-Type": item.mimeType,
+    "Content-Length": item.buffer.length,
+    "X-CarouselBot-Filename": encodeURIComponent(item.filename),
+    "X-Slide-Studio-Filename": encodeURIComponent(item.filename),
+    "X-CarouselBot-Local-Font-Id": encodeURIComponent(item.font.localFontId),
+  });
+  response.end(item.buffer);
 }
 
 function readJson(request) {
@@ -269,6 +294,7 @@ function disconnectEditor(editorId, message = "Browser editor disconnected.") {
   endEditorPoll(editor);
   for (const session of editSessions.values()) if (session.editorId === editorId) releaseEditSession(session.id, "editor disconnected");
   editors.delete(editorId);
+  for (const [id, item] of fontMedia) if (item.editorId === editorId) fontMedia.delete(id);
   if (focusedEditorId === editorId) focusedEditorId = null;
   for (const [requestId, pending] of inflight) {
     if (pending.editorId !== editorId) continue;
@@ -303,6 +329,22 @@ function selectEditor(clientId) {
   if (connected.length === 1) return connected[0];
   if (!connected.length) throw new Error("No CarouselBot editor is connected. Open the editor and click Connect AI.");
   throw new Error("Multiple editors are connected and none is selected. Call list_editors, then select_editor.");
+}
+
+function requireLocalFontPermission(editor) {
+  if (editor?.localFontsEnabled) return editor;
+  throw codedError("FONT_PERMISSION_REQUIRED", "Open CarouselBot and enable local fonts.");
+}
+
+function selectLocalFontEditor(clientId) {
+  return requireLocalFontPermission(selectEditor(clientId));
+}
+
+function localFontEditorForCall(clientId, editSessionId) {
+  if (!editSessionId) return selectLocalFontEditor(clientId);
+  const session = requireEditSession(editSessionId);
+  session.lastClientId = clientId;
+  return requireLocalFontPermission(editors.get(session.editorId));
 }
 
 function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) {
@@ -348,10 +390,21 @@ function callBrowser(clientId, toolName, operation, label, { editSessionId = nul
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       inflight.delete(requestId);
+      if (operation?.fontMediaId) fontMedia.delete(operation.fontMediaId);
       recordAudit({ action: "tool.result", client, session, editorId: editor.id, projectId, toolName, status: "error", message: "Browser timeout" });
       reject(codedError("BROWSER_TIMEOUT", "The browser did not answer within 90 seconds."));
     }, COMMAND_TIMEOUT_MS);
-    inflight.set(requestId, { resolve, reject, timer, editorId: editor.id, client, session, projectId, toolName });
+    inflight.set(requestId, {
+      resolve,
+      reject,
+      timer,
+      editorId: editor.id,
+      client,
+      session,
+      projectId,
+      toolName,
+      fontMediaId: operation?.fontMediaId || null,
+    });
     queueEditorEvent(editor, { kind: "command", requestId, toolName, operation, label, editSessionId: session?.id || null, agent: publicClient(client) });
   });
 }
@@ -380,6 +433,51 @@ async function prepareMedia(filePath) {
   const id = randomUUID();
   media.set(id, { id, buffer, mimeType, filename: basename(filePath), expiresAt: Date.now() + MEDIA_TTL_MS });
   return { mediaId: id, filename: basename(filePath), mimeType, size: buffer.length };
+}
+
+function localFontFilename(font, mimeType) {
+  const extension = ({
+    "font/ttf": "ttf",
+    "font/otf": "otf",
+    "font/woff": "woff",
+    "font/woff2": "woff2",
+  })[mimeType] || "font";
+  const stem = String(font?.postscriptName || font?.localFontId || "local-font")
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "") || "local-font";
+  return `${stem}.${extension}`;
+}
+
+async function readLocalFontFace(localFontId) {
+  if (!localFontId || typeof localFontId !== "string") throw codedError("FONT_NOT_FOUND", "A valid localFontId is required.");
+  const prepared = await localFonts.readFace(localFontId);
+  if (!prepared?.font || !prepared?.buffer) throw codedError("FONT_NOT_FOUND", `Local font is unavailable: ${localFontId}`);
+  const buffer = Buffer.isBuffer(prepared.buffer) ? prepared.buffer : Buffer.from(prepared.buffer);
+  const mimeType = prepared.mimeType || "application/octet-stream";
+  return { font: prepared.font, buffer, mimeType, filename: localFontFilename(prepared.font, mimeType) };
+}
+
+async function prepareFont(clientId, localFontId, editSessionId) {
+  const editor = localFontEditorForCall(clientId, editSessionId);
+  const prepared = await readLocalFontFace(localFontId);
+  const now = Date.now();
+  let retainedBytes = 0;
+  for (const [id, item] of fontMedia) {
+    if (item.expiresAt < now) fontMedia.delete(id);
+    else retainedBytes += item.buffer.length;
+  }
+  if (fontMedia.size >= MAX_FONT_MEDIA_ITEMS || retainedBytes + prepared.buffer.length > MAX_FONT_MEDIA_BYTES) {
+    throw codedError("FONT_TRANSFER_LIMIT", "Too many local fonts are waiting to be transferred. Finish the pending imports and retry.");
+  }
+  const fontMediaId = randomUUID();
+  fontMedia.set(fontMediaId, {
+    ...prepared,
+    id: fontMediaId,
+    editorId: editor.id,
+    localFontId: prepared.font.localFontId,
+    expiresAt: now + FONT_MEDIA_TTL_MS,
+  });
+  return { font: prepared.font, fontMediaId };
 }
 
 async function writeExport(filePath, data, overwrite) {
@@ -430,6 +528,11 @@ async function handleInternalCall(body) {
     const events = auditEvents.filter((event) => (!body.projectId || event.projectId === body.projectId) && (!body.status || event.status === body.status));
     return { events: events.slice(-limit).reverse(), localLogPath: AUDIT_LOG_PATH };
   }
+  if (body.action === "list_local_fonts") {
+    localFontEditorForCall(body.clientId, body.editSessionId);
+    return localFonts.list({ query: body.query, limit: body.limit, cursor: body.cursor, sort: body.sort });
+  }
+  if (body.action === "prepare_font") return prepareFont(body.clientId, body.localFontId, body.editSessionId);
   if (body.action === "prepare_media") return prepareMedia(body.path);
   if (body.action === "write_export") return writeExport(body.path, body.data, Boolean(body.overwrite));
   if (body.action === "notify") {
@@ -518,12 +621,14 @@ const server = createServer(async (request, response) => {
       }
       const editor = {
         id: body.editorId, queue: [], poll: null, pageUrl: body.pageUrl,
-        pollTimer: null, state: body.state, lastSeen: Date.now(), cors, sessionToken: randomBytes(32).toString("base64url"),
+        pollTimer: null, state: body.state, lastSeen: Date.now(), cors,
+        localFontsEnabled: body.localFontsEnabled === true,
+        sessionToken: randomBytes(32).toString("base64url"),
       };
       editors.set(editor.id, editor);
       if (body.hasFocus && body.visibilityState === "visible") focusedEditorId = editor.id;
       log(`Editor connected (${editor.id.slice(0, 8)})`);
-      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
+      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, localFontsEnabled: editor.localFontsEnabled, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
     }
     if (url.pathname === "/activate" && request.method === "POST") {
       const body = await readJson(request);
@@ -544,6 +649,55 @@ const server = createServer(async (request, response) => {
       if (!editor) return;
       disconnectEditor(editor.id);
       return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
+    }
+    if (url.pathname === "/fonts/enable" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = requireEditor(request, response, body.editorId, cors);
+      if (!editor) return;
+      editor.localFontsEnabled = true;
+      return sendJson(response, 200, { enabled: true }, cors);
+    }
+    if (url.pathname === "/fonts" && request.method === "GET") {
+      const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const result = await localFonts.list({
+        query: url.searchParams.get("query") || "",
+        limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+        cursor: url.searchParams.get("cursor") || null,
+        sort: url.searchParams.get("sort") || undefined,
+      });
+      return sendJson(response, 200, result, cors);
+    }
+    if (url.pathname === "/fonts/use" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = requireEditor(request, response, body.editorId, cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const font = await localFonts.markUsed(body.localFontId);
+      if (!font) throw codedError("FONT_NOT_FOUND", `Local font is unavailable: ${body.localFontId}`);
+      return sendJson(response, 200, { font }, cors);
+    }
+    if (url.pathname.startsWith("/fonts/") && request.method === "GET") {
+      const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const localFontId = decodeURIComponent(url.pathname.slice("/fonts/".length));
+      return sendLocalFont(response, await readLocalFontFace(localFontId), cors);
+    }
+    if (url.pathname.startsWith("/font-media/") && request.method === "GET") {
+      const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const id = decodeURIComponent(url.pathname.slice("/font-media/".length));
+      const item = fontMedia.get(id);
+      if (!item || item.expiresAt < Date.now()) {
+        fontMedia.delete(id);
+        throw codedError("FONT_MEDIA_UNAVAILABLE", "Local font transfer is missing or expired.");
+      }
+      if (item.editorId !== editor.id) throw codedError("FONT_MEDIA_UNAVAILABLE", "Local font transfer is missing or expired.");
+      fontMedia.delete(id);
+      return sendLocalFont(response, item, cors);
     }
     if (url.pathname === "/events" && request.method === "GET") {
       const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
@@ -580,6 +734,7 @@ const server = createServer(async (request, response) => {
       if (!pending || pending.editorId !== editor.id) return sendJson(response, 404, { error: "Unknown request." }, cors);
       inflight.delete(body.requestId);
       clearTimeout(pending.timer);
+      if (pending.fontMediaId) fontMedia.delete(pending.fontMediaId);
       if (body.state) editor.state = body.state;
       if (body.ok) {
         try {
@@ -612,7 +767,11 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 404, { error: "Not found." }, cors);
   } catch (error) {
     const headers = cors || {};
-    const statusCode = error.code === "ENOENT" ? 404 : error.code === "EACCES" ? 403 : 400;
+    const statusCode = ["ENOENT", "FONT_NOT_FOUND", "FONT_MEDIA_UNAVAILABLE"].includes(error.code)
+      ? 404
+      : ["EACCES", "FONT_PERMISSION_REQUIRED"].includes(error.code)
+        ? 403
+        : error.code === "FONT_TRANSFER_LIMIT" ? 429 : 400;
     return sendJson(response, statusCode, { error: error.message }, headers);
   }
 });
@@ -661,6 +820,7 @@ async function cleanup() {
 setInterval(() => {
   const now = Date.now();
   for (const [id, item] of media) if (item.expiresAt < now) media.delete(id);
+  for (const [id, item] of fontMedia) if (item.expiresAt < now) fontMedia.delete(id);
   for (const session of editSessions.values()) if (session.lastSeen < now - EDIT_SESSION_TTL_MS) releaseEditSession(session.id, "lease expired");
   let clientsChanged = false;
   for (const [id, client] of clients) if (client.lastSeen < now - CLIENT_TTL_MS) {

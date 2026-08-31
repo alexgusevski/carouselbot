@@ -3,7 +3,6 @@ import {
   OUTPUT_WIDTH,
   OUTPUT_HEIGHT,
   DEFAULT_OUTLINE_WIDTH,
-  TEXT_WEIGHT,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -48,6 +47,18 @@ import {
 } from "./project-store.mjs";
 import { measureCanvas } from "./editor-view.mjs";
 import { getImageDimensions, renderSlideCanvas, fingerprintData } from "./slide-renderer.mjs";
+import {
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_FONT_WEIGHT,
+  applyProjectFontToText,
+  createProjectFont,
+  ensureProjectFontsLoaded,
+  projectFontForText,
+  publicProjectFont,
+  textCanvasFont,
+  textFontVariationCss,
+} from "./project-fonts.mjs";
+import { reconcileAgentFontWeightPatch } from "./agent-font-patch.mjs";
 import {
   recordHistory,
   undo,
@@ -103,6 +114,7 @@ function agentProjectSummary(project) {
     revision: Number(project.revision) || 0,
     slideCount: project.slides.length,
     assetCount: (project.assets || []).length,
+    fontCount: (project.fonts || []).length,
     updatedAt: project.updatedAt,
   };
 }
@@ -135,6 +147,7 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
       ...agentProjectSummary(project),
       slides: project.slides.map(agentSlideSummary),
       assets: (project.assets || []).map(({ id, name, width, height }) => ({ id, name, width, height })),
+      fonts: (project.fonts || []).map((font) => publicProjectFont(project, font)),
     } : null,
     slide: slide ? {
       ...agentSlideSummary(slide, project.slides.indexOf(slide)),
@@ -171,6 +184,18 @@ async function agentMedia(mediaId) {
   const imageData = await fileToDataUrl(media.file);
   const dimensions = await getImageDimensions(imageData);
   return { imageData, ...dimensions, name: media.name };
+}
+
+async function agentMarkFontsUsed(project, textLayers) {
+  const bridge = window.carouselBotLocalMcpBridge;
+  if (!bridge?.markFontUsed) return;
+  const localFontIds = [...new Set(textLayers.flatMap((text) => {
+    const font = projectFontForText(project, text);
+    return font?.localFontId ? [font.localFontId] : [];
+  }))];
+  await Promise.all(localFontIds.map((localFontId) => bridge.markFontUsed(localFontId).catch((error) => {
+    console.warn(`Could not update recent font usage for ${localFontId}:`, error);
+  })));
 }
 
 async function agentCommit(project, slide, mutate, message) {
@@ -225,7 +250,13 @@ async function agentCommit(project, slide, mutate, message) {
   };
 }
 
-function agentApplyTextPatch(text, patch = {}) {
+function agentFontError(code, message) {
+  const error = new Error(`[${code}] ${message}`);
+  error.code = code;
+  return error;
+}
+
+function agentApplyTextPatch(text, patch = {}, project = null) {
   if (patch.text != null) text.text = String(patch.text).slice(0, 4000);
   if (patch.role != null && Object.hasOwn(AGENT_TEXT_ROLE_SIZES, patch.role)) text.role = patch.role;
   if (patch.width != null) text.width = clamp(Number(patch.width), 0.1, 1.5);
@@ -239,16 +270,53 @@ function agentApplyTextPatch(text, patch = {}) {
   if (patch.background != null) text.background = patch.background === "black" ? "black" : "white";
   if (patch.backgroundShape != null) text.backgroundShape = patch.backgroundShape === "full" ? "full" : "lines";
   if (patch.align != null) text.align = ["left", "center", "right"].includes(patch.align) ? patch.align : text.align;
+  if (Object.hasOwn(patch, "fontId")) {
+    if (!project) throw new Error("A project is required when changing a text font.");
+    applyProjectFontToText(project, text, patch.fontId);
+  }
+  const projectFont = projectFontForText(project, text);
+  if (patch.fontWeight != null) {
+    const requestedWeight = clamp(Math.round(Number(patch.fontWeight) || DEFAULT_FONT_WEIGHT), 1, 1000);
+    const weightAxis = projectFont?.variableAxes?.find((axis) => axis.tag === "wght");
+    if (projectFont && !weightAxis && requestedWeight !== projectFont.weight) {
+      throw agentFontError("FONT_FACE_MISMATCH", `${projectFont.fullName} is weight ${projectFont.weight}. Import and use the exact installed face for weight ${requestedWeight}.`);
+    }
+    text.fontWeight = weightAxis ? clamp(requestedWeight, weightAxis.min, weightAxis.max) : requestedWeight;
+  }
+  if (patch.fontStyle != null) {
+    const requestedStyle = patch.fontStyle === "italic" ? "italic" : "normal";
+    const exactStyle = projectFont?.italic ? "italic" : "normal";
+    if (projectFont && requestedStyle !== exactStyle) {
+      throw agentFontError("FONT_FACE_MISMATCH", `${projectFont.fullName} is ${exactStyle}. Import and use the exact installed ${requestedStyle} face.`);
+    }
+    text.fontStyle = requestedStyle;
+  }
+  if (patch.fontVariationSettings != null) {
+    const axes = new Map((projectFont?.variableAxes || []).map((axis) => [axis.tag, axis]));
+    if (projectFont) {
+      const unsupported = Object.keys(patch.fontVariationSettings).find((tag) => !axes.has(tag));
+      if (unsupported) throw agentFontError("FONT_AXIS_UNSUPPORTED", `${projectFont.fullName} does not expose the ${unsupported} axis.`);
+    }
+    text.fontVariationSettings = Object.fromEntries(Object.entries(patch.fontVariationSettings)
+      .filter(([tag, value]) => /^[A-Za-z0-9]{4}$/.test(tag) && Number.isFinite(Number(value)))
+      .map(([tag, value]) => {
+        const axis = axes.get(tag);
+        const numeric = tag === "wght" ? Math.round(Number(value)) : Number(value);
+        return [tag, axis ? clamp(numeric, axis.min, axis.max) : tag === "wght" ? clamp(numeric, 1, 1000) : numeric];
+      }));
+  }
+  reconcileAgentFontWeightPatch(text, patch);
   if (patch.rotation != null) text.rotation = ((Number(patch.rotation) || 0) % 360 + 360) % 360;
   if (patch.z != null) text.z = Number(patch.z) || text.z;
   ensureBoxedTextContrast(text);
   return text;
 }
 
-function agentFitTextBox(text, mode = "both") {
+function agentFitTextBox(text, mode = "both", project = agentProject()) {
   const context = measureCanvas.getContext("2d");
   const fontSize = text.size;
-  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  context.font = textCanvasFont(project, text, fontSize);
+  if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(project, text);
   const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
   const fullBox = text.style === "boxed" && text.backgroundShape === "full";
   const horizontalInset = perLineBox
@@ -285,11 +353,11 @@ function agentFitTextBox(text, mode = "both") {
   };
 }
 
-function agentAutoFitTextBox(text) {
+function agentAutoFitTextBox(text, project = agentProject()) {
   text.width = clamp(text.width, 0.1, 1);
   text.x = clamp(text.x, 0, 1 - text.width);
   const requestedTop = text.y;
-  const result = agentFitTextBox(text, "height");
+  const result = agentFitTextBox(text, "height", project);
   if (text.height > 1) {
     throw new Error(`Text requires ${result.lineCount} lines and cannot fit on one slide at this width and font size. Shorten it, widen it, reduce it within the role range, or split it across slides.`);
   }
@@ -337,6 +405,8 @@ async function executeCarouselBotAgentOperation(operation) {
 
   if (operation.type === "editor.inspect") {
     if (operation.projectId) await reloadProjectFromDb(operation.projectId, { render: false });
+    const project = state.projects.find((item) => item.id === (operation.projectId || state.activeProjectId));
+    if (project) await ensureProjectFontsLoaded(project).catch(() => {});
     return agentInspect(operation);
   }
   if (operation.type === "ui.notify") {
@@ -357,7 +427,7 @@ async function executeCarouselBotAgentOperation(operation) {
     const now = Date.now();
     const project = {
       id: uid(), name: String(operation.name || "New Project").slice(0, 160), createdAt: now,
-      updatedAt: now, revision: 1, slides: [], assets: [],
+      updatedAt: now, revision: 1, slides: [], assets: [], fonts: [],
     };
     state.projects.push(project);
     await putProject(project);
@@ -479,35 +549,111 @@ async function executeCarouselBotAgentOperation(operation) {
     }, "AI agent deleted a slide");
   }
 
+  if (operation.type === "font.list") {
+    const project = agentProject(operation.projectId);
+    await ensureProjectFontsLoaded(project).catch(() => {});
+    return {
+      projectId: project.id,
+      revision: Number(project.revision) || 0,
+      fonts: (project.fonts || []).map((font) => publicProjectFont(project, font)),
+    };
+  }
+
+  if (operation.type === "font.import") {
+    const project = agentProject(operation.projectId);
+    const current = project.slides.find((item) => item.id === state.activeSlideId) || project.slides[0] || null;
+    const existing = (project.fonts || []).find((font) => font.localFontId === operation.localFontId);
+    if (existing) {
+      try {
+        await ensureProjectFontsLoaded(project, [{ fontId: existing.id }]);
+        return {
+          projectId: project.id,
+          fontId: existing.id,
+          localFontId: existing.localFontId,
+          family: existing.family,
+          subfamily: existing.subfamily,
+          weight: existing.weight,
+          italic: existing.italic,
+          revision: Number(project.revision) || 0,
+          existing: true,
+          repaired: false,
+        };
+      } catch (error) {
+        if (error?.code !== "FONT_UNAVAILABLE") throw error;
+      }
+    }
+    if (!operation.fontMediaId || !operation.font?.localFontId) throw new Error("The local font transfer is incomplete. List the font again and retry import_font.");
+    if (operation.font.localFontId !== operation.localFontId) throw new Error("The selected local font no longer matches the prepared transfer. List fonts and retry.");
+    const transfer = await window.carouselBotLocalMcpBridge.fetchFontMedia(operation.fontMediaId);
+    const source = transfer?.file instanceof Blob
+      ? transfer.file
+      : transfer instanceof Blob
+        ? transfer
+        : new Blob([transfer?.arrayBuffer || transfer?.buffer || transfer], { type: transfer?.mimeType || "font/otf" });
+    const fontData = await fileToDataUrl(source);
+    const font = createProjectFont(operation.font, fontData, existing
+      ? { id: existing.id, addedAt: existing.addedAt }
+      : undefined);
+    const candidateFonts = existing
+      ? (project.fonts || []).map((item) => item.id === existing.id ? font : item)
+      : [...(project.fonts || []), font];
+    const candidate = { ...project, fonts: candidateFonts };
+    await ensureProjectFontsLoaded(candidate, [{ fontId: font.id }]);
+    return agentCommit(project, current, () => {
+      project.fonts ||= [];
+      if (existing) project.fonts.splice(project.fonts.findIndex((item) => item.id === existing.id), 1, font);
+      else project.fonts.push(font);
+      return {
+        fontId: font.id,
+        localFontId: font.localFontId,
+        family: font.family,
+        subfamily: font.subfamily,
+        weight: font.weight,
+        italic: font.italic,
+        existing: Boolean(existing),
+        repaired: Boolean(existing),
+      };
+    }, existing ? "AI agent repaired a local font" : "AI agent added a local font");
+  }
+
   if (operation.type === "text.add") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
     const role = agentTextRole(operation.text, operation.role);
     const text = agentApplyTextPatch({
       id: uid(), text: "Your text", x: 0.12, y: 0.4, width: 0.76, height: 0.12,
       role, size: AGENT_TEXT_ROLE_SIZES[role], style: "plain", outlineWidth: DEFAULT_OUTLINE_WIDTH, color: "#FFFFFF",
+      fontFamily: DEFAULT_FONT_FAMILY, fontWeight: DEFAULT_FONT_WEIGHT, fontStyle: "normal",
       background: "black", backgroundShape: "lines", align: "center", rotation: 0,
       z: nextLayerZ(slide),
-    }, operation);
-    const fittedTextBox = agentAutoFitTextBox(text);
-    return agentCommit(project, slide, () => {
+    }, operation, project);
+    await ensureProjectFontsLoaded(project, [text]);
+    const fittedTextBox = agentAutoFitTextBox(text, project);
+    const result = await agentCommit(project, slide, () => {
       slide.texts.push(text);
       selectOnlyLayer("text", text.id);
       return { createdTextId: text.id, fittedTextBox };
     }, "AI agent added text");
+    if (operation.fontId) await agentMarkFontsUsed(project, [text]);
+    return result;
   }
 
   if (operation.type === "text.update") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
-    return agentCommit(project, slide, () => {
-      const fittedTextBoxes = operation.updates.map(({ id, ...patch }) => {
-        const text = slide.texts.find((item) => item.id === id);
-        if (!text) throw new Error(`Text layer not found: ${id}`);
-        const next = agentApplyTextPatch({ ...text }, patch);
-        const fitted = agentAutoFitTextBox(next);
+    const candidates = operation.updates.map(({ id, ...patch }) => {
+      const text = slide.texts.find((item) => item.id === id);
+      if (!text) throw new Error(`Text layer not found: ${id}`);
+      return {
+        text,
+        next: agentApplyTextPatch({ ...text }, patch, project),
+        appliesFont: Object.hasOwn(patch, "fontId") && Boolean(patch.fontId),
+      };
+    });
+    await ensureProjectFontsLoaded(project, candidates.map(({ next }) => next));
+    const result = await agentCommit(project, slide, () => {
+      const fittedTextBoxes = candidates.map(({ text, next }) => {
+        const fitted = agentAutoFitTextBox(next, project);
         Object.assign(text, next);
         return fitted;
       });
@@ -515,17 +661,24 @@ async function executeCarouselBotAgentOperation(operation) {
       if (updated.length === 1) selectOnlyLayer("text", updated[0]);
       return { updatedTextIds: updated, fittedTextBoxes };
     }, "AI agent updated text");
+    await agentMarkFontsUsed(project, candidates.filter(({ appliesFont }) => appliesFont).map(({ next }) => next));
+    return result;
   }
 
   if (operation.type === "text.fit") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
+    const textLayers = operation.textIds.map((id) => {
+      const text = slide.texts.find((item) => item.id === id);
+      if (!text) throw new Error(`Text layer not found: ${id}`);
+      return text;
+    });
+    await ensureProjectFontsLoaded(project, textLayers);
     return agentCommit(project, slide, () => ({
       fittedTextBoxes: operation.textIds.map((id) => {
         const text = slide.texts.find((item) => item.id === id);
         if (!text) throw new Error(`Text layer not found: ${id}`);
-        return agentFitTextBox(text, operation.mode);
+        return agentFitTextBox(text, operation.mode, project);
       }),
     }), "AI agent fitted text boxes to their content");
   }

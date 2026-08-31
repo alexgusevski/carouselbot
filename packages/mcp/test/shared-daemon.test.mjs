@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 test("shares one daemon while preserving per-agent editor selection", async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-shared-"));
@@ -11,6 +12,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   process.env.CAROUSELBOT_BRIDGE_PORT = String(port);
   process.env.CAROUSELBOT_EDITOR_TTL_MS = "1000";
   process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS = "2000";
+  process.env.CAROUSELBOT_FONT_DIRS = fileURLToPath(new URL("../../../assets", import.meta.url));
   const { companionRestart, createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
   const first = await createCompanion("Claude Code", "test");
   const second = await createCompanion("Codex", "test");
@@ -34,6 +36,38 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     assert.equal((await first.call("list_editors")).editors.length, 2);
     await first.call("select_editor", { editorId: "editor-a" });
     await second.call("select_editor", { editorId: "editor-b" });
+    await assert.rejects(first.call("list_local_fonts", { query: "TikTok" }), /FONT_PERMISSION_REQUIRED/);
+    const blockedFonts = await fetch(`${base}/fonts?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(blockedFonts.status, 403);
+    const enabledA = await fetch(`${base}/fonts/enable`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a" }),
+    });
+    assert.deepEqual(await enabledA.json(), { enabled: true });
+    const enabledB = await fetch(`${base}/fonts/enable`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorB.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-b" }),
+    });
+    assert.equal(enabledB.status, 200);
+    const localFontList = await first.call("list_local_fonts", { query: "TikTok", sort: "alphabetical", limit: 10 });
+    assert.ok(localFontList.fonts.length >= 1);
+    assert.doesNotMatch(JSON.stringify(localFontList), /pathInternal|fileFingerprint|faceIndex|\/Users\//);
+    const indexedFont = localFontList.fonts[0];
+    const directFont = await fetch(`${base}/fonts/${encodeURIComponent(indexedFont.localFontId)}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(directFont.status, 200);
+    assert.equal(directFont.headers.get("content-type"), "font/ttf");
+    assert.ok((await directFont.arrayBuffer()).byteLength > 100);
+    const preparedFont = await first.call("prepare_font", { localFontId: indexedFont.localFontId });
+    assert.equal(preparedFont.font.localFontId, indexedFont.localFontId);
+    const wrongEditorTransfer = await fetch(`${base}/font-media/${preparedFont.fontMediaId}?editorId=editor-b`, { headers: { Origin: origin, Authorization: `Bearer ${editorB.sessionToken}` } });
+    assert.equal(wrongEditorTransfer.status, 404);
+    const fontTransfer = await fetch(`${base}/font-media/${preparedFont.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(fontTransfer.status, 200);
+    assert.ok((await fontTransfer.arrayBuffer()).byteLength > 100);
+    const repeatedTransfer = await fetch(`${base}/font-media/${preparedFont.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(repeatedTransfer.status, 404);
     const firstEditors = await first.call("list_editors");
     const secondEditors = await second.call("list_editors");
     assert.equal(firstEditors.selectedEditorId, "editor-a");
@@ -69,6 +103,53 @@ test("shares one daemon while preserving per-agent editor selection", async () =
         if (event.kind === "command") return event;
       }
     }
+
+    const preparedImport = await first.call("prepare_font", { editSessionId: sessionA.id, localFontId: indexedFont.localFontId });
+    const importCall = first.call("browser", {
+      toolName: "import_font", mutating: true, editSessionId: sessionA.id,
+      operation: { type: "font.import", projectId: "project-a", localFontId: indexedFont.localFontId, font: preparedImport.font, fontMediaId: preparedImport.fontMediaId },
+      label: "Adding a local font…",
+    });
+    const importCommand = await nextCommand("editor-a", editorA.sessionToken);
+    assert.equal(importCommand.operation.font.localFontId, indexedFont.localFontId);
+    const importedBytes = await fetch(`${base}/font-media/${importCommand.operation.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(importedBytes.status, 200);
+    await importedBytes.arrayBuffer();
+    await fetch(`${base}/result`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", requestId: importCommand.requestId, ok: true, result: { projectId: "project-a", fontId: "project-font-1", revision: 1 } }),
+    });
+    assert.equal((await importCall).fontId, "project-font-1");
+
+    const preparedDuplicate = await first.call("prepare_font", { editSessionId: sessionA.id, localFontId: indexedFont.localFontId });
+    const duplicateImportCall = first.call("browser", {
+      toolName: "import_font", mutating: true, editSessionId: sessionA.id,
+      operation: { type: "font.import", projectId: "project-a", localFontId: indexedFont.localFontId, font: preparedDuplicate.font, fontMediaId: preparedDuplicate.fontMediaId },
+      label: "Adding a local font…",
+    });
+    const duplicateImportCommand = await nextCommand("editor-a", editorA.sessionToken);
+    assert.equal(duplicateImportCommand.operation.fontMediaId, preparedDuplicate.fontMediaId);
+    const duplicateResult = await fetch(`${base}/result`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", requestId: duplicateImportCommand.requestId, ok: true, result: { projectId: "project-a", fontId: "project-font-1", existing: true, revision: 1 } }),
+    });
+    assert.equal(duplicateResult.status, 200);
+    assert.equal((await duplicateImportCall).existing, true);
+    const unusedDuplicateTransfer = await fetch(`${base}/font-media/${preparedDuplicate.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(unusedDuplicateTransfer.status, 404, "a successful duplicate import must discard its unused one-time font transfer");
+
+    const unusedFonts = await first.call("list_local_fonts", { editSessionId: sessionA.id, query: "TikTok", limit: 10 });
+    assert.equal(unusedFonts.fonts.find((font) => font.localFontId === indexedFont.localFontId)?.lastUsedAt, null);
+    const usedResponse = await fetch(`${base}/fonts/use`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", localFontId: indexedFont.localFontId }),
+    });
+    assert.equal(usedResponse.status, 200);
+    const usedFonts = await first.call("list_local_fonts", { editSessionId: sessionA.id, query: "TikTok", limit: 10 });
+    assert.ok(usedFonts.fonts.find((font) => font.localFontId === indexedFont.localFontId)?.lastUsedAt > 0);
 
     const browserCall = first.call("browser", {
       toolName: "add_slide", mutating: true, editSessionId: sessionA.id,
@@ -140,5 +221,6 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     delete process.env.CAROUSELBOT_BRIDGE_PORT;
     delete process.env.CAROUSELBOT_EDITOR_TTL_MS;
     delete process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS;
+    delete process.env.CAROUSELBOT_FONT_DIRS;
   }
 });

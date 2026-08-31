@@ -91,14 +91,23 @@ test("clones nested project data without retaining aliases", () => {
   const original = {
     id: "project",
     assets: [{ id: "asset", name: "Original" }],
-    slides: [{ id: "slide", texts: [{ id: "text", text: "One" }], overlays: [{ id: "image", x: 0.1 }] }],
+    fonts: [{ id: "font", fontData: "data:font/ttf;base64,AA==", variableAxes: [{ tag: "wght", default: 400 }] }],
+    slides: [{
+      id: "slide",
+      texts: [{ id: "text", text: "One", fontVariationSettings: { wght: 500 } }],
+      overlays: [{ id: "image", x: 0.1 }],
+    }],
   };
   const copy = cloneProject(original);
   copy.assets[0].name = "Changed";
+  copy.fonts[0].variableAxes[0].default = 700;
   copy.slides[0].texts[0].text = "Two";
+  copy.slides[0].texts[0].fontVariationSettings.wght = 700;
   copy.slides[0].overlays[0].x = 0.5;
   assert.equal(original.assets[0].name, "Original");
+  assert.equal(original.fonts[0].variableAxes[0].default, 400);
   assert.equal(original.slides[0].texts[0].text, "One");
+  assert.equal(original.slides[0].texts[0].fontVariationSettings.wght, 500);
   assert.equal(original.slides[0].overlays[0].x, 0.1);
 });
 

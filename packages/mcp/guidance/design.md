@@ -20,6 +20,7 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Align related text layers consistently. Center is a safe default; use left alignment for editorial layouts.
 - Use rotation sparingly. Small intentional angles can add energy; arbitrary angles make carousels feel inconsistent.
 - Reuse a small palette and consistent type scale across the project.
+- For an installed Mac font, select an exact face with `list_local_fonts`, import its opaque ID with `import_font`, and apply only the returned project `fontId`. Reuse project faces through `list_project_fonts`; never guess family strings.
 
 ## Working method
 
