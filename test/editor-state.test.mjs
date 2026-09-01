@@ -16,6 +16,7 @@ const {
   selectedText,
   selectOnlyLayer,
   setLayerSelection,
+  slideThumbnailKey,
   state,
   toggleLayerSelection,
 } = await import("../src/editor-state.mjs");
@@ -54,6 +55,11 @@ function installProject() {
 }
 
 test.beforeEach(resetState);
+
+test("scopes rendered slide thumbnails to their owning project", () => {
+  assert.notEqual(slideThumbnailKey("project-1", "shared-slide"), slideThumbnailKey("project-2", "shared-slide"));
+  assert.equal(slideThumbnailKey("project-1", "shared-slide"), slideThumbnailKey("project-1", "shared-slide"));
+});
 
 test("resolves the active project, slide, asset, and selected layers", () => {
   installProject();

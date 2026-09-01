@@ -215,7 +215,7 @@ export function createEditorActions({
       slide.height = dimensions.height;
       slide.backgroundRevision = uid();
       constrainImagePosition(slide);
-      clearSlideThumbnail(slide.id);
+      clearSlideThumbnail(slide.id, project.id);
       scheduleSave();
       renderEditor();
       toast("Slide background changed");
@@ -233,7 +233,7 @@ export function createEditorActions({
 
     recordHistory();
     project.slides.splice(index, 1);
-    clearSlideThumbnail(slideId);
+    clearSlideThumbnail(slideId, project.id);
 
     if (state.activeSlideId === slideId) {
       state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;

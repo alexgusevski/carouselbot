@@ -26,6 +26,7 @@ import {
   app,
   activeProject,
   activeSlide,
+  slideThumbnailKey,
   selectedText,
   selectedOverlay,
   selectedLayerKeys,
@@ -42,6 +43,7 @@ import {
   renderHeader,
   renderLegacyMigrationNotice,
   renderSlideRail,
+  renderSlideThumbnail,
   renderAssetRail,
   renderEmptyStage,
   renderStage,
@@ -90,6 +92,8 @@ export function createEditorUI({ projects, actions, output }) {
   const {
     refreshAllProjectCovers,
     refreshAllSlideThumbnails,
+    refreshDashboardSlideThumbnails,
+    disconnectDashboardSlideThumbnails,
     exportActiveSlide,
     shareActiveSlide,
     shareAllSlides,
@@ -490,18 +494,30 @@ export function createEditorUI({ projects, actions, output }) {
       : sortedProjects.filter((project) => !project.folderPath);
 
     const renderProjectCard = (project) => {
-      const slide = project.slides[0];
-      const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
+      const previewId = `project-preview-${project.id}`;
+      const slides = project.slides.map((slide) => `
+        <span class="project-preview-slide" data-project-preview-slide-id="${slide.id}" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}">
+          ${state.thumbnailUrls.has(slideThumbnailKey(project.id, slide.id))
+            ? renderSlideThumbnail(slide, project)
+            : `<img class="project-preview-source" src="${slide.imageData}" alt="" draggable="false" loading="lazy" decoding="async" aria-hidden="true" />`}
+        </span>
+      `).join("");
       return `
-        <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
-          <span class="project-preview" data-project-cover-id="${project.id}">
-            ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
-          </span>
-          <span class="project-meta">
-            <strong>${escapeHtml(project.name)}</strong>
-            <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
-          </span>
-        </a>
+        <div class="project-card-shell">
+          <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}, ${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"}. Right-click for actions." title="Right-click for actions">
+            <span class="project-preview" id="${previewId}" data-project-preview-strip aria-hidden="true">
+              ${slides || `<span class="project-preview-empty">No slides yet</span>`}
+            </span>
+            <span class="project-meta">
+              <strong>${escapeHtml(project.name)}</strong>
+              <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
+            </span>
+          </a>
+          ${project.slides.length > 1 ? `
+            <button class="project-preview-scroll-button project-preview-scroll-button--previous" type="button" data-project-preview-direction="previous" aria-controls="${previewId}" aria-label="Scroll ${escapeHtml(project.name)} slide previews left" hidden>${icon("back")}</button>
+            <button class="project-preview-scroll-button project-preview-scroll-button--next" type="button" data-project-preview-direction="next" aria-controls="${previewId}" aria-label="Scroll ${escapeHtml(project.name)} slide previews right" hidden>${icon("forward")}</button>
+          ` : ""}
+        </div>
       `;
     };
 
@@ -579,10 +595,12 @@ export function createEditorUI({ projects, actions, output }) {
     // background tabs are not left with raw solid-color slide backgrounds while
     // requestAnimationFrame is throttled or paused by the browser.
     refreshAllProjectCovers(sortedProjects);
+    refreshDashboardSlideThumbnails(visibleProjects);
   }
 
 
   function renderEditor() {
+    disconnectDashboardSlideThumbnails();
     const project = activeProject();
     if (!project) return renderDashboard();
     document.title = `${project.name} · CarouselBot`;

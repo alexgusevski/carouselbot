@@ -34,6 +34,7 @@ import {
   app,
   activeProject,
   activeSlide,
+  slideThumbnailKey,
   selectedText,
   selectedOverlay,
   isLayerSelected,
@@ -65,6 +66,7 @@ export function formatDate(timestamp) {
 export function icon(name) {
   const icons = {
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
+    forward: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
     airdrop: '<img class="airdrop-icon" src="/assets/airdrop.svg" alt="" />',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
@@ -170,7 +172,7 @@ export function renderSlideRail(project) {
         ${project.slides.map((slide, index) => `
           <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
             <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-            <span class="thumb-image" data-thumbnail-slide-id="${slide.id}">${renderSlideThumbnail(slide)}</span>
+            <span class="thumb-image" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}">${renderSlideThumbnail(slide, project)}</span>
           </button>
         `).join("")}
       </div>
@@ -179,10 +181,10 @@ export function renderSlideRail(project) {
   `;
 }
 
-export function renderSlideThumbnail(slide) {
-  const source = state.thumbnailUrls.get(slide.id);
+export function renderSlideThumbnail(slide, project = activeProject()) {
+  const source = state.thumbnailUrls.get(slideThumbnailKey(project?.id, slide.id));
   return source
-    ? `<img class="thumb-rendered" src="${source}" alt="" draggable="false" aria-hidden="true" />`
+    ? `<img class="thumb-rendered" src="${source}" alt="" draggable="false" decoding="async" aria-hidden="true" />`
     : `<span class="thumb-rendering-placeholder" aria-hidden="true"><span></span></span>`;
 }
 

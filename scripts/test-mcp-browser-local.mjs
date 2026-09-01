@@ -770,7 +770,7 @@ try {
   }
   const stressEditors = (await tool("list_editors")).structuredContent.editors;
   if (stressEditors.length < 7) throw new Error(`Seven-tab transport stress setup connected only ${stressEditors.length} editors.`);
-  const previousCoverUrl = await waitFor(() => evaluate(secondCdp, `document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')?.src || ""`), "The dashboard did not render its initial composed project cover.");
+  const previousThumbnailUrl = await waitFor(() => evaluate(secondCdp, `document.querySelector('.project-card[data-project-id="${createdProject.projectId}"] [data-project-preview-slide-id="${addedSlide.createdSlideId}"] img.thumb-rendered')?.src || ""`), "The dashboard did not render its initial project slide thumbnail.");
   await evaluate(secondCdp, `(() => {
     window.__carouselBotOriginalRequestAnimationFrame = window.requestAnimationFrame;
     window.requestAnimationFrame = () => 0;
@@ -786,10 +786,11 @@ try {
     })()`), "A tool action performed in another editor was not announced in this tab.");
     if (crossTabActivity.label !== "Codex" || !crossTabActivity.icon?.includes("codex-logo-colored")) throw new Error(`Cross-tab activity used the wrong client identity: ${JSON.stringify(crossTabActivity)}`);
     await waitFor(() => evaluate(secondCdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === "Cross-tab sync verified")`), "The dashboard did not receive the cross-tab project update.");
+    await tool("update_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, backgroundColor: "#101820" });
     await waitFor(() => evaluate(secondCdp, `(() => {
-      const image = document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]');
-      return image?.src && image.src !== ${JSON.stringify(previousCoverUrl)};
-    })()`), "The dashboard did not refresh its composed cover while animation frames were paused.");
+      const image = document.querySelector('.project-card[data-project-id="${createdProject.projectId}"] [data-project-preview-slide-id="${addedSlide.createdSlideId}"] img.thumb-rendered');
+      return image?.src && image.src !== ${JSON.stringify(previousThumbnailUrl)};
+    })()`), "The dashboard did not refresh its slide thumbnail while animation frames were paused.");
   } finally {
     await evaluate(secondCdp, `(() => {
       window.requestAnimationFrame = window.__carouselBotOriginalRequestAnimationFrame;
@@ -802,7 +803,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 45, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 46, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

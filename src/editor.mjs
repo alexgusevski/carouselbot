@@ -28,6 +28,7 @@ const editorProjects = createEditorProjects({
   scheduleThumbnailRefresh: editorOutput.scheduleThumbnailRefresh,
   clearProjectCover: editorOutput.clearProjectCover,
   clearSlideThumbnail: editorOutput.clearSlideThumbnail,
+  pruneSlideThumbnails: editorOutput.pruneSlideThumbnails,
 });
 
 editorActions = createEditorActions({
@@ -72,7 +73,9 @@ export async function init() {
     toast("Browser storage is unavailable. Projects won’t persist.");
   }
   window.addEventListener("carouselbot:migration-complete", async (event) => {
-    state.projects = normalizeLoadedProjects(await getAllProjects());
+    const migratedProjects = normalizeLoadedProjects(await getAllProjects());
+    editorOutput.pruneSlideThumbnails(migratedProjects);
+    state.projects = migratedProjects;
     renderDashboard();
     const { imported = 0, updated = 0, skipped = 0 } = event.detail || {};
     toast(`Projects ready: ${imported} copied, ${updated} updated${skipped ? `, ${skipped} already current` : ""}.`);

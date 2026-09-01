@@ -4,11 +4,31 @@ import {
   app,
   activeProject,
   activeSlide,
+  slideThumbnailKey,
 } from "./editor-state.mjs";
 import { renderSlideThumbnail } from "./editor-view.mjs";
 import { canvasToBlob, renderSlideCanvas } from "./slide-renderer.mjs";
 
 export function createEditorOutput({ toast }) {
+  const thumbnailRenderQueue = [];
+  let activeThumbnailRenders = 0;
+  let dashboardThumbnailObserver = null;
+  let dashboardThumbnailKeys = new Set();
+
+  function acquireThumbnailRenderSlot() {
+    if (activeThumbnailRenders < 4) {
+      activeThumbnailRenders += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => thumbnailRenderQueue.push(resolve));
+  }
+
+  function releaseThumbnailRenderSlot() {
+    const next = thumbnailRenderQueue.shift();
+    if (next) next();
+    else activeThumbnailRenders = Math.max(0, activeThumbnailRenders - 1);
+  }
+
   function projectCoverSignature(project) {
     const slide = project.slides[0];
     return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide, project)}` : "";
@@ -116,57 +136,172 @@ export function createEditorOutput({ toast }) {
     ]);
   }
 
-  async function refreshSlideThumbnail(slide) {
-    const target = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
-    if (!target) return;
-    const signature = thumbnailSignature(slide);
-    const cachedUrl = state.thumbnailUrls.get(slide.id);
-    if (cachedUrl && state.thumbnailSignatures.get(slide.id) === signature) {
-      const image = target.querySelector(".thumb-rendered");
-      if (image?.src !== cachedUrl) image.src = cachedUrl;
+  function slideThumbnailTargets(slideId, project) {
+    return [...app.querySelectorAll("[data-thumbnail-slide-id][data-thumbnail-project-id]")]
+      .filter((target) => target.dataset.thumbnailSlideId === String(slideId)
+        && target.dataset.thumbnailProjectId === String(project?.id || ""));
+  }
+
+  async function refreshSlideThumbnail(slide, project = activeProject()) {
+    const targets = slideThumbnailTargets(slide.id, project);
+    if (!targets.length) return;
+    const cacheKey = slideThumbnailKey(project?.id, slide.id);
+    const signature = thumbnailSignature(slide, project);
+    const renderToken = Symbol("slide-thumbnail-render");
+    state.thumbnailVersions.set(cacheKey, renderToken);
+    const cachedUrl = state.thumbnailUrls.get(cacheKey);
+    if (cachedUrl && state.thumbnailSignatures.get(cacheKey) === signature) {
+      targets.forEach((target) => {
+        const image = target.querySelector(".thumb-rendered");
+        if (image) {
+          if (image.src !== cachedUrl) image.src = cachedUrl;
+        } else {
+          target.innerHTML = renderSlideThumbnail(slide, project);
+        }
+        target.classList.remove("is-rendering");
+      });
       return;
     }
 
-    const version = (state.thumbnailVersions.get(slide.id) || 0) + 1;
-    state.thumbnailVersions.set(slide.id, version);
-    target.classList.add("is-rendering");
+    targets.forEach((target) => target.classList.add("is-rendering"));
+    await acquireThumbnailRenderSlot();
     try {
-      const canvas = await renderSlideCanvas(slide, 540, 960);
+      if (state.thumbnailVersions.get(cacheKey) !== renderToken || !slideThumbnailTargets(slide.id, project).length) return;
+      const canvas = await renderSlideCanvas(slide, 540, 960, project);
       const blob = await canvasToBlob(canvas);
-      if (state.thumbnailVersions.get(slide.id) !== version) return;
+      if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
       const url = URL.createObjectURL(blob);
-      const previousUrl = state.thumbnailUrls.get(slide.id);
-      state.thumbnailUrls.set(slide.id, url);
-      state.thumbnailSignatures.set(slide.id, signature);
+      const previousUrl = state.thumbnailUrls.get(cacheKey);
+      state.thumbnailUrls.set(cacheKey, url);
+      state.thumbnailSignatures.set(cacheKey, signature);
       if (previousUrl) URL.revokeObjectURL(previousUrl);
-      const currentTarget = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
-      if (currentTarget) {
-        currentTarget.innerHTML = renderSlideThumbnail(slide);
+      slideThumbnailTargets(slide.id, project).forEach((currentTarget) => {
+        currentTarget.innerHTML = renderSlideThumbnail(slide, project);
         currentTarget.removeAttribute("title");
         currentTarget.classList.remove("is-rendering");
-      }
+      });
     } catch (error) {
+      if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
       console.error(error);
-      clearSlideThumbnail(slide.id);
-      const currentTarget = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
-      if (currentTarget) {
+      clearSlideThumbnail(slide.id, project?.id);
+      slideThumbnailTargets(slide.id, project).forEach((currentTarget) => {
         currentTarget.classList.remove("is-rendering");
         currentTarget.title = error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Preview unavailable";
-        currentTarget.innerHTML = renderSlideThumbnail(slide);
-      }
+        if (currentTarget.classList.contains("project-preview-slide") && slide.imageData) {
+          const image = document.createElement("img");
+          image.className = "project-preview-source";
+          image.src = slide.imageData;
+          image.alt = "";
+          image.draggable = false;
+          image.loading = "lazy";
+          image.decoding = "async";
+          image.setAttribute("aria-hidden", "true");
+          currentTarget.replaceChildren(image);
+        } else {
+          currentTarget.innerHTML = renderSlideThumbnail(slide, project);
+        }
+      });
+    } finally {
+      releaseThumbnailRenderSlot();
     }
   }
 
-  function refreshAllSlideThumbnails(slides) {
-    slides.forEach((slide) => refreshSlideThumbnail(slide));
+  function refreshAllSlideThumbnails(slides, project = activeProject()) {
+    disconnectDashboardSlideThumbnails();
+    slides.forEach((slide) => { void refreshSlideThumbnail(slide, project); });
   }
 
-  function clearSlideThumbnail(slideId) {
-    const thumbnailUrl = state.thumbnailUrls.get(slideId);
+  function refreshDashboardSlideThumbnails(projects) {
+    disconnectDashboardSlideThumbnails();
+    const projectsById = new Map(projects.map((project) => [project.id, project]));
+    const targets = [...app.querySelectorAll(".project-preview-slide[data-thumbnail-project-id][data-thumbnail-slide-id]")];
+    dashboardThumbnailKeys = new Set(targets.map((target) => slideThumbnailKey(
+      target.dataset.thumbnailProjectId,
+      target.dataset.thumbnailSlideId,
+    )));
+    dashboardThumbnailKeys.forEach((cacheKey) => {
+      state.thumbnailVersions.set(cacheKey, Symbol("dashboard-thumbnail-generation"));
+    });
+    const refreshTarget = (target) => {
+      const project = projectsById.get(target.dataset.thumbnailProjectId);
+      const slide = project?.slides.find((item) => item.id === target.dataset.thumbnailSlideId);
+      if (slide) void refreshSlideThumbnail(slide, project);
+    };
+
+    const eagerProjectIds = new Set();
+    const deferredTargets = [];
+    targets.forEach((target) => {
+      if (!eagerProjectIds.has(target.dataset.thumbnailProjectId)) {
+        eagerProjectIds.add(target.dataset.thumbnailProjectId);
+        refreshTarget(target);
+      } else {
+        deferredTargets.push(target);
+      }
+    });
+    if (!deferredTargets.length) return;
+    if (typeof IntersectionObserver !== "function") {
+      deferredTargets.forEach(refreshTarget);
+      return;
+    }
+
+    dashboardThumbnailObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target);
+        refreshTarget(entry.target);
+      });
+    }, { rootMargin: "160px", threshold: 0.01 });
+    deferredTargets.forEach((target) => dashboardThumbnailObserver.observe(target));
+  }
+
+  function disconnectDashboardSlideThumbnails() {
+    dashboardThumbnailObserver?.disconnect();
+    dashboardThumbnailObserver = null;
+    dashboardThumbnailKeys.forEach((cacheKey) => {
+      if (state.thumbnailVersions.has(cacheKey)) {
+        state.thumbnailVersions.set(cacheKey, Symbol("dashboard-thumbnail-disconnected"));
+      }
+    });
+    dashboardThumbnailKeys = new Set();
+  }
+
+  function clearThumbnailCacheKey(cacheKey) {
+    const thumbnailUrl = state.thumbnailUrls.get(cacheKey);
     if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
-    state.thumbnailUrls.delete(slideId);
-    state.thumbnailSignatures.delete(slideId);
-    state.thumbnailVersions.delete(slideId);
+    state.thumbnailUrls.delete(cacheKey);
+    state.thumbnailSignatures.delete(cacheKey);
+    state.thumbnailVersions.delete(cacheKey);
+  }
+
+  function clearSlideThumbnail(slideId, projectId = state.activeProjectId) {
+    if (projectId) {
+      clearThumbnailCacheKey(slideThumbnailKey(projectId, slideId));
+      return;
+    }
+    const knownKeys = new Set([
+      ...state.thumbnailUrls.keys(),
+      ...state.thumbnailSignatures.keys(),
+      ...state.thumbnailVersions.keys(),
+    ]);
+    knownKeys.forEach((cacheKey) => {
+      try {
+        if (JSON.parse(cacheKey)[1] === String(slideId)) clearThumbnailCacheKey(cacheKey);
+      } catch {
+        if (cacheKey === slideId) clearThumbnailCacheKey(cacheKey);
+      }
+    });
+  }
+
+  function pruneSlideThumbnails(projects = state.projects) {
+    const liveKeys = new Set(projects.flatMap((project) => project.slides.map((slide) => slideThumbnailKey(project.id, slide.id))));
+    const knownKeys = new Set([
+      ...state.thumbnailUrls.keys(),
+      ...state.thumbnailSignatures.keys(),
+      ...state.thumbnailVersions.keys(),
+    ]);
+    knownKeys.forEach((cacheKey) => {
+      if (!liveKeys.has(cacheKey)) clearThumbnailCacheKey(cacheKey);
+    });
   }
 
   async function renderSlideBlob(slide = activeSlide()) {
@@ -304,7 +439,10 @@ export function createEditorOutput({ toast }) {
     refreshAllProjectCovers,
     clearProjectCover,
     refreshAllSlideThumbnails,
+    refreshDashboardSlideThumbnails,
+    disconnectDashboardSlideThumbnails,
     clearSlideThumbnail,
+    pruneSlideThumbnails,
     exportActiveSlide,
     shareActiveSlide,
     shareAllSlides,

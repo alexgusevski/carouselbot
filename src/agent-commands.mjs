@@ -515,6 +515,7 @@ async function executeCarouselBotAgentOperation(operation) {
     const expectedRevision = Number(project.revision) || 0;
     await deleteProjectFromDb(project.id, { expectedRevision });
     state.projects = state.projects.filter((item) => item.id !== project.id);
+    project.slides.forEach((slide) => clearSlideThumbnail(slide.id, project.id));
     clearProjectCover(project.id);
     if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
       state.activeFolderPath = null;
@@ -565,7 +566,7 @@ async function executeCarouselBotAgentOperation(operation) {
       if (operation.imageX != null) slide.imageX = Number(operation.imageX) || 0;
       if (operation.imageY != null) slide.imageY = Number(operation.imageY) || 0;
       constrainImagePosition(slide);
-      clearSlideThumbnail(slide.id);
+      clearSlideThumbnail(slide.id, project.id);
       return { updatedSlideId: slide.id, name: slide.name };
     }, "AI agent updated the slide");
   }
@@ -600,7 +601,7 @@ async function executeCarouselBotAgentOperation(operation) {
     const index = project.slides.indexOf(slide);
     return agentCommit(project, slide, () => {
       project.slides.splice(index, 1);
-      clearSlideThumbnail(slide.id);
+      clearSlideThumbnail(slide.id, project.id);
       state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
       return { deletedSlideId: slide.id };
     }, "AI agent deleted a slide");

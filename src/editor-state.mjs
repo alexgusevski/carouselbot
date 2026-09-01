@@ -54,6 +54,10 @@ export const history = {
 
 export const app = document.querySelector("#app");
 
+export function slideThumbnailKey(projectId, slideId) {
+  return JSON.stringify([String(projectId || ""), String(slideId || "")]);
+}
+
 export function activeProject() {
   return state.projects.find((project) => project.id === state.activeProjectId) || null;
 }
