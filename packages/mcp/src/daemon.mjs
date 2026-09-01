@@ -5,7 +5,8 @@ import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } fr
 import { basename, delimiter, extname } from "node:path";
 import {
   ALLOWED_ORIGINS, AUDIT_LOG_PATH, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_URL, DAEMON_LOCK_PATH,
-  DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION, PROTOCOL_VERSION, STATE_DIRECTORY,
+  DAEMON_API_VERSION, DAEMON_INTERNAL_ACTIONS, DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION,
+  PROTOCOL_VERSION, STATE_DIRECTORY,
 } from "./config.mjs";
 import { createLocalFontService } from "./local-fonts.mjs";
 
@@ -76,6 +77,19 @@ function codedError(code, message, details = {}) {
   error.code = code;
   error.details = details;
   return error;
+}
+
+function daemonHealth(details = {}) {
+  return {
+    ok: true,
+    service: PACKAGE_NAME,
+    pid: process.pid,
+    version: PACKAGE_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    daemonApiVersion: DAEMON_API_VERSION,
+    capabilities: { internalActions: [...DAEMON_INTERNAL_ACTIONS] },
+    ...details,
+  };
 }
 
 function publicSession(session) {
@@ -546,7 +560,10 @@ async function handleInternalCall(body) {
     for (const item of body.items) results.push(await callBrowser(body.clientId, item.toolName || "apply_operations", item.operation, item.label, { editSessionId: body.editSessionId, mutating: true }));
     return { applied: results.length, results };
   }
-  throw new Error(`Unknown internal action: ${body.action}`);
+  throw codedError("UNSUPPORTED_INTERNAL_ACTION", `Unknown internal action: ${body.action}`, {
+    action: body.action,
+    supportedActions: [...DAEMON_INTERNAL_ACTIONS],
+  });
 }
 
 const server = createServer(async (request, response) => {
@@ -564,13 +581,13 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/health" && request.method === "GET") {
     if (origin && !cors) return sendJson(response, 403, { error: "Origin not allowed." });
-    return sendJson(response, 200, { ok: true, service: PACKAGE_NAME, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION, editors: activeEditors().length, agents: activeClients().length }, cors || {});
+    return sendJson(response, 200, daemonHealth({ editors: activeEditors().length, agents: activeClients().length }), cors || {});
   }
 
   try {
     if (url.pathname.startsWith("/internal/")) {
       if (!requireInternal(request, response)) return;
-      if (url.pathname === "/internal/health" && request.method === "GET") return sendJson(response, 200, { ok: true, pid: process.pid, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION });
+      if (url.pathname === "/internal/health" && request.method === "GET") return sendJson(response, 200, daemonHealth());
       if (url.pathname === "/internal/shutdown" && request.method === "POST") {
         sendJson(response, 202, { ok: true, pid: process.pid });
         setImmediate(() => void shutdown());
@@ -772,7 +789,11 @@ const server = createServer(async (request, response) => {
       : ["EACCES", "FONT_PERMISSION_REQUIRED"].includes(error.code)
         ? 403
         : error.code === "FONT_TRANSFER_LIMIT" ? 429 : 400;
-    return sendJson(response, statusCode, { error: error.message }, headers);
+    return sendJson(response, statusCode, {
+      error: error.message,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details && Object.keys(error.details).length ? { details: error.details } : {}),
+    }, headers);
   }
 });
 
@@ -802,7 +823,14 @@ async function acquireDaemonLock() {
 
 async function writeDaemonState() {
   const temporary = `${DAEMON_STATE_PATH}.${process.pid}.tmp`;
-  await writeFile(temporary, JSON.stringify({ pid: process.pid, port: BRIDGE_PORT, secret: daemonSecret, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION }), { mode: 0o600 });
+  await writeFile(temporary, JSON.stringify({
+    pid: process.pid,
+    port: BRIDGE_PORT,
+    secret: daemonSecret,
+    version: PACKAGE_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    daemonApiVersion: DAEMON_API_VERSION,
+  }), { mode: 0o600 });
   await rename(temporary, DAEMON_STATE_PATH);
 }
 

@@ -6,8 +6,9 @@ Local-first MCP companion for the hosted [CarouselBot editor](https://carousel.b
 npx carouselbot@latest setup
 ```
 
-Setup pins that exact package version in the generated MCP configuration. Rerun
-the command when you intentionally want to update.
+Setup pins that exact package version in the generated MCP configuration, refreshes
+the agent skill, and automatically upgrades an older shared daemon. Rerun the
+command when you intentionally want to update.
 
 For non-interactive agent setup, select the current client explicitly:
 
@@ -34,7 +35,7 @@ Folders use exact canonical slash paths such as `/campaigns` and are derived fro
 
 Always use `list_editors` to check the browser connection. Do not open CarouselBot or click **Connect AI** through a sandboxed, remote, or agent-controlled browser: that is a different browser session and may not reach the local companion.
 
-Browser reconnection is automatic. Retry transient disconnects; use `restart` only for an explicit protocol mismatch or failed daemon health check. Hermes can refresh native tools with `/reload-mcp` and `/reload-skills`. Claude may need a new session to register a newly added server, but the CLI fallback works immediately.
+Browser and MCP-process reconnection are automatic, including after a compatible daemon upgrade. The MCP checks the daemon's advertised internal actions rather than trusting the browser protocol number alone. Retry transient disconnects; use `restart` only when automatic recovery or `doctor` reports a failed daemon health check. An already-running host may still need to refresh its native tool catalog when a release adds entirely new tool names; the CLI fallback works immediately without waiting for that refresh.
 
 The companion binds only to `127.0.0.1`. There is no hosted relay: projects remain in browser IndexedDB and local images remain on the user's computer.
 

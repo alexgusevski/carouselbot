@@ -135,6 +135,12 @@ test("protects internal routes, origins, and protocol versions", async () => {
     assert.ok(state?.secret);
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${base}/internal/health`)).status, 401);
+    const internalHealth = await fetch(`${base}/internal/health`, {
+      headers: { Authorization: `Bearer ${state.secret}` },
+    }).then((response) => response.json());
+    assert.equal(internalHealth.daemonApiVersion, 1);
+    assert.ok(internalHealth.capabilities.internalActions.includes("list_local_fonts"));
+    assert.ok(internalHealth.capabilities.internalActions.includes("browser"));
     assert.equal((await fetch(`${base}/health`, { headers: { Origin: "https://attacker.example" } })).status, 403);
     const preflight = await fetch(`${base}/health`, { method: "OPTIONS", headers: { Origin: "https://carousel.bot", "Access-Control-Request-Private-Network": "true" } });
     assert.equal(preflight.status, 204);
