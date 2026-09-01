@@ -31,7 +31,7 @@ const server = createServer(async (request, response) => {
     : null;
   const entry = files.get(url.pathname)
     || sourceModule
-    || (/^\/projects\/[^/]+\/?$/.test(url.pathname) ? files.get("/") : null);
+    || (/^\/(?:projects|folders)\/[^/]+\/?$/.test(url.pathname) ? files.get("/") : null);
 
   if (!entry || (request.method !== "GET" && request.method !== "HEAD")) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

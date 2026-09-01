@@ -91,15 +91,57 @@ export function projectPath(projectId) {
   return `/projects/${encodeURIComponent(projectId)}`;
 }
 
+export function normalizeFolderPath(value) {
+  if (value == null) return null;
+  let content = String(value).trim();
+  while (content.startsWith("/")) content = content.slice(1).trimStart();
+  content = content.trim();
+  if (!content || content === "." || content === "..") return null;
+
+  // Keep the complete canonical path within the UI/MCP 160-code-unit limit
+  // without cutting an emoji's surrogate pair in half. Invalid standalone
+  // surrogates are replaced so encodeURIComponent can always build a route.
+  let bounded = "";
+  for (let index = 0; index < content.length && bounded.length < 159; index += 1) {
+    const code = content.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = content.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        if (bounded.length + 2 > 159) break;
+        bounded += content[index] + content[index + 1];
+        index += 1;
+      } else bounded += "\uFFFD";
+    } else if (code >= 0xDC00 && code <= 0xDFFF) bounded += "\uFFFD";
+    else bounded += content[index];
+  }
+  return bounded ? `/${bounded}` : null;
+}
+
+export function folderRoutePath(value) {
+  const folderPath = normalizeFolderPath(value);
+  return folderPath ? `/folders/${encodeURIComponent(folderPath.slice(1))}` : "/";
+}
+
 export function routeFromPathname(pathname = window.location.pathname) {
   if (pathname === "/" || pathname === "/index.html") return { view: "dashboard" };
-  const match = pathname.match(/^\/projects\/([^/]+)\/?$/);
-  if (!match) return { view: "not-found" };
-  try {
-    return { view: "project", projectId: decodeURIComponent(match[1]) };
-  } catch {
-    return { view: "not-found" };
+  const projectMatch = pathname.match(/^\/projects\/([^/]+)\/?$/);
+  if (projectMatch) {
+    try {
+      return { view: "project", projectId: decodeURIComponent(projectMatch[1]) };
+    } catch {
+      return { view: "not-found" };
+    }
   }
+  const folderMatch = pathname.match(/^\/folders\/([^/]+)\/?$/);
+  if (folderMatch) {
+    try {
+      const folderPath = normalizeFolderPath(decodeURIComponent(folderMatch[1]));
+      return folderPath ? { view: "folder", folderPath } : { view: "not-found" };
+    } catch {
+      return { view: "not-found" };
+    }
+  }
+  return { view: "not-found" };
 }
 
 export function adjacentSlideId(slides, activeSlideId, offset) {

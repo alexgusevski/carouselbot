@@ -6,6 +6,9 @@ import { EDITOR_URL, GUIDANCE_PATH, PACKAGE_NAME, PACKAGE_VERSION } from "./conf
 
 const id = z.string().min(1).max(160);
 const optionalId = id.optional();
+const folderPath = z.string().min(2).max(160)
+  .regex(/^\/(?!\/)\S(?:[\s\S]*\S)?$/, "Use a canonical folder path with one leading slash and no surrounding whitespace, for example /my-folder.")
+  .refine((value) => value !== "/." && value !== "/..", "Folder paths cannot use the reserved names /. or /..");
 const color = z.string().regex(/^#?[0-9a-f]{3}(?:[0-9a-f]{3})?$/i, "Use a 3- or 6-digit hex color.");
 const unit = z.number().min(-0.5).max(1.5);
 const positiveUnit = z.number().min(0.01).max(2.4);
@@ -40,8 +43,11 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["id", "editSessionId", "editorId", "projectId", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
-  return Object.fromEntries(keys.flatMap((key) => value?.[key] == null ? [] : [[key, value[key]]]));
+  const keys = ["id", "editSessionId", "editorId", "projectId", "folderPath", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
+  return Object.fromEntries(keys.flatMap((key) => {
+    if (key === "folderPath" && Object.hasOwn(value || {}, key)) return [[key, value[key] ?? null]];
+    return value?.[key] == null ? [] : [[key, value[key]]];
+  }));
 }
 
 function clientIdentity(context, server) {
@@ -58,7 +64,7 @@ async function pathExists(value) {
 
 function operationLabel(toolName) {
   return ({
-    create_project: "Creating a project…", update_project: "Updating the project…", delete_project: "Deleting a project…",
+    create_project: "Creating a project…", update_project: "Updating the project…", move_project: "Moving the project…", delete_project: "Deleting a project…",
     open_project: "Opening a project…", add_slide: "Adding a slide…", update_slide: "Updating a slide…",
     duplicate_slide: "Duplicating a slide…", reorder_slides: "Reordering slides…", delete_slide: "Deleting a slide…",
     add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_font: "Adding a local font…", import_asset: "Importing a local image…",
@@ -94,7 +100,7 @@ async function prepareOperation(companion, toolName, args, editSessionId = null)
     operation.fontMediaId = prepared.fontMediaId;
   }
   const type = ({
-    create_project: "project.create", open_project: "project.open", update_project: "project.update", delete_project: "project.delete",
+    create_project: "project.create", open_project: "project.open", update_project: "project.update", move_project: "project.move", delete_project: "project.delete",
     add_slide: "slide.add", update_slide: "slide.update", duplicate_slide: "slide.duplicate", reorder_slides: "slide.reorder", delete_slide: "slide.delete",
     add_text: "text.add", update_text: "text.update", fit_text_boxes: "text.fit", import_font: "font.import", list_project_fonts: "font.list", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
     add_image: "image.add", update_image: "image.update", delete_layers: "layer.delete", duplicate_layers: "layer.duplicate", reorder_layers: "layer.reorder",
@@ -165,9 +171,10 @@ export async function createCarouselBotMcpServer(companion) {
   register("list_project_fonts", "List fonts already imported into one project, including whether each face is currently available.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "list_project_fonts", args), { readOnlyHint: true });
   register("show_notification", "Show a short visual notification in a connected editor for status or marketing demos.", z.object({ editSessionId, message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), ({ editSessionId, ...args }) => companion.call("notify", { ...args, editSessionId }), { destructiveHint: false, idempotentHint: false });
 
-  register("create_project", "Create an empty project without changing the user's current browser view. Its dashboard card appears live when the dashboard is open.", z.object({ editSessionId, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
+  register("create_project", "Create an empty project without changing the user's current browser view. Pass a canonical folderPath such as /my-folder to create it inside that folder; omit it or use null for the dashboard root.", z.object({ editSessionId, name: z.string().min(1).max(160), folderPath: folderPath.nullable().optional() }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
   register("open_project", "Explicitly navigate the browser to a project and optionally a specific slide without changing content. Use only when the user asks to show it.", z.object({ editSessionId, projectId: id, slideId: optionalId }).strict(), (args) => browserOperation(companion, "open_project", args), { destructiveHint: false, idempotentHint: true });
   register("update_project", "Rename a project.", z.object({ ...targetProject, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_project", args), { destructiveHint: true });
+  register("move_project", "Move a project into a folder by canonical slash path, move it between folders, or move it back to the dashboard root with folderPath=null. Folder cards are derived from project membership, so empty folders disappear.", z.object({ ...targetProject, projectId: id, folderPath: folderPath.nullable() }).strict(), (args) => browserOperation(companion, "move_project", args), { destructiveHint: true });
   register("delete_project", "Delete a project from browser storage.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "delete_project", args), { destructiveHint: true });
 
   register("add_slide", "Add a slide using a solid color or local background image path. The browser follows it only when that project is already visible.", z.object({ ...targetProject, name: z.string().max(160).optional(), index: z.number().int().min(0).optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional() }).strict(), (args) => browserOperation(companion, "add_slide", args), { destructiveHint: false });

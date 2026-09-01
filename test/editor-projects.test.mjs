@@ -32,12 +32,29 @@ test("normalizes legacy projects in place without replacing existing records", (
   assert.equal(result[0].slides[0], slide);
   assert.equal(result[0].slides[0].texts[0], text);
   assert.equal(project.revision, 0);
+  assert.equal(project.folderPath, null);
   assert.deepEqual(project.assets, []);
   assert.deepEqual(project.fonts, []);
   assert.equal(slide.imageScale, 1);
   assert.equal(slide.imageX, 0);
   assert.equal(slide.imageY, 0);
   assert.deepEqual(slide.overlays, []);
+});
+
+test("normalizes project folder paths without changing project identity", () => {
+  const project = {
+    id: "project-folder",
+    folderPath: "  ///my-folder  ",
+    revision: 3,
+    assets: [],
+    slides: [],
+  };
+
+  normalizeLoadedProjects([project]);
+
+  assert.equal(project.id, "project-folder");
+  assert.equal(project.folderPath, "/my-folder");
+  assert.equal(project.revision, 3);
 });
 
 test("derives cropped overlay height and missing layer order from legacy assets", () => {

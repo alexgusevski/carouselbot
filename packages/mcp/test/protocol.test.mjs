@@ -67,7 +67,7 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
 
     const listed = await rpc.request("tools/list");
     const names = listed.result.tools.map((tool) => tool.name);
-    for (const name of ["get_design_guidance", "list_editors", "begin_edit_session", "end_edit_session", "list_edit_sessions", "list_recent_operations", "inspect_editor", "list_local_fonts", "list_project_fonts", "create_project", "add_slide", "add_text", "fit_text_boxes", "import_font", "import_asset", "add_image", "render_slide", "export_project", "apply_operations"]) assert.ok(names.includes(name), `missing ${name}`);
+    for (const name of ["get_design_guidance", "list_editors", "begin_edit_session", "end_edit_session", "list_edit_sessions", "list_recent_operations", "inspect_editor", "list_local_fonts", "list_project_fonts", "create_project", "move_project", "add_slide", "add_text", "fit_text_boxes", "import_font", "import_asset", "add_image", "render_slide", "export_project", "apply_operations"]) assert.ok(names.includes(name), `missing ${name}`);
     assert.ok(names.length >= 30, `expected complete surface, received ${names.length}`);
     assert.ok(listed.result.tools.every((tool) => tool.annotations.openWorldHint === false), "every tool should declare its closed local domain");
     const annotations = Object.fromEntries(listed.result.tools.map((tool) => [tool.name, tool.annotations]));
@@ -77,7 +77,26 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
     assert.equal(annotations.add_text.destructiveHint, false);
     assert.equal(annotations.import_font.destructiveHint, false);
     assert.equal(annotations.update_text.destructiveHint, true);
+    assert.equal(annotations.move_project.destructiveHint, true);
     assert.equal(annotations.delete_project.destructiveHint, true);
+
+    const tools = Object.fromEntries(listed.result.tools.map((tool) => [tool.name, tool]));
+    const createProjectSchema = tools.create_project.inputSchema;
+    const moveProjectSchema = tools.move_project.inputSchema;
+    const allowsNull = (schema) => schema?.type === "null"
+      || (Array.isArray(schema?.type) && schema.type.includes("null"))
+      || schema?.anyOf?.some(allowsNull);
+    const stringVariant = (schema) => schema?.type === "string" ? schema : schema?.anyOf?.find((item) => item.type === "string");
+    assert.ok(createProjectSchema.properties.folderPath, "create_project should expose folderPath");
+    assert.equal(createProjectSchema.required.includes("folderPath"), false, "create_project folderPath should be optional");
+    assert.ok(allowsNull(createProjectSchema.properties.folderPath), "create_project folderPath should accept null for the dashboard root");
+    assert.equal(stringVariant(createProjectSchema.properties.folderPath).pattern, "^\\/(?!\\/)\\S(?:[\\s\\S]*\\S)?$", "folder paths should use one canonical leading slash");
+    assert.ok(moveProjectSchema.required.includes("projectId"), "move_project should require projectId");
+    assert.ok(moveProjectSchema.required.includes("folderPath"), "move_project should require an explicit folderPath or null");
+    assert.equal(moveProjectSchema.required.includes("expectedRevision"), false, "move_project expectedRevision should remain optional");
+    assert.equal(moveProjectSchema.required.includes("editSessionId"), false, "move_project editSessionId should remain optional for compatibility");
+    assert.ok(allowsNull(moveProjectSchema.properties.folderPath), "move_project folderPath should accept null for the dashboard root");
+    assert.equal(moveProjectSchema.additionalProperties, false, "move_project should reject unknown arguments");
 
     const blocked = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Blocked until guidance" } });
     assert.equal(blocked.result.isError, true);
@@ -88,6 +107,10 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
     assert.match(guidance.result.content[0].text, /fit_text_boxes/);
     assert.match(guidance.result.content[0].text, /automatically preserve width and fit height/);
     assert.match(guidance.result.content[0].text, /body copy `54–68`/);
+
+    const invalidFolder = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Invalid folder", folderPath: "/.." } });
+    assert.equal(invalidFolder.result.isError, true);
+    assert.match(invalidFolder.result.content[0].text, /reserved names/);
 
     const editors = await rpc.request("tools/call", { name: "list_editors", arguments: {} });
     assert.deepEqual(editors.result.structuredContent.editors, []);

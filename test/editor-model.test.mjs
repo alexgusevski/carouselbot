@@ -7,6 +7,7 @@ import {
   cloneProject,
   ensureBoxedTextContrast,
   escapeHtml,
+  folderRoutePath,
   fontSizeFromSliderPosition,
   formatFontSize,
   formatRgb,
@@ -19,6 +20,7 @@ import {
   layerStageInset,
   normalizePerLineBackgroundWidths,
   nextLayerZ,
+  normalizeFolderPath,
   normalizeHexColor,
   outlineColorFor,
   overlayCrop,
@@ -55,6 +57,43 @@ test("routes dashboard and encoded project URLs", () => {
   assert.deepEqual(routeFromPathname("/projects/%E0%A4%A"), { view: "not-found" });
   assert.deepEqual(routeFromPathname("/unknown"), { view: "not-found" });
   assert.equal(projectPath("a b/c"), "/projects/a%20b%2Fc");
+});
+
+test("normalizes virtual folder paths with one leading slash and a bounded length", () => {
+  assert.equal(normalizeFolderPath(null), null);
+  assert.equal(normalizeFolderPath(undefined), null);
+  assert.equal(normalizeFolderPath(""), null);
+  assert.equal(normalizeFolderPath("   "), null);
+  assert.equal(normalizeFolderPath("/"), null);
+  assert.equal(normalizeFolderPath(" /// "), null);
+  assert.equal(normalizeFolderPath("/."), null);
+  assert.equal(normalizeFolderPath("/.."), null);
+  assert.equal(normalizeFolderPath("my-folder"), "/my-folder");
+  assert.equal(normalizeFolderPath(" /my-folder "), "/my-folder");
+  assert.equal(normalizeFolderPath(" ///   my-folder   "), "/my-folder");
+  assert.equal(normalizeFolderPath(" /Campaign 2026/Q4 "), "/Campaign 2026/Q4");
+  const bounded = normalizeFolderPath(`/${"x".repeat(200)}`);
+  assert.equal(bounded, `/${"x".repeat(159)}`);
+  assert.equal(bounded.length, 160);
+  const emojiBoundary = normalizeFolderPath(`${"x".repeat(158)}😀`);
+  assert.equal(emojiBoundary, `/${"x".repeat(158)}`);
+  assert.doesNotThrow(() => folderRoutePath(emojiBoundary));
+  assert.equal(normalizeFolderPath(`safe\uD800path`), "/safe�path");
+});
+
+test("builds and parses encoded virtual folder routes", () => {
+  assert.equal(folderRoutePath(null), "/");
+  assert.equal(folderRoutePath("/my folder"), "/folders/my%20folder");
+  assert.equal(folderRoutePath(" /Campaign 2026/Q4 "), "/folders/Campaign%202026%2FQ4");
+  assert.deepEqual(routeFromPathname("/folders/my%20folder"), { view: "folder", folderPath: "/my folder" });
+  assert.deepEqual(routeFromPathname("/folders/Campaign%202026%2FQ4/"), { view: "folder", folderPath: "/Campaign 2026/Q4" });
+  assert.deepEqual(routeFromPathname("/folders/%2Fmy-folder"), { view: "folder", folderPath: "/my-folder" });
+  assert.deepEqual(routeFromPathname("/folders/%20"), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/%2F"), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/."), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/.."), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/%E0%A4%A"), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/unencoded/nested"), { view: "not-found" });
 });
 
 test("escapes every HTML-significant character", () => {

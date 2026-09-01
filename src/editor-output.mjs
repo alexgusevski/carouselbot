@@ -20,7 +20,9 @@ export function createEditorOutput({ toast }) {
     if (!target) return;
     if (!slide) {
       clearProjectCover(project.id);
-      target.innerHTML = `<span class="project-preview-empty">No slides yet</span>`;
+      const overflowLabel = target.querySelector(".folder-preview-more");
+      target.innerHTML = target.classList.contains("folder-preview-slot") ? "" : `<span class="project-preview-empty">No slides yet</span>`;
+      if (overflowLabel) target.appendChild(overflowLabel);
       return;
     }
     const signature = projectCoverSignature(project);
@@ -46,12 +48,14 @@ export function createEditorOutput({ toast }) {
       if (previousUrl) URL.revokeObjectURL(previousUrl);
       const currentTarget = app.querySelector(`[data-project-cover-id="${project.id}"]`);
       if (currentTarget) {
+        const overflowLabel = currentTarget.querySelector(".folder-preview-more");
         const image = document.createElement("img");
         image.src = url;
         image.alt = "";
         image.dataset.compositeCover = "true";
         currentTarget.replaceChildren(image);
         currentTarget.removeAttribute("title");
+        if (overflowLabel) currentTarget.appendChild(overflowLabel);
         currentTarget.classList.remove("is-rendering");
       }
     } catch (error) {
@@ -59,6 +63,7 @@ export function createEditorOutput({ toast }) {
       clearProjectCover(project.id);
       const currentTarget = app.querySelector(`[data-project-cover-id="${project.id}"]`);
       if (currentTarget) {
+        const overflowLabel = currentTarget.querySelector(".folder-preview-more");
         currentTarget.classList.remove("is-rendering");
         currentTarget.title = error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Preview unavailable";
         if (slide.imageData) {
@@ -66,7 +71,10 @@ export function createEditorOutput({ toast }) {
           image.src = slide.imageData;
           image.alt = "";
           currentTarget.replaceChildren(image);
-        } else currentTarget.innerHTML = `<span class="project-preview-empty">Preview unavailable</span>`;
+        } else {
+          currentTarget.innerHTML = currentTarget.classList.contains("folder-preview-slot") ? "" : `<span class="project-preview-empty">Preview unavailable</span>`;
+        }
+        if (overflowLabel) currentTarget.appendChild(overflowLabel);
       }
     }
   }
