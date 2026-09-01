@@ -12,6 +12,7 @@ test("every local module import resolves to a committed source file", async () =
   const moduleNames = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs"));
   assert.deepEqual(moduleNames.sort(), [
     "agent-commands.mjs",
+    "agent-font-patch.mjs",
     "editor-actions.mjs",
     "editor-model.mjs",
     "editor-output.mjs",
@@ -22,6 +23,7 @@ test("every local module import resolves to a committed source file", async () =
     "editor.mjs",
     "layer-interactions.mjs",
     "main.mjs",
+    "project-fonts.mjs",
     "project-store.mjs",
     "slide-renderer.mjs",
   ]);

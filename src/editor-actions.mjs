@@ -31,6 +31,7 @@ import {
 } from "./editor-state.mjs";
 import { putProject } from "./project-store.mjs";
 import { getImageDimensions, fingerprintData } from "./slide-renderer.mjs";
+import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_WEIGHT } from "./project-fonts.mjs";
 
 export function createEditorActions({
   recordHistory,
@@ -148,6 +149,9 @@ export function createEditorActions({
       width,
       height,
       size: 64,
+      fontFamily: DEFAULT_FONT_FAMILY,
+      fontWeight: DEFAULT_FONT_WEIGHT,
+      fontStyle: "normal",
       style: "plain",
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
       color: "#FFFFFF",

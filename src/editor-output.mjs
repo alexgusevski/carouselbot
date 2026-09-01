@@ -11,7 +11,7 @@ import { canvasToBlob, renderSlideCanvas } from "./slide-renderer.mjs";
 export function createEditorOutput({ toast }) {
   function projectCoverSignature(project) {
     const slide = project.slides[0];
-    return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide)}` : "";
+    return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide, project)}` : "";
   }
 
   async function refreshProjectCover(project) {
@@ -51,11 +51,23 @@ export function createEditorOutput({ toast }) {
         image.alt = "";
         image.dataset.compositeCover = "true";
         currentTarget.replaceChildren(image);
+        currentTarget.removeAttribute("title");
         currentTarget.classList.remove("is-rendering");
       }
     } catch (error) {
       console.error("Could not render project cover", error);
-      target.classList.remove("is-rendering");
+      clearProjectCover(project.id);
+      const currentTarget = app.querySelector(`[data-project-cover-id="${project.id}"]`);
+      if (currentTarget) {
+        currentTarget.classList.remove("is-rendering");
+        currentTarget.title = error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Preview unavailable";
+        if (slide.imageData) {
+          const image = document.createElement("img");
+          image.src = slide.imageData;
+          image.alt = "";
+          currentTarget.replaceChildren(image);
+        } else currentTarget.innerHTML = `<span class="project-preview-empty">Preview unavailable</span>`;
+      }
     }
   }
 
@@ -80,7 +92,11 @@ export function createEditorOutput({ toast }) {
     }, 80);
   }
 
-  function thumbnailSignature(slide) {
+  function thumbnailSignature(slide, project = activeProject()) {
+    const fontIds = new Set((slide.texts || []).map((text) => text.fontId).filter(Boolean));
+    const fonts = (project?.fonts || [])
+      .filter((font) => fontIds.has(font.id))
+      .map((font) => [font.id, font.fingerprint || font.localFontId || "", font.dataRevision || "", font.fontData?.length || 0]);
     return JSON.stringify([
       slide.backgroundRevision || "",
       slide.imageScale || 1,
@@ -88,6 +104,7 @@ export function createEditorOutput({ toast }) {
       slide.imageY || 0,
       slide.texts || [],
       slide.overlays || [],
+      fonts,
     ]);
   }
 
@@ -117,11 +134,18 @@ export function createEditorOutput({ toast }) {
       const currentTarget = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
       if (currentTarget) {
         currentTarget.innerHTML = renderSlideThumbnail(slide);
+        currentTarget.removeAttribute("title");
         currentTarget.classList.remove("is-rendering");
       }
     } catch (error) {
       console.error(error);
-      target.classList.remove("is-rendering");
+      clearSlideThumbnail(slide.id);
+      const currentTarget = app.querySelector(`[data-thumbnail-slide-id="${slide.id}"]`);
+      if (currentTarget) {
+        currentTarget.classList.remove("is-rendering");
+        currentTarget.title = error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Preview unavailable";
+        currentTarget.innerHTML = renderSlideThumbnail(slide);
+      }
     }
   }
 
@@ -169,7 +193,7 @@ export function createEditorOutput({ toast }) {
       toast("PNG downloaded at full resolution");
     } catch (error) {
       console.error(error);
-      toast("The image couldn’t be downloaded.");
+      toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "The image couldn’t be downloaded.");
     } finally {
       if (exportButton) {
         exportButton.disabled = false;
@@ -206,7 +230,7 @@ export function createEditorOutput({ toast }) {
     } catch (error) {
       if (error?.name === "AbortError") return;
       console.error(error);
-      toast("Couldn’t open the share menu.");
+      toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Couldn’t open the share menu.");
     } finally {
       if (shareButton) {
         shareButton.disabled = false;
@@ -260,7 +284,7 @@ export function createEditorOutput({ toast }) {
       }
       state.shareAllCache = null;
       console.error(error);
-      toast("Couldn’t open the share menu for all slides.");
+      toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Couldn’t open the share menu for all slides.");
     } finally {
       shareButtons.forEach((button) => { button.disabled = false; });
       if (shareButton) shareButton.innerHTML = oldLabel;

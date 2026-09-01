@@ -8,14 +8,15 @@ The editor deliberately uses a small ES-module graph rather than a framework or 
 
 ```text
 main ───────────────> editor + agent-commands
-agent-commands ─────> editor + store + view + renderer + state + model
+agent-commands ─────> editor + store + view + renderer + fonts + state + model
 editor ─────────────> projects + actions + output + UI + store + state + model
-UI ─────────────────> interactions + view + state + model
-projects ───────────> store + view + state + model
-actions ────────────> store + renderer + state + model
+UI ─────────────────> interactions + view + fonts + state + model
+projects ───────────> store + view + fonts + state + model
+actions ────────────> store + renderer + fonts + state + model
 output ─────────────> renderer + view + state + model
 interactions ───────> view + state + model
-store/view/renderer ─> state + model
+view/renderer ──────> fonts + state + model
+fonts/store ────────> model
 state ──────────────> model
 ```
 
@@ -42,6 +43,8 @@ An arrow points from an importing module toward its dependencies. The four featu
 ### Views and rendering
 
 `editor-view.mjs` creates editor markup and updates live layer DOM. `slide-renderer.mjs` draws the export representation onto a canvas. Both use the same model helpers for colors, crops, layer order, text alignment, wrapping, and boxed-text geometry.
+
+`project-fonts.mjs` owns project-font normalization, private local face data, `FontFace` registration, public redaction, and the shared font descriptors used by DOM and canvas rendering. `ensureProjectFontsLoaded` is the exact-font gate before measurement or rendered output. A missing or invalid imported face remains editable with a visible warning, but rendering and export fail with `FONT_UNAVAILABLE` instead of silently accepting fallback pixels.
 
 Dashboard covers and slide thumbnails also use the final slide renderer. `editor-output.mjs` versions and revokes their Blob URLs to prevent stale previews and leaks, and owns the related PNG download and Web Share workflows.
 
@@ -72,6 +75,12 @@ window.slideStudioAgent
 
 The local MCP bridge waits for the readiness promise before processing operations.
 
+### Local-font companion boundary
+
+Installed fonts are an optional capability of the loopback MCP companion. After explicit permission in the editor, the companion indexes supported macOS font directories, parses each face (including every TTC face), and returns only stable opaque `localFontId` metadata. Filesystem paths, index fingerprints, and raw bytes never appear in MCP or inspection responses.
+
+An import resolves one selected face inside the companion and transfers its bytes once to the reserved browser tab over the authenticated loopback bridge. TTC faces are repacked as standalone SFNT data before transfer. The browser stores those bytes only in the local IndexedDB project record, registers a generated CSS family, and returns a project-scoped `fontId`; agents apply that ID to text instead of guessing a family name. The companion retains only its private index, recent-use metadata, and short-lived pending transfers.
+
 ## Data and rendering invariants
 
 - Output is 1080 × 1920.
@@ -80,6 +89,8 @@ The local MCP bridge waits for the readiness promise before processing operation
 - Overlay crop rectangles are normalized within the source image and have a minimum 5% size.
 - Layer `z` values determine one combined ordering across text and overlays.
 - Text wrapping and boxed-line geometry must agree between DOM previews and exported canvas images.
+- Imported font bytes remain local, and font metadata returned to agents never contains a filesystem path or stored bytes.
+- A text layer using a project font is measured and rendered only after that exact face has loaded.
 - TikTok placement chrome is preview-only and is never exported.
 - Project images stay embedded in the local project record; they are not uploaded by the application.
 - Layer geometry is applied with dynamic style attributes. The deployment CSP permits style attributes while keeping stylesheet and script sources restricted to the application origin.
@@ -97,6 +108,7 @@ Avoid committed pixel snapshots. Canvas output can vary across browser and platf
 ## Where a change belongs
 
 - Pure calculation or normalization: `editor-model.mjs`.
+- Project-font records, exact-face loading, or shared font descriptors: `project-fonts.mjs`.
 - Active selection or state-aware geometry: `editor-state.mjs`.
 - IndexedDB transaction or project notification: `project-store.mjs`.
 - Markup or live DOM painting: `editor-view.mjs`.

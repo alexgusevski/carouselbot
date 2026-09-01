@@ -13,12 +13,17 @@ const expectedRevision = z.number().int().min(0).optional().describe("Optional o
 const editSessionId = optionalId.describe("Edit session from begin_edit_session. Required for coordinated parallel editing.");
 const targetProject = { editSessionId, projectId: optionalId, expectedRevision };
 const targetSlide = { editSessionId, projectId: optionalId, slideId: optionalId, expectedRevision };
+const fontId = z.union([id, z.null()]).optional().describe("Project font ID returned by import_font. Use null to restore the built-in font.");
 const textFields = {
   text: z.string().max(4000).optional(), x: unit.optional(), y: unit.optional(), width: positiveUnit.optional(), height: positiveUnit.optional(),
   role: z.enum(["title", "subtitle", "body", "caption"]).optional().describe("Semantic size role. Recommended ranges: title 92-124, subtitle 68-84, body 54-68, caption 44-52."),
   size: z.number().min(20).max(180).optional(), style: z.enum(["plain", "outline", "boxed"]).optional(),
   outlineWidth: z.number().min(0).max(40).optional(), color: color.optional(), background: z.enum(["white", "black"]).optional(),
   backgroundShape: z.enum(["lines", "full"]).optional(), align: z.enum(["left", "center", "right"]).optional(),
+  fontId,
+  fontWeight: z.number().int().min(1).max(1000).optional(),
+  fontStyle: z.enum(["normal", "italic"]).optional(),
+  fontVariationSettings: z.record(z.string().regex(/^[A-Za-z0-9]{4}$/), z.number()).optional(),
   rotation: z.number().min(-720).max(720).optional(), z: z.number().optional(),
 };
 const imageFields = {
@@ -35,7 +40,7 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["id", "editSessionId", "editorId", "projectId", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
+  const keys = ["id", "editSessionId", "editorId", "projectId", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
   return Object.fromEntries(keys.flatMap((key) => value?.[key] == null ? [] : [[key, value[key]]]));
 }
 
@@ -56,7 +61,7 @@ function operationLabel(toolName) {
     create_project: "Creating a project…", update_project: "Updating the project…", delete_project: "Deleting a project…",
     open_project: "Opening a project…", add_slide: "Adding a slide…", update_slide: "Updating a slide…",
     duplicate_slide: "Duplicating a slide…", reorder_slides: "Reordering slides…", delete_slide: "Deleting a slide…",
-    add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_asset: "Importing a local image…",
+    add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_font: "Adding a local font…", import_asset: "Importing a local image…",
     update_asset: "Updating an image asset…", delete_asset: "Deleting an image asset…", add_image: "Placing an image…",
     update_image: "Updating an image…", delete_layers: "Deleting layers…", duplicate_layers: "Duplicating layers…",
     reorder_layers: "Reordering layers…", undo: "Undoing the last edit…", redo: "Redoing the last edit…",
@@ -67,11 +72,11 @@ function operationLabel(toolName) {
 async function browserOperation(companion, toolName, args) {
   const { editSessionId: sessionId, ...toolArgs } = args;
   const definition = definitions.get(toolName);
-  const operation = await prepareOperation(companion, toolName, toolArgs);
+  const operation = await prepareOperation(companion, toolName, toolArgs, sessionId);
   return companion.call("browser", { toolName, operation, label: operationLabel(toolName), editSessionId: sessionId, mutating: Boolean(definition?.mutating) });
 }
 
-async function prepareOperation(companion, toolName, args) {
+async function prepareOperation(companion, toolName, args, editSessionId = null) {
   const operation = { ...args };
   if (operation.backgroundPath) {
     const prepared = await companion.call("prepare_media", { path: absolutePath(operation.backgroundPath) });
@@ -83,10 +88,15 @@ async function prepareOperation(companion, toolName, args) {
     operation.mediaId = prepared.mediaId;
     delete operation.path;
   }
+  if (toolName === "import_font") {
+    const prepared = await companion.call("prepare_font", { localFontId: operation.localFontId, editSessionId });
+    operation.font = prepared.font;
+    operation.fontMediaId = prepared.fontMediaId;
+  }
   const type = ({
     create_project: "project.create", open_project: "project.open", update_project: "project.update", delete_project: "project.delete",
     add_slide: "slide.add", update_slide: "slide.update", duplicate_slide: "slide.duplicate", reorder_slides: "slide.reorder", delete_slide: "slide.delete",
-    add_text: "text.add", update_text: "text.update", fit_text_boxes: "text.fit", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
+    add_text: "text.add", update_text: "text.update", fit_text_boxes: "text.fit", import_font: "font.import", list_project_fonts: "font.list", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
     add_image: "image.add", update_image: "image.update", delete_layers: "layer.delete", duplicate_layers: "layer.duplicate", reorder_layers: "layer.reorder",
     undo: "history.undo", redo: "history.redo", set_view: "view.update", render_slide: "slide.render", inspect_editor: "editor.inspect",
   })[toolName];
@@ -151,6 +161,8 @@ export async function createCarouselBotMcpServer(companion) {
   register("list_edit_sessions", "List active edit reservations, their owners, projects, and lease expirations.", z.object({}).strict(), () => companion.call("list_edit_sessions"), { readOnlyHint: true });
   register("list_recent_operations", "Read the local sanitized operation audit. Text, prompts, paths, and image bytes are never logged.", z.object({ limit: z.number().int().min(1).max(200).default(50), projectId: optionalId, status: z.enum(["started", "ok", "error", "blocked"]).optional() }).strict(), (args) => companion.call("list_recent_operations", args), { readOnlyHint: true });
   register("inspect_editor", "Inspect projects, slides, assets, and every text/image layer without returning image bytes.", z.object({ ...targetSlide, includeAllProjects: z.boolean().default(true) }).strict(), (args) => browserOperation(companion, "inspect_editor", args), { readOnlyHint: true });
+  register("list_local_fonts", "Search fonts installed on this computer. Returns opaque local font IDs and never filesystem paths. The user must enable local fonts in CarouselBot first.", z.object({ editSessionId, query: z.string().max(200).optional(), limit: z.number().int().min(1).max(200).default(80), cursor: z.string().max(2048).optional(), sort: z.enum(["recent_then_alphabetical", "alphabetical"]).default("recent_then_alphabetical") }).strict(), (args) => companion.call("list_local_fonts", args), { readOnlyHint: true });
+  register("list_project_fonts", "List fonts already imported into one project, including whether each face is currently available.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "list_project_fonts", args), { readOnlyHint: true });
   register("show_notification", "Show a short visual notification in a connected editor for status or marketing demos.", z.object({ editSessionId, message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), ({ editSessionId, ...args }) => companion.call("notify", { ...args, editSessionId }), { destructiveHint: false, idempotentHint: false });
 
   register("create_project", "Create an empty project without changing the user's current browser view. Its dashboard card appears live when the dashboard is open.", z.object({ editSessionId, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
@@ -167,6 +179,7 @@ export async function createCarouselBotMcpServer(companion) {
   register("add_text", "Add a text layer. Choose a semantic role and a size within its readable range. Width is preserved while height is fitted automatically with safe padding; boxed text defaults to the preferred per-line background.", z.object({ ...targetSlide, ...textFields, text: z.string().min(1).max(4000) }).strict(), (args) => browserOperation(companion, "add_text", args), { destructiveHint: false });
   register("update_text", "Update one or more text layers. Every updated layer automatically keeps its width and refits its height with safe padding, so a render-fit-render loop is unnecessary.", z.object({ ...targetSlide, updates: z.array(z.object({ id, ...textFields }).strict()).min(1).max(100) }).strict(), (args) => browserOperation(companion, "update_text", args), { destructiveHint: true });
   register("fit_text_boxes", "Explicitly resize text boxes to their rendered content. add_text and update_text already fit height automatically; use mode=both only when you also want to shrink width.", z.object({ ...targetSlide, textIds: z.array(id).min(1).max(100), mode: z.enum(["height", "both"]).default("both") }).strict(), (args) => browserOperation(companion, "fit_text_boxes", args), { destructiveHint: true });
+  register("import_font", "Add one installed font face to a project using a localFontId returned by list_local_fonts. Exact face bytes remain on this computer and duplicate imports are reused.", z.object({ ...targetProject, projectId: id, localFontId: id }).strict(), (args) => browserOperation(companion, "import_font", args), { destructiveHint: false });
 
   register("import_asset", "Import a local image file into the active project's reusable asset library. Image bytes stay local.", z.object({ ...targetSlide, path: z.string().min(1), name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "import_asset", args), { destructiveHint: false });
   register("update_asset", "Rename a reusable image asset.", z.object({ ...targetProject, assetId: id, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_asset", args), { destructiveHint: true });
@@ -220,7 +233,7 @@ export async function createCarouselBotMcpServer(companion) {
       if (!definition?.mutating) throw new Error(`Tool cannot be batched: ${item.tool}`);
       const args = definition.inputSchema.parse(item.arguments);
       const { editSessionId: _ignored, ...toolArgs } = args;
-      items.push({ toolName: item.tool, operation: await prepareOperation(companion, item.tool, toolArgs), label: operationLabel(item.tool) });
+      items.push({ toolName: item.tool, operation: await prepareOperation(companion, item.tool, toolArgs, sessionId), label: operationLabel(item.tool) });
     }
     return companion.call("batch", { items, editSessionId: sessionId });
   }, { destructiveHint: true });

@@ -33,6 +33,7 @@ test("normalizes legacy projects in place without replacing existing records", (
   assert.equal(result[0].slides[0].texts[0], text);
   assert.equal(project.revision, 0);
   assert.deepEqual(project.assets, []);
+  assert.deepEqual(project.fonts, []);
   assert.equal(slide.imageScale, 1);
   assert.equal(slide.imageX, 0);
   assert.equal(slide.imageY, 0);
@@ -135,6 +136,9 @@ test("restores every legacy text default while preserving valid values", () => {
     align: "center",
     rotation: 0,
     z: 2,
+    fontFamily: "TikTok Sans",
+    fontWeight: 500,
+    fontStyle: "normal",
   });
   assert.equal(legacyBoxed.color, "#FFFFFF");
   assert.equal(legacyBoxed.outlineWidth, 12);
@@ -154,6 +158,9 @@ test("restores every legacy text default while preserving valid values", () => {
     align: "right",
     rotation: 25,
     z: 40,
+    fontFamily: "TikTok Sans",
+    fontWeight: 500,
+    fontStyle: "normal",
   });
   assert.equal(projects[0].slides[0].imageScale, 0);
 });

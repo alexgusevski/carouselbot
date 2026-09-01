@@ -3,7 +3,6 @@ import {
   OUTPUT_WIDTH,
   OUTPUT_HEIGHT,
   OUTLINE_RATIO,
-  TEXT_WEIGHT,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -43,6 +42,16 @@ import {
   getOverlayMetrics,
   overlayClipCss,
 } from "./editor-state.mjs";
+import {
+  isTextFontAvailable,
+  isTextFontLoaded,
+  textCanvasFont,
+  textCssFontFamily,
+  textFontLabel,
+  textFontStyle,
+  textFontVariationCss,
+  textFontWeight,
+} from "./project-fonts.mjs";
 
 export function formatDate(timestamp) {
   const date = new Date(timestamp);
@@ -323,20 +332,27 @@ export function renderOverlayBox(overlay) {
 }
 
 export function renderTextBox(text) {
+  const project = activeProject();
   const selected = isLayerSelected("text", text.id);
   const background = text.background || "white";
   const backgroundShape = text.backgroundShape || "lines";
   const color = textColor(text);
   const outlineColor = outlineColorFor(color);
+  const fontMissing = Boolean(text.fontId && !isTextFontAvailable(project, text));
+  const fontLoading = Boolean(text.fontId && !fontMissing && !isTextFontLoaded(project, text));
+  const fontFamily = escapeHtml(textCssFontFamily(project, text));
+  const fontWeight = textFontWeight(project, text);
+  const fontStyle = textFontStyle(project, text);
+  const fontVariations = escapeHtml(textFontVariationCss(project, text));
   return `
     <div
-      class="text-box ${selected ? "is-selected" : ""}"
+      class="text-box ${selected ? "is-selected" : ""} ${fontMissing ? "is-font-missing" : ""} ${fontLoading ? "is-font-loading" : ""}"
       data-text-id="${text.id}"
       data-style="${text.style}"
       data-background="${background}"
       data-box-shape="${backgroundShape}"
       data-align="${textAlignment(text)}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;--text-font-family:${fontFamily};--text-font-weight:${fontWeight};--text-font-style:${fontStyle};--text-font-variations:${fontVariations};"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -355,6 +371,7 @@ export function renderTextBox(text) {
       <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="se" aria-hidden="true"></span>
+      ${fontMissing ? `<span class="missing-font-badge" title="${escapeHtml(textFontLabel(project, text))} is unavailable">Missing font</span>` : ""}
     </div>
   `;
 }
@@ -406,6 +423,15 @@ export function renderInspector() {
           <div class="control-group">
             <label class="control-label" for="text-value">Words</label>
             <textarea id="text-value" class="text-input" maxlength="500" placeholder="Type something…">${escapeHtml(text.text)}</textarea>
+          </div>
+          <div class="control-group">
+            <label class="control-label" for="text-font">Font</label>
+            <select id="text-font" class="font-select" aria-label="Text font">
+              <option value="" ${text.fontId ? "" : "selected"}>TikTok Sans</option>
+              ${(activeProject()?.fonts || []).map((font) => `<option value="${escapeHtml(font.id)}" ${text.fontId === font.id ? "selected" : ""}>${escapeHtml(font.fullName || `${font.family} ${font.subfamily || ""}`.trim())}</option>`).join("")}
+              <option value="__add_local_font__">Add font from Mac…</option>
+            </select>
+            ${text.fontId && !isTextFontAvailable(activeProject(), text) ? `<p class="font-warning">${escapeHtml(textFontLabel(activeProject(), text))} is unavailable on this device.</p>` : ""}
           </div>
           <div class="control-group">
             <div class="control-label">Style</div>
@@ -504,6 +530,7 @@ export function updateStageImage(slide) {
 }
 
 export function updateTextBox(text) {
+  const project = activeProject();
   const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
   if (!box) return;
   box.style.left = `${text.x * 100}%`;
@@ -515,11 +542,27 @@ export function updateTextBox(text) {
   box.dataset.background = text.background || "white";
   box.dataset.boxShape = text.backgroundShape || "lines";
   box.dataset.align = textAlignment(text);
+  const fontMissing = Boolean(text.fontId && !isTextFontAvailable(project, text));
+  const fontLoading = Boolean(text.fontId && !fontMissing && !isTextFontLoaded(project, text));
+  box.classList.toggle("is-font-missing", fontMissing);
+  box.classList.toggle("is-font-loading", fontLoading);
+  let missingBadge = box.querySelector(".missing-font-badge");
+  if (fontMissing && !missingBadge) {
+    missingBadge = document.createElement("span");
+    missingBadge.className = "missing-font-badge";
+    missingBadge.textContent = "Missing font";
+    box.appendChild(missingBadge);
+  } else if (!fontMissing) missingBadge?.remove();
+  if (missingBadge) missingBadge.title = `${textFontLabel(project, text)} is unavailable`;
   const color = textColor(text);
   box.style.setProperty("--text-color", color);
   box.style.setProperty("--outline-color", outlineColorFor(color));
   box.style.setProperty("--box-text-line-height", `${BOX_TEXT_LINE_HEIGHT}em`);
   box.style.setProperty("--box-horizontal-padding", `${BOX_HORIZONTAL_PADDING}em`);
+  box.style.setProperty("--text-font-family", textCssFontFamily(project, text));
+  box.style.setProperty("--text-font-weight", String(textFontWeight(project, text)));
+  box.style.setProperty("--text-font-style", textFontStyle(project, text));
+  box.style.setProperty("--text-font-variations", textFontVariationCss(project, text));
   const insideVisual = box.querySelector(".text-visual--inside");
   if (insideVisual) insideVisual.style.clipPath = layerClipCss(text.x, text.y, text.width, text.height);
   box.querySelectorAll(".text-content-wrap").forEach((contentWrap) => {
@@ -529,7 +572,8 @@ export function updateTextBox(text) {
     content.style.textAlign = textAlignment(text);
     content.style.alignItems = textAlignment(text) === "left" ? "flex-start" : textAlignment(text) === "right" ? "flex-end" : "center";
     content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    paintTextContent(text, content, box);
+    if (fontLoading) content.textContent = text.text;
+    else paintTextContent(text, content, box);
   });
   const editor = box.querySelector(".text-editor");
   if (editor) {
@@ -543,7 +587,8 @@ export const measureCanvas = typeof document === "undefined" ? null : document.c
 export function measureFont(text) {
   const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
   const context = measureCanvas.getContext("2d");
-  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  context.font = textCanvasFont(activeProject(), text, fontSize);
+  if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(activeProject(), text);
   return { context, fontSize };
 }
 
@@ -604,8 +649,10 @@ export function paintTextContent(text, content, box) {
       node.setAttribute("stroke-linejoin", "round");
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("paint-order", "stroke fill");
-      node.setAttribute("font-family", "TikTok Sans, sans-serif");
-      node.setAttribute("font-weight", String(TEXT_WEIGHT));
+      node.setAttribute("font-family", textCssFontFamily(activeProject(), text));
+      node.setAttribute("font-weight", String(textFontWeight(activeProject(), text)));
+      node.setAttribute("font-style", textFontStyle(activeProject(), text));
+      node.style.fontVariationSettings = textFontVariationCss(activeProject(), text);
       node.setAttribute("font-size", `${fontSize}px`);
       node.textContent = line || " ";
       svg.appendChild(node);

@@ -34,9 +34,11 @@ import {
   putProject,
   deleteProjectFromDb,
 } from "./project-store.mjs";
+import { normalizeProjectFonts, ensureProjectFontsLoaded } from "./project-fonts.mjs";
 
 export function normalizeLoadedProjects(projects) {
   projects.forEach((project) => {
+    normalizeProjectFonts(project);
     if (!Number.isFinite(Number(project.revision))) project.revision = 0;
     if (!Array.isArray(project.assets)) project.assets = [];
     project.slides.forEach((slide) => {
@@ -98,12 +100,14 @@ export function createEditorProjects({
     const expectedRevision = Number(state.projects[index].revision) || 0;
     history.applying = true;
     state.projects[index] = { ...cloneProject(snapshot), revision: expectedRevision + 1, updatedAt: Date.now() };
+    normalizeLoadedProjects([state.projects[index]]);
     state.activeProjectId = snapshot.id;
     if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
       state.activeSlideId = state.projects[index].slides[0]?.id || null;
     }
     setLayerSelection(selectedLayerKeys());
     state.croppingOverlayId = null;
+    await ensureProjectFontsLoaded(state.projects[index]).catch(() => {});
     renderEditor();
     try {
       await putProject(state.projects[index], { expectedRevision });
@@ -143,6 +147,7 @@ export function createEditorProjects({
 
   async function importMigratedProject(project) {
     const incoming = structuredClone(project);
+    normalizeLoadedProjects([incoming]);
     const result = await new Promise((resolve, reject) => {
       const transaction = state.db.transaction(STORE_NAME, "readwrite");
       const store = transaction.objectStore(STORE_NAME);
@@ -173,6 +178,7 @@ export function createEditorProjects({
 
   async function reloadProjectFromDb(projectId, { render = true } = {}) {
     const latest = await getProjectFromDb(projectId);
+    if (latest) normalizeLoadedProjects([latest]);
     const index = state.projects.findIndex((project) => project.id === projectId);
     if (!latest) {
       if (index >= 0) state.projects.splice(index, 1);
@@ -188,7 +194,10 @@ export function createEditorProjects({
     } else state.projects.push(latest);
     if (render) {
       if (!state.activeProjectId) renderDashboard();
-      else if (state.activeProjectId === projectId) renderEditor();
+      else if (state.activeProjectId === projectId) {
+        await ensureProjectFontsLoaded(latest).catch(() => {});
+        renderEditor();
+      }
     }
     return latest;
   }
@@ -371,7 +380,7 @@ export function createEditorProjects({
 
   function createProject() {
     const now = Date.now();
-    const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [] };
+    const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [], fonts: [] };
     state.projects.push(project);
     openProject(project.id);
     putProject(project).catch((error) => {
@@ -461,7 +470,7 @@ export function createEditorProjects({
     dashboardRefreshPromise = getAllProjects()
       .then((projects) => {
         if (state.activeProjectId) return;
-        state.projects = projects;
+        state.projects = normalizeLoadedProjects(projects);
         renderDashboard();
         bindGlobalActions();
       })

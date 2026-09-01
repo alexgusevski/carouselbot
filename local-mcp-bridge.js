@@ -12,6 +12,7 @@ const LOCAL_MCP_POLL_INTERVAL_MS = 250;
 const LOCAL_MCP_NOTIFICATION_DURATION_MS = 6_300;
 const LOCAL_MCP_CONNECTION_KEYS = ["carouselbot:mcp-connected", "slide-studio:mcp-connected"];
 const LOCAL_MCP_EDITOR_KEYS = ["carouselbot:mcp-editor-id", "slide-studio:mcp-editor-id"];
+const LOCAL_MCP_FONT_PERMISSION_KEYS = ["carouselbot:local-fonts-enabled", "slide-studio:local-fonts-enabled"];
 const LOCAL_MCP_ACTIVITY_CHANNEL = "carouselbot:mcp-activity";
 const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/carouselbot/refs/heads/main/packages/mcp/README.md and install and configure the CarouselBot MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate CarouselBot immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
@@ -44,6 +45,20 @@ function localMcpForgetConnection() {
   } catch { /* The live connection can still be stopped. */ }
 }
 
+function localMcpLocalFontsWereEnabled() {
+  try {
+    return LOCAL_MCP_FONT_PERMISSION_KEYS.some((key) => localStorage.getItem(key) === "1");
+  } catch {
+    return false;
+  }
+}
+
+function localMcpRememberLocalFontsEnabled() {
+  try {
+    LOCAL_MCP_FONT_PERMISSION_KEYS.forEach((key) => localStorage.setItem(key, "1"));
+  } catch { /* Permission remains active for this browser session. */ }
+}
+
 function localMcpEditorId() {
   try {
     const existing = LOCAL_MCP_EDITOR_KEYS.map((key) => sessionStorage.getItem(key)).find(Boolean);
@@ -69,6 +84,7 @@ const localMcpBridgeState = {
   stopped: false,
   editorId: localMcpEditorId(),
   sessionToken: null,
+  localFontsEnabled: localMcpLocalFontsWereEnabled(),
   agents: [],
   editSessions: [],
   events: [],
@@ -395,12 +411,14 @@ async function localMcpHandshake() {
     pageOrigin: location.origin,
     visibilityState: document.visibilityState,
     hasFocus: document.hasFocus(),
+    localFontsEnabled: localMcpBridgeState.localFontsEnabled,
     state: window.carouselBotAgent.inspect({ includeAllProjects: false }),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `Bridge returned ${response.status}`);
   if (result.protocolVersion !== window.carouselBotAgent.protocolVersion) throw new Error("The website and local companion versions are incompatible. Update the npm package and reload this page.");
   localMcpBridgeState.sessionToken = result.sessionToken;
+  if (typeof result.localFontsEnabled === "boolean") localMcpBridgeState.localFontsEnabled = result.localFontsEnabled;
   localMcpBridgeState.agents = result.agents || [];
   localMcpBridgeState.editSessions = result.editSessions || [];
   localMcpBridgeState.connected = true;
@@ -535,6 +553,81 @@ async function localMcpFetchMedia(mediaId) {
   return { file: new File([blob], name, { type: blob.type }), name };
 }
 
+async function localMcpRequireConnectedForFonts() {
+  if (!localMcpBridgeState.connected) await localMcpConnectFromClick();
+  if (!localMcpBridgeState.connected || !localMcpBridgeState.sessionToken) {
+    throw new Error("Connect CarouselBot to the local companion before using installed fonts.");
+  }
+  if (!localMcpBridgeState.localFontsEnabled && localMcpLocalFontsWereEnabled()) {
+    const response = await localMcpSendJson("/fonts/enable", { editorId: localMcpBridgeState.editorId });
+    const result = await response.json().catch(() => ({}));
+    if (response.ok && result.enabled === true) localMcpBridgeState.localFontsEnabled = true;
+  }
+}
+
+async function localMcpJsonResult(response, fallbackMessage) {
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || fallbackMessage);
+  return result;
+}
+
+async function localMcpEnableLocalFonts() {
+  await localMcpRequireConnectedForFonts();
+  const response = await localMcpSendJson("/fonts/enable", { editorId: localMcpBridgeState.editorId });
+  const result = await localMcpJsonResult(response, "Could not enable installed fonts.");
+  if (result.enabled !== true) throw new Error("The local companion did not enable installed fonts.");
+  localMcpBridgeState.localFontsEnabled = true;
+  localMcpRememberLocalFontsEnabled();
+  return { enabled: true };
+}
+
+async function localMcpListLocalFonts({ query = "", limit, cursor, sort } = {}) {
+  await localMcpRequireConnectedForFonts();
+  const parameters = new URLSearchParams({ editorId: localMcpBridgeState.editorId });
+  if (query) parameters.set("query", String(query));
+  if (limit != null) parameters.set("limit", String(limit));
+  if (cursor) parameters.set("cursor", String(cursor));
+  if (sort) parameters.set("sort", String(sort));
+  const response = await localMcpRequest(`/fonts?${parameters}`);
+  return localMcpJsonResult(response, "Could not list installed fonts.");
+}
+
+function localMcpDecodedHeader(response, name, fallback = "") {
+  const value = response.headers.get(name);
+  if (!value) return fallback;
+  try { return decodeURIComponent(value); } catch { return fallback; }
+}
+
+async function localMcpReadFontResponse(response, fallbackName = "local-font") {
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(result.error || "Could not read the local font.");
+  }
+  const blob = await response.blob();
+  const name = localMcpDecodedHeader(response, "X-CarouselBot-Filename", fallbackName);
+  const localFontId = localMcpDecodedHeader(response, "X-CarouselBot-Local-Font-Id", "");
+  return { file: new File([blob], name, { type: blob.type }), name, localFontId };
+}
+
+async function localMcpFetchLocalFont(localFontId) {
+  await localMcpRequireConnectedForFonts();
+  const response = await localMcpRequest(`/fonts/${encodeURIComponent(localFontId)}?editorId=${encodeURIComponent(localMcpBridgeState.editorId)}`);
+  return localMcpReadFontResponse(response);
+}
+
+async function localMcpFetchFontMedia(fontMediaId) {
+  await localMcpRequireConnectedForFonts();
+  const response = await localMcpRequest(`/font-media/${encodeURIComponent(fontMediaId)}?editorId=${encodeURIComponent(localMcpBridgeState.editorId)}`);
+  return localMcpReadFontResponse(response);
+}
+
+async function localMcpMarkFontUsed(localFontId) {
+  await localMcpRequireConnectedForFonts();
+  const response = await localMcpSendJson("/fonts/use", { editorId: localMcpBridgeState.editorId, localFontId });
+  const result = await localMcpJsonResult(response, "Could not update local font usage.");
+  return result.font || null;
+}
+
 document.addEventListener("click", (event) => {
   const trigger = event.target.closest?.('[data-action="connect-agent"]');
   if (trigger) localMcpOpenModal(trigger);
@@ -561,7 +654,16 @@ window.carouselBotLocalMcpBridge = {
   connect: localMcpConnectFromClick,
   disconnect: localMcpDisconnectFromClick,
   fetchMedia: localMcpFetchMedia,
+  enableLocalFonts: localMcpEnableLocalFonts,
+  listLocalFonts: localMcpListLocalFonts,
+  fetchLocalFont: localMcpFetchLocalFont,
+  fetchFontMedia: localMcpFetchFontMedia,
+  markFontUsed: localMcpMarkFontUsed,
   notify: localMcpNotify,
-  getState: () => ({ ...localMcpBridgeState, lastFocusedElement: undefined }),
+  getState: () => ({
+    ...localMcpBridgeState,
+    localFontsEnabled: localMcpBridgeState.localFontsEnabled || localMcpLocalFontsWereEnabled(),
+    lastFocusedElement: undefined,
+  }),
 };
 window.slideStudioLocalMcpBridge = window.carouselBotLocalMcpBridge;

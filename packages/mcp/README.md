@@ -36,6 +36,20 @@ Browser reconnection is automatic. Retry transient disconnects; use `restart` on
 
 The companion binds only to `127.0.0.1`. There is no hosted relay: projects remain in browser IndexedDB and local images remain on the user's computer.
 
+## Installed fonts
+
+CarouselBot can use fonts installed on the same Mac as the companion. Open a text layer's font control once and choose **Allow local fonts**. The permission is stored in that browser; until it is granted, agent calls return `FONT_PERMISSION_REQUIRED`.
+
+Agents use project-scoped IDs rather than CSS family guesses:
+
+```text
+list_local_fonts({ query: "Didot" })
+import_font({ editSessionId, projectId, localFontId })
+add_text({ editSessionId, projectId, slideId, text, fontId })
+```
+
+`list_project_fonts` reports faces already embedded in a project. `add_text` and `update_text` accept the returned `fontId`, plus optional `fontWeight`, `fontStyle`, and variable-axis settings. The companion returns opaque local font IDs and never exposes font paths. A selected face is transferred over the authenticated loopback connection, persisted only in the browser's local IndexedDB project, and loaded before fitting or rendering. If the exact bytes are missing or invalid, rendering reports `FONT_UNAVAILABLE` instead of silently using a fallback.
+
 Any MCP client can launch it with:
 
 ```bash
