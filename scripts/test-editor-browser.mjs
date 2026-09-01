@@ -936,7 +936,7 @@ try {
     "A missing deep route did not return to the dashboard with feedback.",
   );
 
-  const filmstripProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Filmstrip preview project' })`);
+  const filmstripProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Filmstrip preview project with an intentionally long title' })`);
   const filmstripSlideIds = await callPageFunction(cdp, `async function(projectId) {
     const colors = ['#FE2C55', '#25F4EE', '#25282E', '#F4C95D', '#8A5CF5', '#3DBE78', '#F28C45', '#496DDB'];
     const ids = [];
@@ -958,7 +958,13 @@ try {
     const slides = [...(strip?.querySelectorAll('[data-project-preview-slide-id]') || [])];
     const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
     const next = shell?.querySelector('[data-project-preview-direction="next"]');
+    const meta = card?.querySelector('.project-meta');
+    const title = meta?.querySelector('strong');
+    const details = meta?.lastElementChild;
     if (!card || !shell || !strip || slides.length !== 8 || slides.some((slide) => !slide.querySelector('img'))) return false;
+    const stripRect = strip.getBoundingClientRect();
+    const titleRect = title?.getBoundingClientRect();
+    const detailsRect = details?.getBoundingClientRect();
     return {
       slideIds: slides.map((slide) => slide.dataset.projectPreviewSlideId),
       ratios: slides.map((slide) => {
@@ -976,6 +982,12 @@ try {
       buttonTypes: [previous?.type, next?.type],
       labels: [previous?.getAttribute('aria-label'), next?.getAttribute('aria-label')],
       touchTargets: [previous, next].map((button) => Number.parseFloat(getComputedStyle(button).width)),
+      footerGap: titleRect?.top - stripRect.bottom,
+      footerSameRow: Math.abs((titleRect?.bottom || 0) - (detailsRect?.bottom || 0)) < 2,
+      titleTruncated: title && title.scrollWidth > title.clientWidth,
+      detailsWhiteSpace: details && getComputedStyle(details).whiteSpace,
+      detailsWrapped: details && details.scrollHeight > details.clientHeight + 1,
+      metaOverflows: meta && meta.scrollWidth > meta.clientWidth + 1,
     };
   })()`), "The dashboard project filmstrip did not render all slide thumbnails.");
   if (
@@ -988,8 +1000,15 @@ try {
     || !filmstrip.controlsOutsideLink
     || !filmstrip.cardLabel?.includes("8 slides")
     || filmstrip.buttonTypes.some((type) => type !== "button")
-    || filmstrip.labels.some((label) => !label?.includes("Filmstrip preview project slide previews"))
+    || filmstrip.labels.some((label) => !label?.includes("Filmstrip preview project") || !label.includes("slide previews"))
     || filmstrip.touchTargets.some((size) => size < 44)
+    || filmstrip.footerGap < 8
+    || filmstrip.footerGap > 24
+    || !filmstrip.footerSameRow
+    || !filmstrip.titleTruncated
+    || filmstrip.detailsWhiteSpace !== "nowrap"
+    || filmstrip.detailsWrapped
+    || filmstrip.metaOverflows
   ) {
     throw new Error(`Dashboard project filmstrip markup was incorrect: ${JSON.stringify(filmstrip)}`);
   }
@@ -1055,14 +1074,29 @@ try {
     strip.scrollLeft = 0;
     strip.dispatchEvent(new Event('scroll'));
     const next = shell.querySelector('[data-project-preview-direction="next"]');
+    const meta = shell.querySelector('.project-meta');
+    const title = meta?.querySelector('strong');
+    const details = meta?.lastElementChild;
     return !next.hidden ? {
       viewportWidth: innerWidth,
       documentWidth: document.documentElement.scrollWidth,
       cardWidth: shell.getBoundingClientRect().width,
       overflow: strip.scrollWidth > strip.clientWidth + 2,
+      titleTruncated: title && title.scrollWidth > title.clientWidth,
+      detailsWhiteSpace: details && getComputedStyle(details).whiteSpace,
+      detailsWrapped: details && details.scrollHeight > details.clientHeight + 1,
+      metaOverflows: meta && meta.scrollWidth > meta.clientWidth + 1,
     } : false;
   })()`), "The project filmstrip controls did not adapt to the narrow dashboard layout.");
-  if (narrowFilmstrip.documentWidth > narrowFilmstrip.viewportWidth + 1 || !narrowFilmstrip.overflow || narrowFilmstrip.cardWidth > narrowFilmstrip.viewportWidth) {
+  if (
+    narrowFilmstrip.documentWidth > narrowFilmstrip.viewportWidth + 1
+    || !narrowFilmstrip.overflow
+    || narrowFilmstrip.cardWidth > narrowFilmstrip.viewportWidth
+    || !narrowFilmstrip.titleTruncated
+    || narrowFilmstrip.detailsWhiteSpace !== "nowrap"
+    || narrowFilmstrip.detailsWrapped
+    || narrowFilmstrip.metaOverflows
+  ) {
     throw new Error(`The narrow project filmstrip caused page-level overflow: ${JSON.stringify(narrowFilmstrip)}`);
   }
   await cdp.send("Emulation.clearDeviceMetricsOverride");
