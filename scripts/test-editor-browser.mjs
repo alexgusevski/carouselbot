@@ -965,6 +965,8 @@ try {
     const stripRect = strip.getBoundingClientRect();
     const titleRect = title?.getBoundingClientRect();
     const detailsRect = details?.getBoundingClientRect();
+    const stripStyle = getComputedStyle(strip);
+    const slideStyles = slides.map((slide) => getComputedStyle(slide));
     return {
       slideIds: slides.map((slide) => slide.dataset.projectPreviewSlideId),
       ratios: slides.map((slide) => {
@@ -988,6 +990,11 @@ try {
       detailsWhiteSpace: details && getComputedStyle(details).whiteSpace,
       detailsWrapped: details && details.scrollHeight > details.clientHeight + 1,
       metaOverflows: meta && meta.scrollWidth > meta.clientWidth + 1,
+      stripGap: Number.parseFloat(stripStyle.gap),
+      stripPadding: Number.parseFloat(stripStyle.paddingTop),
+      slideRadii: slideStyles.map((style) => Number.parseFloat(style.borderTopLeftRadius)),
+      dividerWidths: slideStyles.map((style) => Number.parseFloat(style.borderRightWidth)),
+      dividerColors: slideStyles.map((style) => style.borderRightColor),
     };
   })()`), "The dashboard project filmstrip did not render all slide thumbnails.");
   if (
@@ -1009,6 +1016,12 @@ try {
     || filmstrip.detailsWhiteSpace !== "nowrap"
     || filmstrip.detailsWrapped
     || filmstrip.metaOverflows
+    || filmstrip.stripGap !== 0
+    || filmstrip.stripPadding !== 0
+    || filmstrip.slideRadii.some((radius) => radius !== 0)
+    || filmstrip.dividerWidths.slice(0, -1).some((width) => width !== 1)
+    || filmstrip.dividerWidths.at(-1) !== 0
+    || filmstrip.dividerColors.slice(0, -1).some((color) => color !== "rgb(255, 255, 255)")
   ) {
     throw new Error(`Dashboard project filmstrip markup was incorrect: ${JSON.stringify(filmstrip)}`);
   }
@@ -1146,9 +1159,24 @@ try {
     const card = document.querySelector('.folder-card[data-folder-path="/native-folder"]');
     if (!card || card.querySelectorAll('.folder-preview-slot').length !== 8 || !card.querySelector('.folder-meta-name svg')) return false;
     if ([...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')) return false;
-    return { href: card.getAttribute('href'), name: card.querySelector('.folder-meta-name')?.textContent.trim() };
+    const preview = card.querySelector('.folder-preview');
+    const slots = [...card.querySelectorAll('.folder-preview-slot')];
+    const previewStyle = getComputedStyle(preview);
+    return {
+      href: card.getAttribute('href'),
+      name: card.querySelector('.folder-meta-name')?.textContent.trim(),
+      gap: Number.parseFloat(previewStyle.gap),
+      padding: Number.parseFloat(previewStyle.paddingTop),
+      slotRadii: slots.map((slot) => Number.parseFloat(getComputedStyle(slot).borderTopLeftRadius)),
+    };
   })()`), "Moving a project into a new folder did not render its eight-slot folder card.");
-  if (nativeFolderCard.name !== "/native-folder" || nativeFolderCard.href !== "/folders/native-folder") throw new Error(`Folder card metadata was incorrect: ${JSON.stringify(nativeFolderCard)}`);
+  if (
+    nativeFolderCard.name !== "/native-folder"
+    || nativeFolderCard.href !== "/folders/native-folder"
+    || nativeFolderCard.gap !== 6
+    || nativeFolderCard.padding !== 8
+    || nativeFolderCard.slotRadii.some((radius) => radius !== 7)
+  ) throw new Error(`Folder card metadata or preview styling was incorrect: ${JSON.stringify(nativeFolderCard)}`);
   await waitFor(
     () => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/native-folder"] [data-project-cover-id="${folderUiProject.projectId}"] img[data-composite-cover="true"]'))`),
     "The folder card did not compose the first slide into its mosaic.",
