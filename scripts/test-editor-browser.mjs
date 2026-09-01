@@ -152,6 +152,19 @@ async function evaluate(cdp, expression, { userGesture = false } = {}) {
   return result.result?.value;
 }
 
+async function callPageFunction(cdp, functionDeclaration, args = []) {
+  const globalObject = await cdp.send("Runtime.evaluate", { expression: "globalThis" });
+  const result = await cdp.send("Runtime.callFunctionOn", {
+    objectId: globalObject.result.objectId,
+    functionDeclaration,
+    arguments: args.map((value) => ({ value })),
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || "Browser function call failed");
+  return result.result?.value;
+}
+
 let cdp;
 const runtimeErrors = [];
 try {
@@ -924,12 +937,14 @@ try {
   );
 
   const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
-  const folderUiSlide = await evaluate(cdp, `window.carouselBotAgent.execute({
-    type: 'slide.add',
-    projectId: ${JSON.stringify(folderUiProject.projectId)},
-    name: 'Folder cover',
-    backgroundColor: '#25F4EE'
-  })`);
+  const folderUiSlide = await callPageFunction(cdp, `function(projectId) {
+    return this.carouselBotAgent.execute({
+      type: 'slide.add',
+      projectId,
+      name: 'Folder cover',
+      backgroundColor: '#25F4EE'
+    });
+  }`, [folderUiProject.projectId]);
   if (!folderUiSlide?.createdSlideId) throw new Error(`Could not create the folder UI cover slide: ${JSON.stringify(folderUiSlide)}`);
   await waitFor(
     () => evaluate(cdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
@@ -978,10 +993,16 @@ try {
     return true;
   })()`);
   await waitFor(
-    () => evaluate(cdp, `location.pathname === '/' && !document.querySelector('.folder-card[data-folder-path="/native-folder"]') && window.carouselBotAgent.inspect().projects.find((item) => item.id === ${JSON.stringify(folderUiProject.projectId)})?.folderPath === null`),
+    () => callPageFunction(cdp, `function(projectId) {
+      return location.pathname === '/'
+        && !document.querySelector('.folder-card[data-folder-path="/native-folder"]')
+        && this.carouselBotAgent.inspect().projects.find((item) => item.id === projectId)?.folderPath === null;
+    }`, [folderUiProject.projectId]),
     "Moving the final project out did not remove the implicit folder and return to the dashboard.",
   );
-  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: ${JSON.stringify(folderUiProject.projectId)} })`);
+  await callPageFunction(cdp, `function(projectId) {
+    return this.carouselBotAgent.execute({ type: 'project.delete', projectId });
+  }`, [folderUiProject.projectId]);
 
   const deletionProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Dashboard deletion check' })`);
   await waitFor(
