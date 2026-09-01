@@ -8,7 +8,9 @@ npx carouselbot@latest setup
 
 Setup pins that exact package version in the generated MCP configuration, refreshes
 the agent skill, and automatically upgrades an older shared daemon. Rerun the
-command when you intentionally want to update.
+command when you intentionally want to update. When setup runs inside a named
+Hermes profile, it also installs the skill into that profile's active
+HERMES_HOME and non-interactively enables the discovered CarouselBot tools.
 
 For non-interactive agent setup, select the current client explicitly:
 
