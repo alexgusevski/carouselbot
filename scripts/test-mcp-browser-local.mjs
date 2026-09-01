@@ -575,7 +575,10 @@ try {
     };
   }
   await tool("delete_layers", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, layerIds: [fontProbe.createdTextId] });
-  await waitFor(() => evaluate(cdp, `${JSON.stringify(fontProbe.createdTextId)} !== "" && ![...document.querySelectorAll(".text-box")].some((item) => item.dataset.textId === ${JSON.stringify(fontProbe.createdTextId)})`), "The temporary local-font probe was not removed.");
+  await waitFor(async () => {
+    const visibleTextIds = await evaluate(cdp, `[...document.querySelectorAll(".text-box")].map((item) => item.dataset.textId)`);
+    return Boolean(fontProbe.createdTextId) && !visibleTextIds.includes(fontProbe.createdTextId);
+  }, "The temporary local-font probe was not removed.");
 
   const addedText = (await tool("add_text", {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
