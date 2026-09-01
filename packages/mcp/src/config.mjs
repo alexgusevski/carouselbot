@@ -8,6 +8,26 @@ export const PACKAGE_JSON = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.
 export const PACKAGE_NAME = PACKAGE_JSON.name;
 export const PACKAGE_VERSION = PACKAGE_JSON.version;
 export const PROTOCOL_VERSION = 3;
+// The browser protocol changes only when the hosted editor and companion can no
+// longer communicate. Internal MCP-to-daemon actions evolve independently, so
+// advertise them explicitly instead of treating a matching browser protocol as
+// proof that two installed package versions are compatible.
+export const DAEMON_API_VERSION = 1;
+export const DAEMON_INTERNAL_ACTIONS = Object.freeze([
+  "batch",
+  "begin_edit_session",
+  "browser",
+  "end_edit_session",
+  "list_edit_sessions",
+  "list_editors",
+  "list_local_fonts",
+  "list_recent_operations",
+  "notify",
+  "prepare_font",
+  "prepare_media",
+  "select_editor",
+  "write_export",
+]);
 export const BRIDGE_HOST = "127.0.0.1";
 export const BRIDGE_PORT = Number(process.env.CAROUSELBOT_BRIDGE_PORT || process.env.SLIDE_STUDIO_BRIDGE_PORT) || 43117;
 export const BRIDGE_URL = `http://${BRIDGE_HOST}:${BRIDGE_PORT}`;

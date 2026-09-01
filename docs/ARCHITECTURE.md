@@ -77,6 +77,8 @@ window.slideStudioAgent
 
 The local MCP bridge waits for the readiness promise before processing operations.
 
+The stdio MCP process and shared loopback daemon have independent lifetimes. The daemon health response advertises its internal action set and daemon API version; a newly launched MCP process replaces a daemon that cannot implement its tool surface before registering with the host. Existing MCP processes and remembered browser connections reconnect to the replacement automatically. Package setup additionally upgrades a compatible-but-older daemon so installed agent skills, schemas, and daemon code move forward together. Browser `protocolVersion` remains a separate compatibility contract and must not be used as a proxy for MCP-to-daemon capabilities.
+
 ### Local-font companion boundary
 
 Installed fonts are an optional capability of the loopback MCP companion. After explicit permission in the editor, the companion indexes supported macOS font directories, parses each face (including every TTC face), and returns only stable opaque `localFontId` metadata. Filesystem paths, index fingerprints, and raw bytes never appear in MCP or inspection responses.

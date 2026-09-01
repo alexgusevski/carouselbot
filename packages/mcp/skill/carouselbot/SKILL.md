@@ -16,7 +16,9 @@ Before using any browser or making edits, call `list_editors`. A registered edit
 
 Browser reconnection is automatic. After `EDITOR_DISCONNECTED`, `EDITOR_RELOADED`, a dropped browser request, or an empty `list_editors` result that follows a working connection, wait briefly and retry `list_editors` several times. Do not restart the companion for a transient browser disconnect: restarting invalidates every browser session and makes recovery slower. If the editor does not return, ask the user to keep or reload the real editor tab; preserve completed project work and begin a new edit session after it reconnects.
 
-Run `npx -y carouselbot@latest restart` only when the MCP explicitly reports an outdated companion protocol or `doctor` reports that the daemon itself is unhealthy. After a necessary restart, ask the user to reload their real editor tab and retry `list_editors`.
+The MCP checks the shared daemon's actual internal capabilities before advertising tools. It automatically replaces an outdated daemon, keeps the MCP process alive, and lets the remembered browser connection reconnect. Do not ask the user to reload MCP or restart Hermes for daemon recovery.
+
+If an advertised tool nevertheless returns `UNSUPPORTED_INTERNAL_ACTION` or `Unknown internal action`, stop after that first failure; do not fan out parallel retries that can trip the host's whole-server circuit breaker. Retry `list_editors` once so automatic recovery can finish, then retry the original tool once. If recovery itself reports that no compatible companion could start, run `npx -y carouselbot@latest doctor` and then `npx -y carouselbot@latest restart` once. Only ask the user to reload their real editor tab if it does not reconnect automatically. Never restart the companion for a transient browser disconnect.
 
 If the native MCP tools are not registered in the current session, do not stop or ask for a restart. Use the same validated tools through the local CLI fallback:
 
@@ -27,7 +29,7 @@ npx -y carouselbot@latest call list_tools --json '{"names":["create_project","mo
 npx -y carouselbot@latest call create_project --json '{"name":"My presentation","folderPath":"/campaigns"}'
 ```
 
-Every tool accepts the same JSON arguments as MCP. Use `list_tools` without arguments for compact discovery or pass `{"names":[...]}` to retrieve selected schemas. Prefer `apply_operations` for batches. `render_slide` writes its returned image to a temporary local `previewPath`; inspect that file and remove the temporary directory after the review. Hermes can load the native tools in place with `/reload-mcp` and refresh this skill with `/reload-skills`.
+Every tool accepts the same JSON arguments as MCP. Use `list_tools` without arguments for compact discovery or pass `{"names":[...]}` to retrieve selected schemas. Prefer `apply_operations` for batches. `render_slide` writes its returned image to a temporary local `previewPath`; inspect that file and remove the temporary directory after the review. A daemon replacement never requires `/reload-mcp`. Hermes only needs `/reload-mcp` when a package update adds entirely new native tool names to an already-running agent session; use the CLI fallback immediately in that rare case. A newly installed skill becomes active in the next session or after `/reload-skills`, but correctness must never depend on the user doing that manually.
 
 Before the first mutation in a task, call `get_design_guidance`. The server intentionally rejects mutations until this guidance has been read.
 

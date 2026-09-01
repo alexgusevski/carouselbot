@@ -100,6 +100,23 @@ async function tool(name, args = {}) {
   return result;
 }
 
+async function restartCompanion() {
+  const child = spawn(process.execPath, ["packages/mcp/src/cli.mjs", "restart"], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const status = await new Promise((resolve) => child.once("exit", resolve));
+  if (status !== 0) throw new Error(`Companion restart failed: ${stderr || stdout || `exit ${status}`}`);
+  return JSON.parse(stdout);
+}
+
 const chrome = spawn(chromePath, [
   "--headless=new", "--disable-background-networking", "--disable-component-update", "--disable-breakpad",
   "--disable-crash-reporter", "--noerrdialogs", "--no-first-run",
@@ -347,6 +364,13 @@ try {
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
+  const restartedCompanion = await restartCompanion();
+  if (!restartedCompanion.daemon?.previousPid || restartedCompanion.daemon.previousPid === restartedCompanion.daemon.pid) throw new Error(`Companion restart did not replace the daemon: ${JSON.stringify(restartedCompanion)}`);
+  await waitFor(async () => {
+    const editors = (await tool("list_editors")).structuredContent.editors;
+    const bridgeConnected = await evaluate(cdp, `window.carouselBotLocalMcpBridge.getState().connected`);
+    return bridgeConnected && editors.some((editor) => editor.id === initialConnection.editorId);
+  }, "The existing MCP process and browser did not reconnect after the daemon was replaced.");
   await tool("get_design_guidance");
   const connectedEditors = (await tool("list_editors")).structuredContent.editors;
   const testEditor = connectedEditors.find((editor) => editor.id === initialConnection.editorId);
@@ -803,7 +827,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 46, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, reconnectAfterDaemonReplacement: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 46, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

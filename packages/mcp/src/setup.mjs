@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { EDITOR_URL, PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION } from "./config.mjs";
+import { companionUpgrade } from "./companion.mjs";
 
 const supported = ["claude", "codex", "hermes", "opencode", "openclaw"];
 const serverName = "carouselbot";
@@ -98,9 +99,10 @@ export async function runSetup(arguments_) {
     else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);
   }
   const skillTargets = await installSkill();
-  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${EDITOR_URL} in your normal local browser and click Connect AI. Do not use a sandboxed agent browser.\n`);
+  const companion = await companionUpgrade();
+  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\nCompanion: ${companion.version} (${companion.upgraded ? "upgraded automatically" : "already current"})\n\nOpen ${EDITOR_URL} in your normal local browser and click Connect AI. Do not use a sandboxed agent browser.\n`);
   process.stdout.write(`First connection check (no browser automation): npx -y ${specifier} call list_editors\n`);
-  if (clients.includes("hermes")) process.stdout.write("Hermes can also refresh native tools in place with /reload-mcp and /reload-skills.\n");
+  if (clients.includes("hermes")) process.stdout.write("The companion and browser reconnect automatically. Hermes only needs /reload-mcp when adding entirely new native tool names to an already-running session; the CLI fallback remains available immediately.\n");
   if (clients.includes("claude")) process.stdout.write("Claude may require a new session for native MCP registration; use the CLI fallback immediately instead of stopping.\n");
   if (clients.includes("opencode")) process.stdout.write("OpenCode currently uses its JSON config; merge the snippet printed above into opencode.json.\n");
   return { clients, configured, skillTargets };
