@@ -936,6 +936,154 @@ try {
     "A missing deep route did not return to the dashboard with feedback.",
   );
 
+  const filmstripProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Filmstrip preview project' })`);
+  const filmstripSlideIds = await callPageFunction(cdp, `async function(projectId) {
+    const colors = ['#FE2C55', '#25F4EE', '#25282E', '#F4C95D', '#8A5CF5', '#3DBE78', '#F28C45', '#496DDB'];
+    const ids = [];
+    for (const [index, backgroundColor] of colors.entries()) {
+      const result = await this.carouselBotAgent.execute({
+        type: 'slide.add',
+        projectId,
+        name: 'Preview ' + (index + 1),
+        backgroundColor,
+      });
+      ids.push(result.createdSlideId);
+    }
+    return ids;
+  }`, [filmstripProject.projectId]);
+  const filmstrip = await waitFor(() => evaluate(cdp, `(() => {
+    const card = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]');
+    const shell = card?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    const slides = [...(strip?.querySelectorAll('[data-project-preview-slide-id]') || [])];
+    const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
+    const next = shell?.querySelector('[data-project-preview-direction="next"]');
+    if (!card || !shell || !strip || slides.length !== 8 || slides.some((slide) => !slide.querySelector('img'))) return false;
+    return {
+      slideIds: slides.map((slide) => slide.dataset.projectPreviewSlideId),
+      ratios: slides.map((slide) => {
+        const rect = slide.getBoundingClientRect();
+        return rect.width / rect.height;
+      }),
+      scrollLeft: strip.scrollLeft,
+      maxScrollLeft: strip.scrollWidth - strip.clientWidth,
+      overflow: strip.scrollWidth > strip.clientWidth + 2,
+      renderedCount: slides.filter((slide) => slide.querySelector('img.thumb-rendered')).length,
+      previousHidden: previous?.hidden,
+      nextHidden: next?.hidden,
+      controlsOutsideLink: !card.contains(previous) && !card.contains(next),
+      cardLabel: card.getAttribute('aria-label'),
+      buttonTypes: [previous?.type, next?.type],
+      labels: [previous?.getAttribute('aria-label'), next?.getAttribute('aria-label')],
+      touchTargets: [previous, next].map((button) => Number.parseFloat(getComputedStyle(button).width)),
+    };
+  })()`), "The dashboard project filmstrip did not render all slide thumbnails.");
+  if (
+    JSON.stringify(filmstrip.slideIds) !== JSON.stringify(filmstripSlideIds)
+    || filmstrip.ratios.some((ratio) => Math.abs(ratio - (9 / 16)) > 0.02)
+    || !filmstrip.overflow
+    || filmstrip.renderedCount < 1
+    || filmstrip.previousHidden !== true
+    || filmstrip.nextHidden !== false
+    || !filmstrip.controlsOutsideLink
+    || !filmstrip.cardLabel?.includes("8 slides")
+    || filmstrip.buttonTypes.some((type) => type !== "button")
+    || filmstrip.labels.some((label) => !label?.includes("Filmstrip preview project slide previews"))
+    || filmstrip.touchTargets.some((size) => size < 44)
+  ) {
+    throw new Error(`Dashboard project filmstrip markup was incorrect: ${JSON.stringify(filmstrip)}`);
+  }
+
+  await callPageFunction(cdp, `function(projectId, slideId) {
+    return this.carouselBotAgent.execute({ type: 'slide.update', projectId, slideId, backgroundColor: '#0A0A0A' });
+  }`, [filmstripProject.projectId, filmstripSlideIds[5]]);
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell').querySelector('[data-project-preview-direction="next"]').click()`);
+  const filmstripAfterNext = await waitFor(() => evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
+    const revealedSlide = strip?.querySelector('[data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[5])}] img.thumb-rendered');
+    return strip?.scrollLeft > 2 && previous && !previous.hidden && revealedSlide
+      ? { pathname: location.pathname, scrollLeft: strip.scrollLeft }
+      : false;
+  })()`), "The project filmstrip did not scroll right or reveal its previous control.");
+  if (filmstripAfterNext.pathname !== "/") throw new Error(`The filmstrip control opened the project: ${JSON.stringify(filmstripAfterNext)}`);
+  const revealedPixel = await evaluate(cdp, `(async () => {
+    const image = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[5])}] img.thumb-rendered');
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0, 1, 1);
+    return [...context.getImageData(0, 0, 1, 1).data];
+  })()`);
+  if (revealedPixel.some((channel, index) => Math.abs(channel - [10, 10, 10, 255][index]) > 3)) {
+    throw new Error(`A stale off-screen render replaced the updated filmstrip slide: ${JSON.stringify(revealedPixel)}`);
+  }
+
+  const filmstripAtEnd = await evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell');
+    const strip = shell.querySelector('[data-project-preview-strip]');
+    const next = shell.querySelector('[data-project-preview-direction="next"]');
+    next.focus();
+    strip.scrollLeft = strip.scrollWidth;
+    strip.dispatchEvent(new Event('scroll'));
+    const previous = shell.querySelector('[data-project-preview-direction="previous"]');
+    return { scrollLeft: strip.scrollLeft, maxScrollLeft: strip.scrollWidth - strip.clientWidth, previousHidden: previous.hidden, nextHidden: next.hidden, focusDirection: document.activeElement?.dataset.projectPreviewDirection };
+  })()`);
+  if (Math.abs(filmstripAtEnd.scrollLeft - filmstripAtEnd.maxScrollLeft) > 2 || filmstripAtEnd.previousHidden || !filmstripAtEnd.nextHidden || filmstripAtEnd.focusDirection !== "previous") {
+    throw new Error(`The project filmstrip controls did not reflect its final edge: ${JSON.stringify(filmstripAtEnd)}`);
+  }
+  await waitFor(
+    () => evaluate(cdp, `Boolean(document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds.at(-1))}] img.thumb-rendered'))`),
+    "The project filmstrip did not render the newly revealed final slide.",
+  );
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell').querySelector('[data-project-preview-direction="previous"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `(() => {
+      const strip = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell')?.querySelector('[data-project-preview-strip]');
+      return strip && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 2;
+    })()`),
+    "The project filmstrip did not scroll back to the left.",
+  );
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 375, height: 900, deviceScaleFactor: 1, mobile: false });
+  const narrowFilmstrip = await waitFor(() => evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    if (!strip) return false;
+    strip.scrollLeft = 0;
+    strip.dispatchEvent(new Event('scroll'));
+    const next = shell.querySelector('[data-project-preview-direction="next"]');
+    return !next.hidden ? {
+      viewportWidth: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      cardWidth: shell.getBoundingClientRect().width,
+      overflow: strip.scrollWidth > strip.clientWidth + 2,
+    } : false;
+  })()`), "The project filmstrip controls did not adapt to the narrow dashboard layout.");
+  if (narrowFilmstrip.documentWidth > narrowFilmstrip.viewportWidth + 1 || !narrowFilmstrip.overflow || narrowFilmstrip.cardWidth > narrowFilmstrip.viewportWidth) {
+    throw new Error(`The narrow project filmstrip caused page-level overflow: ${JSON.stringify(narrowFilmstrip)}`);
+  }
+  await cdp.send("Emulation.clearDeviceMetricsOverride");
+  await waitFor(() => evaluate(cdp, "innerWidth > 1000"), "The browser viewport did not return to its desktop size.");
+  const nonOverflowingPreview = await waitFor(() => evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id=${JSON.stringify(projectId)}]')?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    if (!strip) return false;
+    const value = {
+      overflow: strip.scrollWidth > strip.clientWidth + 2,
+      visibleControls: [...shell.querySelectorAll('[data-project-preview-direction]')].filter((button) => !button.hidden).length,
+    };
+    return !value.overflow && value.visibleControls === 0 ? value : false;
+  })()`), "A non-overflowing project preview did not hide its scroll controls after resizing.");
+  if (!nonOverflowingPreview || nonOverflowingPreview.overflow || nonOverflowingPreview.visibleControls !== 0) {
+    throw new Error(`A non-overflowing project preview showed scroll controls: ${JSON.stringify(nonOverflowingPreview)}`);
+  }
+  await callPageFunction(cdp, `function(projectId) {
+    return this.carouselBotAgent.execute({ type: 'project.delete', projectId });
+  }`, [filmstripProject.projectId]);
+
   const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
   const folderUiSlide = await callPageFunction(cdp, `function(projectId) {
     return this.carouselBotAgent.execute({
@@ -1065,6 +1213,7 @@ try {
     nativeSlideLifecycle: true,
     nativeOutputActions: true,
     nativeProjectDeletion: true,
+    dashboardProjectFilmstrip: true,
     nativeFolderOrganization: true,
     deepRouteReload: true,
     missingRouteFallback: true,

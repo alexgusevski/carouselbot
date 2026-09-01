@@ -83,9 +83,12 @@ export function createEditorProjects({
   scheduleThumbnailRefresh,
   clearProjectCover,
   clearSlideThumbnail,
+  pruneSlideThumbnails,
 }) {
   let migrationModalDismissed = false;
   let dashboardRefreshPromise = null;
+  let dashboardPreviewResizeObserver = null;
+  let dashboardPreviewResizeHandler = null;
   let pendingSaveProject = null;
   let saveInFlight = null;
   const dirtySaveProjects = new Map();
@@ -224,7 +227,9 @@ export function createEditorProjects({
     dirtySaveProjects.delete(projectId);
     if (latest) normalizeLoadedProjects([latest]);
     const index = state.projects.findIndex((project) => project.id === projectId);
+    const previous = index >= 0 ? state.projects[index] : null;
     if (!latest) {
+      previous?.slides.forEach((slide) => clearSlideThumbnail(slide.id, projectId));
       if (index >= 0) state.projects.splice(index, 1);
       clearProjectCover(projectId);
       if (state.activeProjectId === projectId) {
@@ -234,6 +239,8 @@ export function createEditorProjects({
         updateBrowserRoute("/", "replace");
       }
     } else if (index >= 0) {
+      const latestSlideIds = new Set(latest.slides.map((slide) => slide.id));
+      previous.slides.filter((slide) => !latestSlideIds.has(slide.id)).forEach((slide) => clearSlideThumbnail(slide.id, projectId));
       state.projects[index] = latest;
       if (state.activeProjectId === projectId && !latest.slides.some((slide) => slide.id === state.activeSlideId)) state.activeSlideId = latest.slides[0]?.id || null;
     } else state.projects.push(latest);
@@ -729,7 +736,7 @@ export function createEditorProjects({
       try {
         await flushPendingSave();
         await deleteProjectFromDb(projectId, { expectedRevision: Number(project.revision) || 0 });
-        project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
+        project.slides.forEach((slide) => clearSlideThumbnail(slide.id, project.id));
         clearProjectCover(projectId);
         state.slideRailScrollPositions.delete(projectId);
         state.projects = state.projects.filter((item) => item.id !== projectId);
@@ -806,8 +813,61 @@ export function createEditorProjects({
     });
   }
 
+  function clearDashboardPreviewResizeTracking() {
+    dashboardPreviewResizeObserver?.disconnect();
+    dashboardPreviewResizeObserver = null;
+    if (dashboardPreviewResizeHandler) window.removeEventListener("resize", dashboardPreviewResizeHandler);
+    dashboardPreviewResizeHandler = null;
+  }
+
   function bindDashboardEvents() {
     bindGlobalActions();
+    clearDashboardPreviewResizeTracking();
+
+    const previewStrips = [...app.querySelectorAll("[data-project-preview-strip]")];
+    const syncPreviewControls = (strip) => {
+      const shell = strip.closest(".project-card-shell");
+      if (!shell) return;
+      const maxScrollLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+      const edgeTolerance = 2;
+      const previous = shell.querySelector('[data-project-preview-direction="previous"]');
+      const next = shell.querySelector('[data-project-preview-direction="next"]');
+      const focusedControl = document.activeElement === previous || document.activeElement === next
+        ? document.activeElement
+        : null;
+      if (previous) previous.hidden = maxScrollLeft <= edgeTolerance || strip.scrollLeft <= edgeTolerance;
+      if (next) next.hidden = maxScrollLeft <= edgeTolerance || strip.scrollLeft >= maxScrollLeft - edgeTolerance;
+      if (focusedControl?.hidden) {
+        const fallback = focusedControl === previous ? next : previous;
+        (fallback && !fallback.hidden ? fallback : shell.querySelector(".project-card"))?.focus({ preventScroll: true });
+      }
+    };
+    previewStrips.forEach((strip) => {
+      strip.scrollLeft = 0;
+      strip.addEventListener("scroll", () => syncPreviewControls(strip), { passive: true });
+      syncPreviewControls(strip);
+    });
+    app.querySelectorAll("[data-project-preview-direction]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const strip = button.closest(".project-card-shell")?.querySelector("[data-project-preview-strip]");
+        if (!strip) return;
+        const direction = button.dataset.projectPreviewDirection === "previous" ? -1 : 1;
+        const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+        strip.scrollBy({ left: direction * Math.max(80, strip.clientWidth - 32), behavior });
+      });
+    });
+    if (typeof ResizeObserver === "function") {
+      dashboardPreviewResizeObserver = new ResizeObserver((entries) => {
+        entries.forEach((entry) => syncPreviewControls(entry.target));
+      });
+      previewStrips.forEach((strip) => dashboardPreviewResizeObserver.observe(strip));
+    } else {
+      dashboardPreviewResizeHandler = () => previewStrips.forEach(syncPreviewControls);
+      window.addEventListener("resize", dashboardPreviewResizeHandler, { passive: true });
+    }
+
     const migrationModal = app.querySelector("[data-migration-modal]");
     const dismissMigrationModal = () => {
       if (!migrationModal) return;
@@ -888,6 +948,7 @@ export function createEditorProjects({
   }
 
   function bindGlobalActions() {
+    if (!app.querySelector(".dashboard")) clearDashboardPreviewResizeTracking();
     const homeLink = app.querySelector('[data-action="home"]');
     homeLink?.addEventListener("click", (event) => {
       if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -909,7 +970,9 @@ export function createEditorProjects({
       .then(() => getAllProjects())
       .then((projects) => {
         if (state.activeProjectId) return;
-        state.projects = normalizeLoadedProjects(projects);
+        const refreshedProjects = normalizeLoadedProjects(projects);
+        pruneSlideThumbnails(refreshedProjects);
+        state.projects = refreshedProjects;
         leaveMissingActiveFolder();
         renderDashboard();
       })
