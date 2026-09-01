@@ -105,7 +105,7 @@ export function createEditorProjects({
   }
 
   function replaceMovedProjects(movedProjects) {
-    const byId = new Map(movedProjects.map((project) => [project.id, project]));
+    const byId = new Map(normalizeLoadedProjects(movedProjects).map((project) => [project.id, project]));
     state.projects = state.projects.map((project) => byId.get(project.id) || project);
     clearProjectHistory(byId.keys());
   }
