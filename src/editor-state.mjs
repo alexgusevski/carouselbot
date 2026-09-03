@@ -1,12 +1,11 @@
 import {
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
   layerKey,
   parseLayerKey,
   overlayCrop,
   layerStageInset,
   slideItems,
   getImageLayout,
+  slideCanvasDimensions,
   clamp,
 } from "./editor-model.mjs";
 
@@ -123,41 +122,62 @@ export function projectAsset(assetId) {
   return activeProject()?.assets?.find((asset) => asset.id === assetId) || null;
 }
 
-export function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), { full = false } = {}) {
+export function getOverlayMetrics(overlay, asset = projectAsset(overlay.assetId), options = {}) {
+  const { full = false, project = activeProject() } = options;
+  const slide = Object.hasOwn(options, "slide")
+    ? options.slide
+    : project?.id === state.activeProjectId ? activeSlide() : null;
   const cropping = !full && state.croppingOverlayId === overlay.id;
   const crop = full || cropping ? { w: 1, h: 1 } : overlayCrop(overlay);
   const srcW = (asset?.width || 1) * crop.w;
   const srcH = (asset?.height || 1) * crop.h;
   const aspect = srcW ? srcH / srcW : 1;
   const width = overlay.width;
-  const naturalHeight = width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * aspect;
+  const canvas = slideCanvasDimensions(project, slide);
+  const naturalHeight = width * (canvas.width / canvas.height) * aspect;
   const height = Number.isFinite(Number(overlay.height)) ? Number(overlay.height) : naturalHeight;
   return { width, height };
 }
 
-export function overlayStageInset(overlay, asset = projectAsset(overlay.assetId)) {
-  const metrics = getOverlayMetrics(overlay, asset);
+export function overlayStageInset(overlay, asset = projectAsset(overlay.assetId), options = {}) {
+  const metrics = getOverlayMetrics(overlay, asset, options);
   return layerStageInset(overlay.x, overlay.y, metrics.width, metrics.height);
 }
 
-export function overlayClipCss(overlay, asset) {
-  const inset = overlayStageInset(overlay, asset);
+export function overlayClipCss(overlay, asset, options = {}) {
+  const inset = overlayStageInset(overlay, asset, options);
   return `inset(${inset.top * 100}% ${inset.right * 100}% ${inset.bottom * 100}% ${inset.left * 100}%)`;
 }
 
-export function constrainOverlay(overlay, asset = projectAsset(overlay.assetId)) {
+export function constrainOverlay(overlay, asset = projectAsset(overlay.assetId), options = {}) {
+  const { project = activeProject() } = options;
+  const slide = Object.hasOwn(options, "slide")
+    ? options.slide
+    : project?.id === state.activeProjectId ? activeSlide() : null;
   if (!asset) return overlay;
   overlay.width = clamp(Number(overlay.width) || 0.34, 0.04, 2.4);
   const crop = overlayCrop(overlay);
-  const naturalHeight = overlay.width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * (((asset.height || 1) * crop.h) / ((asset.width || 1) * crop.w));
+  const canvas = slideCanvasDimensions(project, slide);
+  const naturalHeight = overlay.width * (canvas.width / canvas.height) * (((asset.height || 1) * crop.h) / ((asset.width || 1) * crop.w));
   overlay.height = clamp(Number(overlay.height) || naturalHeight, 0.025, 2.4);
   overlay.rotation = ((Number(overlay.rotation) || 0) % 360 + 360) % 360;
   return overlay;
 }
 
-export function constrainImagePosition(slide) {
-  const canvasWidth = state.stageWidth || OUTPUT_WIDTH;
-  const canvasHeight = state.stageHeight || OUTPUT_HEIGHT;
+export function constrainImagePosition(slide, project = activeProject()) {
+  const canvas = slideCanvasDimensions(project, slide);
+  const stageWidth = Number(state.stageWidth) || 0;
+  const stageHeight = Number(state.stageHeight) || 0;
+  const stageMatchesSlide = Boolean(
+    project
+    && project.id === state.activeProjectId
+    && slide?.id === state.activeSlideId
+    && stageWidth > 0
+    && stageHeight > 0
+    && Math.abs(stageHeight - (stageWidth * canvas.height) / canvas.width) <= 1,
+  );
+  const canvasWidth = stageMatchesSlide ? stageWidth : canvas.width;
+  const canvasHeight = stageMatchesSlide ? stageHeight : canvas.height;
   const layout = getImageLayout(slide, canvasWidth, canvasHeight);
   slide.imageX = clamp(slide.imageX || 0, -layout.maxOffsetX, layout.maxOffsetX);
   slide.imageY = clamp(slide.imageY || 0, -layout.maxOffsetY, layout.maxOffsetY);

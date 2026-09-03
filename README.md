@@ -21,13 +21,14 @@ The npm package is only a distribution surface. Its source, skill, guidance, and
 ## What it does
 
 - Persists projects and slash-path folder organization locally with IndexedDB
-- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF images
-- Crops photos to portrait 9:16 with drag and zoom controls
+- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF images and gives each new slide the source image's own aspect ratio
+- Crops photos into slide canvases with drag and zoom controls; each slide may independently use a built-in format from 9:16 portrait to 16:9 landscape
+- Creates native solid-color slides without requiring a placeholder image file
 - Maintains a reusable project asset library
 - Adds movable and resizable text and image layers
-- Supports text color, outlines, per-line backgrounds, and full-box backgrounds
+- Supports editable text with installed Mac fonts, text color, configurable outlines, per-line backgrounds, and full-box backgrounds
 - Provides a TikTok placement preview that is never exported
-- Shares or downloads full-resolution 1080 × 1920 PNGs
+- Shares or downloads full-resolution, 1080-pixel-wide PNGs at each slide's chosen aspect ratio
 - Allows local AI agents to create projects in folders and move them through a loopback-only MCP companion
 
 ## Run locally

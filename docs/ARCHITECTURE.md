@@ -8,14 +8,15 @@ The editor deliberately uses a small ES-module graph rather than a framework or 
 
 ```text
 main ───────────────> editor + agent-commands
-agent-commands ─────> editor + store + view + renderer + fonts + state + model
+agent-commands ─────> editor + store + view + renderer + fonts + background + state + model
 editor ─────────────> projects + actions + output + UI + store + state + model
 UI ─────────────────> interactions + view + fonts + state + model
-projects ───────────> store + view + fonts + state + model
-actions ────────────> store + renderer + fonts + state + model
+projects ───────────> store + view + fonts + background + state + model
+actions ────────────> store + renderer + fonts + background + state + model
 output ─────────────> renderer + view + state + model
 interactions ───────> view + state + model
-view/renderer ──────> fonts + state + model
+view/renderer ──────> fonts + background + state + model
+background ─────────> model
 fonts/store ────────> model
 state ──────────────> model
 ```
@@ -45,6 +46,8 @@ Dashboard folders are derived from each project's optional canonical `folderPath
 ### Views and rendering
 
 `editor-view.mjs` creates editor markup and updates live layer DOM. `slide-renderer.mjs` draws the export representation onto a canvas. Both use the same model helpers for colors, crops, layer order, text alignment, wrapping, and boxed-text geometry.
+
+`slide-background.mjs` defines the canonical generated solid-background payload shared by project normalization, agent inspection, and rendering. A stored color is treated as authoritative only while that payload is still the slide background, so replacing the image cannot leave a stale color covering it.
 
 `project-fonts.mjs` owns project-font normalization, private local face data, `FontFace` registration, public redaction, and the shared font descriptors used by DOM and canvas rendering. `ensureProjectFontsLoaded` is the exact-font gate before measurement or rendered output. A missing or invalid imported face remains editable with a visible warning, but rendering and export fail with `FONT_UNAVAILABLE` instead of silently accepting fallback pixels.
 
@@ -87,7 +90,8 @@ An import resolves one selected face inside the companion and transfers its byte
 
 ## Data and rendering invariants
 
-- Output is 1080 × 1920.
+- Output is 1080 pixels wide at each slide's normalized aspect ratio. A project's ratio is the default for new slides, while a slide may override it; legacy projects and slides inherit 9:16 (1080 × 1920).
+- New native image uploads and MCP image-backed slides without an explicit ratio derive a reduced ratio from the source dimensions. This makes the image and slide canvas coextensive at the default zoom, so surrounding workspace never becomes part of the exported PNG.
 - Layer `x`, `y`, `width`, and `height` are normalized to the stage.
 - The base photo uses cover sizing plus normalized pan offsets and a 1–3× scale.
 - Overlay crop rectangles are normalized within the source image and have a minimum 5% size.

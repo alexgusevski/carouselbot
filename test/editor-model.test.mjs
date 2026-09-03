@@ -2,6 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ASPECT_RATIO_PRESETS,
+  ASPECT_RATIO_INPUT_MAX_LENGTH,
+  DEFAULT_ASPECT_RATIO,
+  SUPPORTED_ASPECT_RATIOS,
+  aspectRatioFromDimensions,
   adjacentSlideId,
   applyCropValues,
   cloneProject,
@@ -13,31 +18,139 @@ import {
   formatRgb,
   getImageLayout,
   initialOverlayWidth,
+  initialTextBoxHeight,
   isCopiedLayer,
   isImageFile,
   layerClipCss,
+  clampLayerCoordinate,
   layerKey,
   layerStageInset,
   normalizePerLineBackgroundWidths,
   nextLayerZ,
+  normalizeAspectRatio,
   normalizeFolderPath,
   normalizeHexColor,
   outlineColorFor,
   overlayCrop,
   parseCopiedLayer,
   parseLayerKey,
+  projectCanvasDimensions,
+  remapLayerGeometryBetweenCanvases,
   projectPath,
   rgbToHex,
   rotateDelta,
   perLineBackgroundSvgPath,
   routeFromPathname,
   safeFilename,
+  scaleCanvasDimensions,
+  slideCanvasDimensions,
   slideItems,
   sliderPositionFromFontSize,
   textAlignment,
   textColor,
   wrapText,
 } from "../src/editor-model.mjs";
+
+test("normalizes supported project formats and resolves their exact canvas dimensions", () => {
+  assert.equal(DEFAULT_ASPECT_RATIO, "9:16");
+  assert.deepEqual(SUPPORTED_ASPECT_RATIOS, ["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "16:9"]);
+  assert.deepEqual(ASPECT_RATIO_PRESETS["9:16"], { width: 1080, height: 1920 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["2:3"], { width: 1080, height: 1620 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["3:4"], { width: 1080, height: 1440 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["4:5"], { width: 1080, height: 1350 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["1:1"], { width: 1080, height: 1080 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["4:3"], { width: 1080, height: 810 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["16:9"], { width: 1080, height: 608 });
+  assert.equal(normalizeAspectRatio(" 4:5 "), "4:5");
+  assert.equal(normalizeAspectRatio("08:012"), "2:3");
+  assert.equal(normalizeAspectRatio("1:7"), "9:16");
+  assert.equal(normalizeAspectRatio(`${"9".repeat(ASPECT_RATIO_INPUT_MAX_LENGTH + 1)}:9`), "9:16");
+  assert.equal(normalizeAspectRatio(null, "1:1"), "1:1");
+  assert.deepEqual(projectCanvasDimensions(), { aspectRatio: "9:16", width: 1080, height: 1920 });
+  assert.deepEqual(projectCanvasDimensions({ aspectRatio: "3:4" }), { aspectRatio: "3:4", width: 1080, height: 1440 });
+  assert.deepEqual(projectCanvasDimensions({ aspectRatio: "32:9" }), { aspectRatio: "32:9", width: 1080, height: 304 });
+  assert.deepEqual(scaleCanvasDimensions({ aspectRatio: "2:3" }, 360), { aspectRatio: "2:3", width: 360, height: 540 });
+  assert.equal(aspectRatioFromDimensions(600, 900), "2:3");
+  assert.equal(aspectRatioFromDimensions(1600, 400), "4:1");
+  assert.equal(aspectRatioFromDimensions(500, 1600), "5:16");
+  assert.equal(aspectRatioFromDimensions(0, 900, "1:1"), "1:1");
+});
+
+test("lets a slide override its project's default canvas format", () => {
+  const project = { aspectRatio: "3:4" };
+  assert.deepEqual(slideCanvasDimensions(project), { aspectRatio: "3:4", width: 1080, height: 1440 });
+  assert.deepEqual(
+    slideCanvasDimensions(project, { aspectRatio: "08:08" }),
+    { aspectRatio: "1:1", width: 1080, height: 1080 },
+  );
+  assert.deepEqual(
+    slideCanvasDimensions(project, { aspectRatio: "invalid" }),
+    { aspectRatio: "3:4", width: 1080, height: 1440 },
+  );
+  assert.deepEqual(
+    scaleCanvasDimensions(project, 360, { aspectRatio: "4:3" }),
+    { aspectRatio: "4:3", width: 360, height: 270 },
+  );
+  assert.deepEqual(projectCanvasDimensions(project), { aspectRatio: "3:4", width: 1080, height: 1440 });
+});
+
+test("sizes native text boxes for readable one-line text on landscape canvases", () => {
+  assert.equal(initialTextBoxHeight({ aspectRatio: "9:16" }, 64), 0.08);
+  const landscapeHeight = initialTextBoxHeight({ aspectRatio: "16:9" }, 64);
+  assert.ok(landscapeHeight > 0.15);
+  assert.ok(landscapeHeight * 608 >= 64 * (1.12 + 0.28) + 4);
+  assert.equal(
+    initialTextBoxHeight({ aspectRatio: "9:16" }, 64, { aspectRatio: "16:9" }),
+    landscapeHeight,
+  );
+});
+
+test("remaps copied layer height between canvas formats while preserving its normalized center", () => {
+  const original = { x: 0.2, y: 0.4, width: 0.5, height: 0.1 };
+  const remapped = remapLayerGeometryBetweenCanvases(
+    original,
+    { aspectRatio: "9:16", width: 1080, height: 1920 },
+    { aspectRatio: "16:9", width: 1080, height: 608 },
+  );
+  assert.equal(remapped.x, original.x);
+  assert.equal(remapped.width, original.width);
+  assert.ok(Math.abs(remapped.height - (0.1 * 1920 / 608)) < 1e-12);
+  assert.ok(Math.abs((remapped.y + remapped.height / 2) - (original.y + original.height / 2)) < 1e-12);
+  assert.equal(clampLayerCoordinate(-0.2, 0.5), 0);
+  assert.equal(clampLayerCoordinate(0.2, 1.4), 0);
+});
+
+test("scales capped cross-format layers uniformly instead of distorting or clipping them", () => {
+  const original = { x: 0.2, y: 0.1, width: 0.5, height: 1, size: 64, outlineWidth: 12 };
+  const remapped = remapLayerGeometryBetweenCanvases(
+    original,
+    { aspectRatio: "9:16", width: 1080, height: 1920 },
+    { aspectRatio: "16:9", width: 1080, height: 608 },
+    { maxHeight: 2.4 },
+  );
+  const desiredHeight = 1920 / 608;
+  const scale = 2.4 / desiredHeight;
+  assert.ok(Math.abs(remapped.height - 2.4) < 1e-12);
+  assert.ok(Math.abs(remapped.width - original.width * scale) < 1e-12);
+  assert.ok(Math.abs(remapped.size - original.size * scale) < 1e-12);
+  assert.ok(Math.abs(remapped.outlineWidth - original.outlineWidth * scale) < 1e-12);
+  assert.ok(Math.abs((remapped.x + remapped.width / 2) - (original.x + original.width / 2)) < 1e-12);
+  assert.ok(Math.abs((remapped.y + remapped.height / 2) - (original.y + original.height / 2)) < 1e-12);
+});
+
+test("keeps extreme custom-format remaps within the layer height limit", () => {
+  const original = { x: 0.1, y: 0, width: 0.8, height: 1, size: 64 };
+  const remapped = remapLayerGeometryBetweenCanvases(
+    original,
+    { aspectRatio: "9:32", width: 1080, height: 3840 },
+    { aspectRatio: "6:1", width: 1080, height: 180 },
+    { maxHeight: 2.4 },
+  );
+
+  assert.equal(remapped.height, 2.4);
+  assert.ok(remapped.size < 20, "the explicit geometry cap wins when both constraints cannot be satisfied");
+  assert.ok(Math.abs((remapped.y + remapped.height / 2) - 0.5) < 1e-12);
+});
 
 test("finds adjacent slides without wrapping past either end", () => {
   const slides = [{ id: "first" }, { id: "middle" }, { id: "final" }];
@@ -188,6 +301,12 @@ test("fits initial overlays without upscaling large or small assets incorrectly"
   assert.equal(initialOverlayWidth(null), 0.34);
   assert.equal(initialOverlayWidth({ width: 108, height: 192 }), 0.1);
   assert.equal(initialOverlayWidth({ width: 2160, height: 3840 }), 0.82);
+  assert.ok(Math.abs(initialOverlayWidth({ width: 1080, height: 1920 }, { aspectRatio: "1:1" }) - 0.46125) < Number.EPSILON);
+  assert.ok(Math.abs(initialOverlayWidth(
+    { width: 1080, height: 1920 },
+    { aspectRatio: "9:16" },
+    { aspectRatio: "1:1" },
+  ) - 0.46125) < Number.EPSILON);
 });
 
 test("maps the nonlinear font-size slider at its defined stops", () => {
@@ -209,6 +328,18 @@ test("calculates cover-image layout and clamps pan offsets", () => {
   assert.equal(layout.top, 0);
   assert.equal(layout.maxOffsetX, 0.5);
   assert.equal(layout.maxOffsetY, 0);
+});
+
+test("fits a source-ratio image exactly to the canvas width without export padding", () => {
+  const layout = getImageLayout({ width: 1600, height: 400, imageScale: 1, imageX: 0, imageY: 0 }, 1080, 270);
+  assert.deepEqual(layout, {
+    width: 1080,
+    height: 270,
+    left: 0,
+    top: 0,
+    maxOffsetX: 0,
+    maxOffsetY: 0,
+  });
 });
 
 test("merges only text-row steps that cannot hold uniform corners", () => {
@@ -256,11 +387,12 @@ test("normalizes filenames and text alignment", () => {
 });
 
 test("validates canonical and legacy copied-layer payloads", () => {
-  const copied = { token: "token", layers: [{ kind: "text", item: { id: "text" } }] };
+  const copied = { token: "token", sourceCanvas: { aspectRatio: "3:4", width: 1080, height: 1440 }, layers: [{ kind: "text", item: { id: "text" } }] };
   assert.equal(isCopiedLayer(copied), true);
   assert.deepEqual(parseCopiedLayer(JSON.stringify(copied)), copied);
   assert.equal(parseCopiedLayer("not json"), null);
   assert.equal(isCopiedLayer({ token: "token", layers: [{ kind: "video", item: {} }] }), false);
+  assert.equal(isCopiedLayer({ ...copied, sourceCanvas: { aspectRatio: "3:4", width: 1080, height: 0 } }), false);
 });
 
 test("recognizes image MIME types and supported filename extensions", () => {

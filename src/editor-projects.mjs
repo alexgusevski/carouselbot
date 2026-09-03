@@ -1,6 +1,4 @@
 import {
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
   DEFAULT_OUTLINE_WIDTH,
   HISTORY_LIMIT,
   cloneProject,
@@ -9,8 +7,10 @@ import {
   folderRoutePath,
   routeFromPathname,
   escapeHtml,
+  normalizeAspectRatio,
   normalizeFolderPath,
   normalizeHexColor,
+  slideCanvasDimensions,
   textColor,
   overlayCrop,
   clamp,
@@ -38,24 +38,33 @@ import {
   moveProjectsFromFolderInDb,
 } from "./project-store.mjs";
 import { normalizeProjectFonts, ensureProjectFontsLoaded } from "./project-fonts.mjs";
+import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 
 export function normalizeLoadedProjects(projects) {
   projects.forEach((project) => {
     normalizeProjectFonts(project);
     if (!Number.isFinite(Number(project.revision))) project.revision = 0;
+    project.aspectRatio = normalizeAspectRatio(project.aspectRatio);
     project.folderPath = normalizeFolderPath(project.folderPath);
     if (!Array.isArray(project.assets)) project.assets = [];
     if (!Array.isArray(project.slides)) project.slides = [];
     project.slides.forEach((slide) => {
+      slide.aspectRatio = normalizeAspectRatio(slide.aspectRatio, project.aspectRatio);
+      const canvas = slideCanvasDimensions(project, slide);
       if (slide.imageScale == null) slide.imageScale = 1;
       if (slide.imageX == null) slide.imageX = 0;
       if (slide.imageY == null) slide.imageY = 0;
+      if (slide.backgroundColor != null) {
+        const backgroundColor = canonicalSolidBackgroundColor(slide, project);
+        if (backgroundColor) slide.backgroundColor = backgroundColor;
+        else delete slide.backgroundColor;
+      }
       if (!Array.isArray(slide.overlays)) slide.overlays = [];
       slide.overlays.forEach((overlay, index) => {
         const asset = project.assets.find((item) => item.id === overlay.assetId);
         if (overlay.height == null && asset) {
           const crop = overlayCrop(overlay);
-          overlay.height = overlay.width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * ((asset.height * crop.h) / (asset.width * crop.w));
+          overlay.height = overlay.width * (canvas.width / canvas.height) * ((asset.height * crop.h) / (asset.width * crop.w));
         }
         if (overlay.z == null) overlay.z = index + 1;
       });
@@ -802,9 +811,20 @@ export function createEditorProjects({
     else if (missingFolder) toast("This folder isn’t available in this browser.");
   }
 
-  function createProject() {
+  function createProject({ aspectRatio } = {}) {
     const now = Date.now();
-    const project = { id: uid(), name: "New Project", folderPath: state.activeFolderPath, createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [], fonts: [] };
+    const project = {
+      id: uid(),
+      name: "New Project",
+      aspectRatio: normalizeAspectRatio(aspectRatio),
+      folderPath: state.activeFolderPath,
+      createdAt: now,
+      updatedAt: now,
+      revision: 0,
+      slides: [],
+      assets: [],
+      fonts: [],
+    };
     state.projects.push(project);
     openProject(project.id);
     putProject(project).catch((error) => {

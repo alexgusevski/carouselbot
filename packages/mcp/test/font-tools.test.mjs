@@ -118,6 +118,7 @@ test("publishes local and project font tools with strict agent-facing schemas", 
     assert.equal(addTextProperties.fontWeight.maximum, 1000);
     assert.deepEqual(addTextProperties.fontStyle.enum, ["normal", "italic"]);
     assert.equal(addTextProperties.fontVariationSettings.additionalProperties.type, "number");
+    assert.match(addTextProperties.fontVariationSettings.description, /Only wght currently has guaranteed/);
 
     const updateItem = updateText.inputSchema.properties.updates.items;
     assert.ok(updateItem.properties.fontId);

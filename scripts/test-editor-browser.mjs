@@ -213,6 +213,33 @@ try {
     "Creating a project through the dashboard did not open it.",
   );
 
+  const formatSelection = await evaluate(cdp, `(() => {
+    const selector = document.querySelector('#project-aspect-ratio');
+    const options = [...(selector?.options || [])].map((option) => option.value);
+    if (selector) {
+      selector.value = '3:4';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
+    const currentSelector = document.querySelector('#project-aspect-ratio');
+    return {
+      options,
+      selected: currentSelector?.value,
+      aspectRatio: inspected.project?.aspectRatio,
+      canvasWidth: inspected.project?.canvasWidth,
+      canvasHeight: inspected.project?.canvasHeight,
+    };
+  })()`);
+  if (
+    !["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "16:9"].every((ratio) => formatSelection.options.includes(ratio))
+    || formatSelection.selected !== "3:4"
+    || formatSelection.aspectRatio !== "3:4"
+    || formatSelection.canvasWidth !== 1080
+    || formatSelection.canvasHeight !== 1440
+  ) {
+    throw new Error(`The empty-project format selector did not apply a 3:4 canvas: ${JSON.stringify(formatSelection)}`);
+  }
+
   await evaluate(cdp, `(() => {
     const title = document.querySelector('.project-title-input');
     title.value = 'Browser regression project';
@@ -226,7 +253,7 @@ try {
       request.onsuccess = () => {
         const item = request.result.transaction('projects', 'readonly').objectStore('projects').get(${JSON.stringify(projectId)});
         item.onerror = () => resolve(false);
-        item.onsuccess = () => resolve(item.result?.name === 'Browser regression project' && item.result?.revision >= 1);
+        item.onsuccess = () => resolve(item.result?.name === 'Browser regression project' && item.result?.aspectRatio === '3:4' && item.result?.revision >= 1);
       };
     })`),
     "The renamed project was not persisted to IndexedDB.",
@@ -285,6 +312,70 @@ try {
     backgroundColor: '#E7E2D8'
   })`);
   if (!slide?.createdSlideId) throw new Error(`The compatibility agent could not add a slide: ${JSON.stringify(slide)}`);
+
+  const formatUi = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const stage = document.querySelector('.stage');
+      const thumbnail = document.querySelector('.thumb-image');
+      const stageRect = stage?.getBoundingClientRect();
+      const thumbnailRect = thumbnail?.getBoundingClientRect();
+      if (!stageRect?.width || !thumbnailRect?.width) return null;
+      return {
+        stageRatio: stageRect.width / stageRect.height,
+        thumbnailRatio: thumbnailRect.width / thumbnailRect.height,
+        dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
+        overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
+        overlayPresent: Boolean(document.querySelector('.tiktok-overlay')),
+      };
+    })()`),
+    "The 3:4 project canvas did not render in the native editor.",
+  );
+  if (
+    Math.abs(formatUi.stageRatio - (3 / 4)) > 0.01
+    || Math.abs(formatUi.thumbnailRatio - (3 / 4)) > 0.01
+    || formatUi.dimensions !== "1080 × 1440 · 3:4"
+    || !formatUi.overlayDisabled
+    || formatUi.overlayPresent
+  ) {
+    throw new Error(`The native editor did not preserve the chosen 3:4 format: ${JSON.stringify(formatUi)}`);
+  }
+
+  const backgroundReconciliation = await evaluate(cdp, `(async () => {
+    const { renderSlideCanvas } = await import('/src/slide-renderer.mjs');
+    const { solidBackgroundDataUrl } = await import('/src/slide-background.mjs');
+    const project = { id: 'background-render-regression', aspectRatio: '1:1', assets: [], fonts: [] };
+    const replacementSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="#0000FF"/></svg>';
+    const replacementImage = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(replacementSvg);
+    const baseSlide = {
+      width: 12,
+      height: 12,
+      imageScale: 1,
+      imageX: 0,
+      imageY: 0,
+      texts: [],
+      overlays: [],
+    };
+    const staleCanvas = await renderSlideCanvas({
+      ...baseSlide,
+      imageData: replacementImage,
+      backgroundColor: '#FF0000',
+    }, 12, 12, project);
+    const canonicalCanvas = await renderSlideCanvas({
+      ...baseSlide,
+      imageData: solidBackgroundDataUrl('#00FF00', project),
+      backgroundColor: '#00FF00',
+    }, 12, 12, project);
+    return {
+      replacementPixel: [...staleCanvas.getContext('2d').getImageData(6, 6, 1, 1).data],
+      solidPixel: [...canonicalCanvas.getContext('2d').getImageData(6, 6, 1, 1).data],
+    };
+  })()`);
+  if (
+    backgroundReconciliation.replacementPixel.join(",") !== "0,0,255,255"
+    || backgroundReconciliation.solidPixel.join(",") !== "0,255,0,255"
+  ) {
+    throw new Error(`A stale solid color overrode its replacement image: ${JSON.stringify(backgroundReconciliation)}`);
+  }
 
   const agentMatrix = await evaluate(cdp, `(async () => {
     const agent = window.carouselBotAgent;
@@ -455,6 +546,113 @@ try {
     "Redo did not restore the edited text layer.",
   );
 
+  const outlineWidthRegression = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const before = agent.inspect({ includeAllProjects: false });
+    const text = before.slide?.texts?.[0];
+    if (!text) throw new Error('The editable text layer was unavailable for the outline-width regression.');
+    const original = { style: text.style, outlineWidth: text.outlineWidth };
+    const readDomOutline = () => {
+      const box = [...document.querySelectorAll('.text-box')].find((item) => item.dataset.textId === text.id);
+      return {
+        stageWidth: document.querySelector('.stage')?.getBoundingClientRect().width || 0,
+        strokeWidths: [...(box?.querySelectorAll('.outline-line text') || [])]
+          .map((node) => Number(node.getAttribute('stroke-width'))),
+      };
+    };
+    let result;
+    try {
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'plain' }],
+      });
+      const plainRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'outline', outlineWidth: 0 }],
+      });
+      const zeroText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const zeroDom = readDomOutline();
+      const zeroRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'outline', outlineWidth: 40 }],
+      });
+      const thickText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const thickDom = readDomOutline();
+      const thickRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+      result = {
+        zeroModelWidth: zeroText?.outlineWidth,
+        thickModelWidth: thickText?.outlineWidth,
+        zeroDom,
+        thickDom,
+        render: {
+          plain: { mimeType: plainRender?.mimeType, width: plainRender?.width, height: plainRender?.height, dataLength: plainRender?.data?.length || 0 },
+          zero: { mimeType: zeroRender?.mimeType, width: zeroRender?.width, height: zeroRender?.height, dataLength: zeroRender?.data?.length || 0 },
+          thick: { mimeType: thickRender?.mimeType, width: thickRender?.width, height: thickRender?.height, dataLength: thickRender?.data?.length || 0 },
+          zeroMatchesPlain: zeroRender?.data === plainRender?.data,
+          changed: zeroRender?.data !== thickRender?.data,
+        },
+      };
+    } finally {
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, ...original }],
+      });
+    }
+    return result;
+  })()`);
+  const expectedThickDomWidth = 40 * outlineWidthRegression.thickDom.stageWidth / 1080;
+  if (
+    outlineWidthRegression.zeroModelWidth !== 0
+    || outlineWidthRegression.thickModelWidth !== 40
+    || outlineWidthRegression.thickDom.stageWidth <= 0
+    || outlineWidthRegression.zeroDom.strokeWidths.length < 1
+    || outlineWidthRegression.zeroDom.strokeWidths.some((width) => width !== 0)
+    || outlineWidthRegression.thickDom.strokeWidths.length !== outlineWidthRegression.zeroDom.strokeWidths.length
+    || outlineWidthRegression.thickDom.strokeWidths.some((width) => Math.abs(width - expectedThickDomWidth) > 0.01)
+    || outlineWidthRegression.render.plain.mimeType !== "image/png"
+    || outlineWidthRegression.render.zero.mimeType !== "image/png"
+    || outlineWidthRegression.render.thick.mimeType !== "image/png"
+    || outlineWidthRegression.render.plain.width !== 270
+    || outlineWidthRegression.render.zero.width !== 270
+    || outlineWidthRegression.render.thick.width !== 270
+    || outlineWidthRegression.render.plain.height !== outlineWidthRegression.render.zero.height
+    || outlineWidthRegression.render.zero.height !== outlineWidthRegression.render.thick.height
+    || outlineWidthRegression.render.plain.dataLength < 100
+    || outlineWidthRegression.render.zero.dataLength < 100
+    || outlineWidthRegression.render.thick.dataLength < 100
+    || !outlineWidthRegression.render.zeroMatchesPlain
+    || !outlineWidthRegression.render.changed
+  ) {
+    throw new Error(`Outline width did not reach editable SVG text and canvas rendering: ${JSON.stringify(outlineWidthRegression)}`);
+  }
+
   const pointerInteraction = await evaluate(cdp, `(() => {
     const inspectText = () => structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }).slide.texts[0]);
     const before = inspectText();
@@ -559,6 +757,12 @@ try {
     const canonical = transfer.getData('application/x-carouselbot-layer');
     const legacy = transfer.getData('application/x-slide-studio-layer');
     const plain = transfer.getData('text/plain');
+    const crossFormatCopy = JSON.parse(canonical);
+    crossFormatCopy.token += '-cross-format';
+    crossFormatCopy.sourceCanvas = { aspectRatio: '9:16', width: 1080, height: 1920 };
+    transfer.setData('application/x-carouselbot-layer', JSON.stringify(crossFormatCopy));
+    transfer.setData('application/x-slide-studio-layer', JSON.stringify(crossFormatCopy));
+    transfer.setData('text/plain', 'carouselbot-layer:' + crossFormatCopy.token);
     document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
     return {
       before,
@@ -567,6 +771,7 @@ try {
       canonical,
       legacy,
       plain,
+      pasteSourceCanvas: crossFormatCopy.sourceCanvas,
       storedCanonical: localStorage.getItem('carouselbot-layer-clipboard'),
       storedLegacy: localStorage.getItem('slide-studio-layer-clipboard'),
     };
@@ -578,6 +783,9 @@ try {
     || layerCopy.selectedBeforeCopy !== 2
     || canonicalCopy.layers.length !== 2
     || legacyCopy.token !== canonicalCopy.token
+    || canonicalCopy.sourceCanvas?.aspectRatio !== "3:4"
+    || canonicalCopy.sourceCanvas?.width !== 1080
+    || canonicalCopy.sourceCanvas?.height !== 1440
     || !layerCopy.plain.startsWith("carouselbot-layer:")
     || JSON.parse(layerCopy.storedCanonical).token !== canonicalCopy.token
     || JSON.parse(layerCopy.storedLegacy).token !== canonicalCopy.token
@@ -601,11 +809,25 @@ try {
   const pastedText = layerPaste.inspected.slide.texts.at(-1);
   const originalImage = layerCopy.before.slide.images[0];
   const pastedImage = layerPaste.inspected.slide.images.at(-1);
+  const sourceToTargetHeightScale = layerCopy.pasteSourceCanvas.height / 1440;
+  const expectedTextHeight = Math.min(originalText.height * sourceToTargetHeightScale, 1);
+  const expectedTextY = Math.min(
+    Math.max(originalText.y + originalText.height / 2 - expectedTextHeight / 2 + 0.03, 0),
+    1 - expectedTextHeight,
+  );
+  const expectedImageHeight = Math.min(originalImage.height * sourceToTargetHeightScale, 2.4);
+  const expectedImageY = Math.min(
+    Math.max(originalImage.y + originalImage.height / 2 - expectedImageHeight / 2 + 0.03, Math.min(0, 1 - expectedImageHeight)),
+    Math.max(0, 1 - expectedImageHeight),
+  );
   if (
     layerPaste.inspected.project.assetCount !== layerCopy.before.project.assetCount
     || Math.abs(pastedText.x - Math.min(originalText.x + 0.03, 1 - originalText.width)) > 0.0001
-    || Math.abs(pastedText.y - Math.min(originalText.y + 0.03, 1 - originalText.height)) > 0.0001
+    || Math.abs(pastedText.height - expectedTextHeight) > 0.0001
+    || Math.abs(pastedText.y - expectedTextY) > 0.0001
     || Math.abs(pastedImage.x - Math.min(originalImage.x + 0.03, 1 - originalImage.width)) > 0.0001
+    || Math.abs(pastedImage.height - expectedImageHeight) > 0.0001
+    || Math.abs(pastedImage.y - expectedImageY) > 0.0001
     || pastedText.z <= originalText.z
     || pastedImage.z <= originalImage.z
     || !layerPaste.selected.includes(pastedText.id)
@@ -632,8 +854,92 @@ try {
     })()`),
     "Uploading an SVG through the native file input did not add a slide.",
   );
-  if (uploadedSlide.name !== "browser-upload" || uploadedSlide.width !== 600 || uploadedSlide.height !== 900) {
+  if (uploadedSlide.name !== "browser-upload" || uploadedSlide.aspectRatio !== "2:3" || uploadedSlide.canvasWidth !== 1080 || uploadedSlide.canvasHeight !== 1620 || uploadedSlide.width !== 600 || uploadedSlide.height !== 900) {
     throw new Error(`The uploaded slide metadata changed: ${JSON.stringify(uploadedSlide)}`);
+  }
+
+  const mixedSlideFormatModel = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const before = agent.inspect({ projectId: ${JSON.stringify(projectId)}, slideId: ${JSON.stringify(slide.createdSlideId)}, includeAllProjects: false });
+    const beforeText = before.slide.texts[0];
+    const beforeImage = before.slide.images[0];
+    const selector = document.querySelector('#slide-aspect-ratio');
+    const options = [...(selector?.options || [])].map((option) => option.value);
+    selector.value = '1:1';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    const after = agent.inspect({ projectId: ${JSON.stringify(projectId)}, slideId: ${JSON.stringify(slide.createdSlideId)}, includeAllProjects: false });
+    const afterText = after.slide.texts.find((item) => item.id === beforeText.id);
+    const afterImage = after.slide.images.find((item) => item.id === beforeImage.id);
+    const editorState = await import('/src/editor-state.mjs');
+    const backgrounds = await import('/src/slide-background.mjs');
+    const storedProject = editorState.activeProject();
+    const storedSlide = storedProject.slides.find((item) => item.id === ${JSON.stringify(slide.createdSlideId)});
+    const storedUpload = storedProject.slides.find((item) => item.id === ${JSON.stringify(uploadedSlide.id)});
+    return {
+      options,
+      projectAspectRatio: after.project.aspectRatio,
+      slideAspectRatios: after.project.slides.map((item) => item.aspectRatio),
+      selected: document.querySelector('#slide-aspect-ratio')?.value,
+      storedAspectRatio: storedSlide.aspectRatio,
+      storedUploadAspectRatio: storedUpload.aspectRatio,
+      solidBackgroundCanonical: storedSlide.imageData === backgrounds.solidBackgroundDataUrl(storedSlide.backgroundColor, storedProject, storedSlide),
+      solidBackgroundDimensions: [storedSlide.width, storedSlide.height],
+      beforeText,
+      afterText,
+      beforeImage,
+      afterImage,
+    };
+  })()`);
+  const layerCenter = (item) => ({ x: item.x + item.width / 2, y: item.y + item.height / 2 });
+  const beforeTextCenter = layerCenter(mixedSlideFormatModel.beforeText);
+  const afterTextCenter = layerCenter(mixedSlideFormatModel.afterText);
+  const beforeImageCenter = layerCenter(mixedSlideFormatModel.beforeImage);
+  const afterImageCenter = layerCenter(mixedSlideFormatModel.afterImage);
+  if (
+    !["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "16:9"].every((ratio) => mixedSlideFormatModel.options.includes(ratio))
+    || mixedSlideFormatModel.projectAspectRatio !== "3:4"
+    || JSON.stringify(mixedSlideFormatModel.slideAspectRatios) !== JSON.stringify(["1:1", "2:3"])
+    || mixedSlideFormatModel.selected !== "1:1"
+    || mixedSlideFormatModel.storedAspectRatio !== "1:1"
+    || mixedSlideFormatModel.storedUploadAspectRatio !== "2:3"
+    || !mixedSlideFormatModel.solidBackgroundCanonical
+    || mixedSlideFormatModel.solidBackgroundDimensions.join(",") !== "1080,1080"
+    || Math.abs(mixedSlideFormatModel.afterText.width - mixedSlideFormatModel.beforeText.width) > 0.0001
+    || Math.abs(mixedSlideFormatModel.afterImage.width - mixedSlideFormatModel.beforeImage.width) > 0.0001
+    || Math.abs(afterTextCenter.x - beforeTextCenter.x) > 0.0001
+    || Math.abs(afterTextCenter.y - beforeTextCenter.y) > 0.0001
+    || Math.abs(afterImageCenter.x - beforeImageCenter.x) > 0.0001
+    || Math.abs(afterImageCenter.y - beforeImageCenter.y) > 0.0001
+    || Math.abs(mixedSlideFormatModel.afterText.height * 1080 - mixedSlideFormatModel.beforeText.height * 1440) > 0.01
+    || Math.abs(mixedSlideFormatModel.afterImage.height * 1080 - mixedSlideFormatModel.beforeImage.height * 1440) > 0.01
+  ) {
+    throw new Error(`Changing one slide format distorted its layers or project defaults: ${JSON.stringify(mixedSlideFormatModel)}`);
+  }
+
+  const mixedSlideFormatUi = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const stage = document.querySelector('.stage')?.getBoundingClientRect();
+      const thumbs = [...document.querySelectorAll('.thumb-image')].map((item) => item.getBoundingClientRect());
+      if (!stage?.width || thumbs.some((item) => !item.width)) return null;
+      return {
+        stageRatio: stage.width / stage.height,
+        thumbnailRatios: thumbs.map((item) => item.width / item.height),
+        dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
+        overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
+        overlayPresent: Boolean(document.querySelector('.tiktok-overlay')),
+      };
+    })()`),
+    "The active slide did not adopt its independent square format.",
+  );
+  if (
+    Math.abs(mixedSlideFormatUi.stageRatio - 1) > 0.01
+    || Math.abs(mixedSlideFormatUi.thumbnailRatios[0] - 1) > 0.01
+    || Math.abs(mixedSlideFormatUi.thumbnailRatios[1] - (2 / 3)) > 0.01
+    || mixedSlideFormatUi.dimensions !== "1080 × 1080 · 1:1"
+    || !mixedSlideFormatUi.overlayDisabled
+    || mixedSlideFormatUi.overlayPresent
+  ) {
+    throw new Error(`Mixed slide formats did not reach the stage and rail: ${JSON.stringify(mixedSlideFormatUi)}`);
   }
 
   const slideReordering = await evaluate(cdp, `(() => {
@@ -785,13 +1091,25 @@ try {
     const output = window.__browserOutput;
     window.__browserOriginalAnchorClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {
-      output.downloads.push({ download: this.download, href: this.href });
+      const entry = { download: this.download, href: this.href };
+      output.downloads.push(entry);
+      output.downloadReady = (async () => {
+        const bitmap = await createImageBitmap(await (await fetch(entry.href)).blob());
+        Object.assign(entry, { width: bitmap.width, height: bitmap.height });
+        bitmap.close();
+      })();
     };
     Object.defineProperty(navigator, 'canShare', { configurable: true, value: ({ files } = {}) => Boolean(files?.length) });
     Object.defineProperty(navigator, 'share', {
       configurable: true,
       value: async ({ files = [], title = null } = {}) => {
-        output.shares.push({ title, files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })) });
+        const inspectedFiles = [];
+        for (const file of files) {
+          const bitmap = await createImageBitmap(file);
+          inspectedFiles.push({ name: file.name, type: file.type, size: file.size, width: bitmap.width, height: bitmap.height });
+          bitmap.close();
+        }
+        output.shares.push({ title, files: inspectedFiles });
       },
     });
     const activation = {};
@@ -805,7 +1123,7 @@ try {
     return labels;
   })()`);
   await waitFor(
-    () => evaluate(cdp, `window.__browserOutput.downloads.length === 1 && !document.querySelector('[data-action="export"]').disabled`),
+    () => evaluate(cdp, `window.__browserOutput.downloads[0]?.width === 1080 && !document.querySelector('[data-action="export"]').disabled`),
     "Downloading from the native toolbar did not finish.",
   );
   await evaluate(cdp, `document.querySelector('[data-action="share"]').click()`);
@@ -844,13 +1162,18 @@ try {
     shareCountBeforeActivation !== 1
     || nativeOutput.downloads[0].download !== expectedSingleName
     || !nativeOutput.downloads[0].href.startsWith("blob:")
+    || nativeOutput.downloads[0].width !== 1080
+    || nativeOutput.downloads[0].height !== 1080
     || nativeOutput.shares[0].title !== "Browser regression project"
     || nativeOutput.shares[0].files.length !== 1
     || nativeOutput.shares[0].files[0].name !== expectedSingleName
     || nativeOutput.shares[0].files[0].type !== "image/png"
     || nativeOutput.shares[0].files[0].size < 1000
+    || nativeOutput.shares[0].files[0].width !== 1080
+    || nativeOutput.shares[0].files[0].height !== 1080
     || JSON.stringify(nativeOutput.shares[1].files.map((file) => file.name)) !== JSON.stringify(expectedAllNames)
     || nativeOutput.shares[1].files.some((file) => file.type !== "image/png" || file.size < 1000)
+    || JSON.stringify(nativeOutput.shares[1].files.map((file) => [file.width, file.height])) !== JSON.stringify([[1080, 1080], [1080, 1620]])
     || Object.entries(nativeOutput.buttons).some(([action, button]) => button.disabled || button.html !== outputLabels[action])
   ) {
     throw new Error(`Native download/share behavior changed: ${JSON.stringify({ outputLabels, nativeOutput, shareCountBeforeActivation })}`);
@@ -860,7 +1183,7 @@ try {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
     return window.carouselBotAgent.execute({ type: 'slide.render', projectId: inspected.project.id, slideId: inspected.slide.id, width: 270 });
   })()`);
-  if (rendered?.mimeType !== "image/png" || rendered.width !== 270 || rendered.height !== 480 || rendered.data?.length < 100) {
+  if (rendered?.mimeType !== "image/png" || rendered.width !== 270 || rendered.height !== 270 || rendered.data?.length < 100) {
     throw new Error(`Rendering through the compatibility agent returned an invalid image: ${JSON.stringify(rendered)}`);
   }
   const renderedPixel = await evaluate(cdp, `(async () => {
@@ -888,7 +1211,12 @@ try {
         item.onerror = () => resolve(false);
         item.onsuccess = () => {
           const uploaded = item.result?.slides?.find((slide) => slide.name === 'browser-upload');
-          resolve(item.result?.slides?.length === 2 && uploaded?.width === 600 && uploaded?.height === 900);
+          const square = item.result?.slides?.find((slide) => slide.id === ${JSON.stringify(slide.createdSlideId)});
+          resolve(item.result?.slides?.length === 2
+            && square?.aspectRatio === '1:1'
+            && uploaded?.aspectRatio === '2:3'
+            && uploaded?.width === 600
+            && uploaded?.height === 900);
         };
       };
     })`),
@@ -902,9 +1230,19 @@ try {
   );
   const persisted = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
-    return { name: inspected.project.name, textValues: (inspected.slide?.texts || []).map((text) => text.text) };
+    return {
+      name: inspected.project.name,
+      textValues: (inspected.slide?.texts || []).map((text) => text.text),
+      aspectRatios: inspected.project.slides.map((slide) => slide.aspectRatio),
+      selectedFormat: document.querySelector('#slide-aspect-ratio')?.value,
+    };
   })()`);
-  if (persisted.name !== "Browser regression project" || !persisted.textValues.includes("Module refactor smoke test")) {
+  if (
+    persisted.name !== "Browser regression project"
+    || !persisted.textValues.includes("Module refactor smoke test")
+    || JSON.stringify(persisted.aspectRatios) !== JSON.stringify(["1:1", "2:3"])
+    || persisted.selectedFormat !== "1:1"
+  ) {
     throw new Error(`Reloaded project data changed: ${JSON.stringify(persisted)}`);
   }
 
@@ -937,8 +1275,10 @@ try {
   );
 
   const filmstripProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Filmstrip preview project with an intentionally long title' })`);
+  const filmstripAspectRatios = ["9:16", "1:1", "4:5", "3:4", "16:9", "2:3", "4:3", "9:16"];
   const filmstripSlideIds = await callPageFunction(cdp, `async function(projectId) {
     const colors = ['#FE2C55', '#25F4EE', '#25282E', '#F4C95D', '#8A5CF5', '#3DBE78', '#F28C45', '#496DDB'];
+    const aspectRatios = ['9:16', '1:1', '4:5', '3:4', '16:9', '2:3', '4:3', '9:16'];
     const ids = [];
     for (const [index, backgroundColor] of colors.entries()) {
       const result = await this.carouselBotAgent.execute({
@@ -946,6 +1286,7 @@ try {
         projectId,
         name: 'Preview ' + (index + 1),
         backgroundColor,
+        aspectRatio: aspectRatios[index],
       });
       ids.push(result.createdSlideId);
     }
@@ -999,7 +1340,10 @@ try {
   })()`), "The dashboard project filmstrip did not render all slide thumbnails.");
   if (
     JSON.stringify(filmstrip.slideIds) !== JSON.stringify(filmstripSlideIds)
-    || filmstrip.ratios.some((ratio) => Math.abs(ratio - (9 / 16)) > 0.02)
+    || filmstrip.ratios.some((ratio, index) => {
+      const [width, height] = filmstripAspectRatios[index].split(":").map(Number);
+      return Math.abs(ratio - (width / height)) > 0.02;
+    })
     || !filmstrip.overflow
     || filmstrip.renderedCount < 1
     || filmstrip.previousHidden !== true
@@ -1028,20 +1372,20 @@ try {
 
   await callPageFunction(cdp, `function(projectId, slideId) {
     return this.carouselBotAgent.execute({ type: 'slide.update', projectId, slideId, backgroundColor: '#0A0A0A' });
-  }`, [filmstripProject.projectId, filmstripSlideIds[5]]);
+  }`, [filmstripProject.projectId, filmstripSlideIds[3]]);
   await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell').querySelector('[data-project-preview-direction="next"]').click()`);
   const filmstripAfterNext = await waitFor(() => evaluate(cdp, `(() => {
     const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell');
     const strip = shell?.querySelector('[data-project-preview-strip]');
     const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
-    const revealedSlide = strip?.querySelector('[data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[5])}] img.thumb-rendered');
+    const revealedSlide = strip?.querySelector('[data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[3])}] img.thumb-rendered');
     return strip?.scrollLeft > 2 && previous && !previous.hidden && revealedSlide
       ? { pathname: location.pathname, scrollLeft: strip.scrollLeft }
       : false;
   })()`), "The project filmstrip did not scroll right or reveal its previous control.");
   if (filmstripAfterNext.pathname !== "/") throw new Error(`The filmstrip control opened the project: ${JSON.stringify(filmstripAfterNext)}`);
   const revealedPixel = await evaluate(cdp, `(async () => {
-    const image = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[5])}] img.thumb-rendered');
+    const image = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[3])}] img.thumb-rendered');
     await image.decode();
     const canvas = document.createElement('canvas');
     canvas.width = 1;
@@ -1266,7 +1610,10 @@ try {
     projectCreated: true,
     indexedDbPersistence: true,
     indexedDbConflictProtection: true,
+    projectCanvasFormats: true,
+    perSlideCanvasFormats: true,
     directUiTextEditing: true,
+    outlineWidthRendering: true,
     pointerDragResize: true,
     undoRedo: true,
     nativeClipboard: true,
