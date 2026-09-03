@@ -1,8 +1,28 @@
 export const DESIGN_WIDTH = 1080;
 
-export const OUTPUT_WIDTH = 1080;
+export const DEFAULT_ASPECT_RATIO = "9:16";
 
-export const OUTPUT_HEIGHT = 1920;
+export const ASPECT_RATIO_PRESETS = Object.freeze({
+  "9:16": Object.freeze({ width: 1080, height: 1920 }),
+  "2:3": Object.freeze({ width: 1080, height: 1620 }),
+  "3:4": Object.freeze({ width: 1080, height: 1440 }),
+  "4:5": Object.freeze({ width: 1080, height: 1350 }),
+  "1:1": Object.freeze({ width: 1080, height: 1080 }),
+  "4:3": Object.freeze({ width: 1080, height: 810 }),
+  "16:9": Object.freeze({ width: 1080, height: 608 }),
+});
+
+export const SUPPORTED_ASPECT_RATIOS = Object.freeze(Object.keys(ASPECT_RATIO_PRESETS));
+
+export const CANVAS_HEIGHT_MIN = 180;
+
+export const CANVAS_HEIGHT_MAX = 3840;
+
+export const ASPECT_RATIO_INPUT_MAX_LENGTH = 80;
+
+export const OUTPUT_WIDTH = ASPECT_RATIO_PRESETS[DEFAULT_ASPECT_RATIO].width;
+
+export const OUTPUT_HEIGHT = ASPECT_RATIO_PRESETS[DEFAULT_ASPECT_RATIO].height;
 
 export const INITIAL_OVERLAY_MAX_SIZE = 0.82;
 
@@ -115,6 +135,78 @@ export function normalizeFolderPath(value) {
     else bounded += content[index];
   }
   return bounded ? `/${bounded}` : null;
+}
+
+function greatestCommonDivisor(left, right) {
+  let a = left;
+  let b = right;
+  while (b) [a, b] = [b, a % b];
+  return a;
+}
+
+function parseAspectRatio(value) {
+  const requested = String(value ?? "").trim();
+  if (requested.length > ASPECT_RATIO_INPUT_MAX_LENGTH) return null;
+  if (!/^\d+:\d+$/.test(requested)) return null;
+  const [rawWidth, rawHeight] = requested.split(":").map((part) => BigInt(part));
+  if (rawWidth <= 0n || rawHeight <= 0n) return null;
+  const divisor = greatestCommonDivisor(rawWidth, rawHeight);
+  const ratioWidth = rawWidth / divisor;
+  const ratioHeight = rawHeight / divisor;
+  const height = Number((BigInt(DESIGN_WIDTH) * ratioHeight + ratioWidth / 2n) / ratioWidth);
+  if (height < CANVAS_HEIGHT_MIN || height > CANVAS_HEIGHT_MAX) return null;
+  return { aspectRatio: `${ratioWidth}:${ratioHeight}`, width: DESIGN_WIDTH, height };
+}
+
+export function normalizeAspectRatio(value, fallback = DEFAULT_ASPECT_RATIO) {
+  return parseAspectRatio(value)?.aspectRatio
+    || parseAspectRatio(fallback)?.aspectRatio
+    || DEFAULT_ASPECT_RATIO;
+}
+
+export function aspectRatioFromDimensions(width, height, fallback = DEFAULT_ASPECT_RATIO) {
+  const numericWidth = Number(width);
+  const numericHeight = Number(height);
+  if (
+    !Number.isFinite(numericWidth) || numericWidth <= 0
+    || !Number.isFinite(numericHeight) || numericHeight <= 0
+  ) return normalizeAspectRatio(fallback);
+  const integerWidth = Math.max(1, Math.round(numericWidth));
+  const integerHeight = Math.max(1, Math.round(numericHeight));
+  return normalizeAspectRatio(`${integerWidth}:${integerHeight}`, fallback);
+}
+
+export function projectCanvasDimensions(project = null) {
+  const aspectRatio = normalizeAspectRatio(project?.aspectRatio);
+  const dimensions = ASPECT_RATIO_PRESETS[aspectRatio] || parseAspectRatio(aspectRatio);
+  return { aspectRatio, width: dimensions.width, height: dimensions.height };
+}
+
+export function slideCanvasDimensions(project = null, slide = null) {
+  const projectDimensions = projectCanvasDimensions(project);
+  const aspectRatio = normalizeAspectRatio(slide?.aspectRatio, projectDimensions.aspectRatio);
+  const dimensions = ASPECT_RATIO_PRESETS[aspectRatio] || parseAspectRatio(aspectRatio);
+  return { aspectRatio, width: dimensions.width, height: dimensions.height };
+}
+
+export function scaleCanvasDimensions(project, requestedWidth, slide = null) {
+  const dimensions = slideCanvasDimensions(project, slide);
+  const numericWidth = Number(requestedWidth);
+  const width = Number.isFinite(numericWidth) && numericWidth > 0
+    ? Math.max(1, Math.round(numericWidth))
+    : dimensions.width;
+  return {
+    aspectRatio: dimensions.aspectRatio,
+    width,
+    height: Math.max(1, Math.round(width * dimensions.height / dimensions.width)),
+  };
+}
+
+export function initialTextBoxHeight(project = null, size = 64, slide = null) {
+  const canvas = slideCanvasDimensions(project, slide);
+  const fontSize = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 64;
+  const fittedPixels = fontSize * (TEXT_LINE_HEIGHT + 0.28) + 4;
+  return clamp(Math.max(0.08, fittedPixels / canvas.height), 0.045, 1);
 }
 
 export function folderRoutePath(value) {
@@ -244,14 +336,15 @@ export function layerClipCss(x, y, width, height) {
   return `inset(${inset.top * 100}% ${inset.right * 100}% ${inset.bottom * 100}% ${inset.left * 100}%)`;
 }
 
-export function initialOverlayWidth(asset) {
+export function initialOverlayWidth(asset, project = null, slide = null) {
   const sourceWidth = Number(asset?.width);
   const sourceHeight = Number(asset?.height);
   if (!Number.isFinite(sourceWidth) || sourceWidth <= 0 || !Number.isFinite(sourceHeight) || sourceHeight <= 0) {
     return 0.34;
   }
-  const naturalWidth = sourceWidth / OUTPUT_WIDTH;
-  const naturalHeight = sourceHeight / OUTPUT_HEIGHT;
+  const canvas = slideCanvasDimensions(project, slide);
+  const naturalWidth = sourceWidth / canvas.width;
+  const naturalHeight = sourceHeight / canvas.height;
   const fitScale = Math.min(
     1,
     INITIAL_OVERLAY_MAX_SIZE / naturalWidth,
@@ -515,6 +608,62 @@ export function isEditingTextTarget(target) {
   return Boolean(target?.closest?.("input, textarea, [contenteditable]"));
 }
 
+function isCopiedLayerCanvas(value) {
+  return Boolean(
+    value
+    && typeof value.aspectRatio === "string"
+    && value.aspectRatio.length <= ASPECT_RATIO_INPUT_MAX_LENGTH
+    && /^\d+:\d+$/.test(value.aspectRatio)
+    && Number.isInteger(value.width)
+    && value.width > 0
+    && Number.isInteger(value.height)
+    && value.height > 0
+  );
+}
+
+export function remapLayerGeometryBetweenCanvases(item, sourceCanvas, targetCanvas, { maxHeight = Infinity } = {}) {
+  const remapped = { ...item };
+  const sourceHeight = Number(sourceCanvas?.height);
+  const targetHeight = Number(targetCanvas?.height);
+  const originalHeight = Number(item?.height);
+  if (
+    !Number.isFinite(sourceHeight) || sourceHeight <= 0
+    || !Number.isFinite(targetHeight) || targetHeight <= 0
+    || !Number.isFinite(originalHeight) || originalHeight <= 0
+    || sourceHeight === targetHeight
+  ) return remapped;
+  const originalX = Number.isFinite(Number(item?.x)) ? Number(item.x) : 0;
+  const originalWidth = Number(item?.width);
+  const centerY = (Number.isFinite(Number(item?.y)) ? Number(item.y) : 0) + originalHeight / 2;
+  const desiredHeight = originalHeight * sourceHeight / targetHeight;
+  const boundedMaxHeight = Number.isFinite(Number(maxHeight)) && Number(maxHeight) > 0
+    ? Number(maxHeight)
+    : Infinity;
+  let capScale = desiredHeight > boundedMaxHeight ? boundedMaxHeight / desiredHeight : 1;
+  const originalFontSize = Number(item?.size);
+  if (capScale < 1 && Number.isFinite(originalFontSize) && originalFontSize > 0) {
+    const minimumFontScale = Math.min(1, FONT_SIZE_MIN / originalFontSize);
+    if (desiredHeight * minimumFontScale <= boundedMaxHeight) {
+      capScale = Math.max(capScale, minimumFontScale);
+    }
+  }
+  remapped.height = desiredHeight * capScale;
+  remapped.y = centerY - remapped.height / 2;
+  if (capScale < 1 && Number.isFinite(originalWidth) && originalWidth > 0) {
+    const centerX = originalX + originalWidth / 2;
+    remapped.width = originalWidth * capScale;
+    remapped.x = centerX - remapped.width / 2;
+    if (Number.isFinite(originalFontSize) && originalFontSize > 0) remapped.size = originalFontSize * capScale;
+    if (Number.isFinite(Number(item?.outlineWidth))) remapped.outlineWidth = Number(item.outlineWidth) * capScale;
+  }
+  return remapped;
+}
+
+export function clampLayerCoordinate(value, size) {
+  const extent = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 0;
+  return clamp(Number(value) || 0, Math.min(0, 1 - extent), Math.max(0, 1 - extent));
+}
+
 export function isCopiedLayer(value) {
   return Boolean(
     value
@@ -522,6 +671,7 @@ export function isCopiedLayer(value) {
     && value.token
     && Array.isArray(value.layers)
     && value.layers.length
+    && (!Object.hasOwn(value, "sourceCanvas") || isCopiedLayerCanvas(value.sourceCanvas))
     && value.layers.every((layer) => (
       layer
       && (layer.kind === "text" || layer.kind === "overlay")

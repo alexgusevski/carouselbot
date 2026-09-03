@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -17,8 +17,12 @@ const debuggingPort = 19229;
 const profile = await mkdtemp(join(tmpdir(), "carouselbot-browser-"));
 const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-daemon-"));
 const exportPath = join(profile, "agent-export.png");
+const mixedRatioExportPath = join(profile, "mixed-ratio-export.png");
+const sourceRatioExportPath = join(profile, "source-ratio-export.png");
+const sourceRatioImagePath = join(profile, "source-ratio.svg");
 const fontExportPath = join(profile, "didot-export.png");
 const projectExportDirectory = join(profile, "project-export");
+await writeFile(sourceRatioImagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="400" viewBox="0 0 1600 400"><rect width="1600" height="400" fill="#7C3AED"/><rect width="120" height="400" fill="#FACC15"/><rect x="1480" width="120" height="400" fill="#22D3EE"/></svg>');
 const didotPath = "/System/Library/Fonts/Supplemental/Didot.ttc";
 const didotMetadata = await stat(didotPath).catch((error) => {
   if (error.code === "ENOENT") return null;
@@ -750,8 +754,82 @@ try {
   editSessionId = null;
   const pinnedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify background project edits preserve the current view" })).structuredContent.id;
-  const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
+  const temporaryProject = (await tool("create_project", { name: "Temporary project", aspectRatio: "3:4" })).structuredContent;
   const temporarySlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Background edit", backgroundColor: "#18181B" })).structuredContent;
+  const mixedRatioSlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Square interlude", aspectRatio: "1:1", backgroundColor: "#F4EFE6" })).structuredContent;
+  const sourceRatioSlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Source-ratio panorama", backgroundPath: sourceRatioImagePath })).structuredContent;
+  const formatInspection = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent;
+  const formatSlide = formatInspection.project.slides.find((slide) => slide.id === temporarySlide.createdSlideId);
+  const squareSlide = formatInspection.project.slides.find((slide) => slide.id === mixedRatioSlide.createdSlideId);
+  const panoramaSlide = formatInspection.project.slides.find((slide) => slide.id === sourceRatioSlide.createdSlideId);
+  if (temporaryProject.aspectRatio !== "3:4" || temporaryProject.canvasWidth !== 1080 || temporaryProject.canvasHeight !== 1440
+    || temporarySlide.aspectRatio !== "3:4" || temporarySlide.canvasWidth !== 1080 || temporarySlide.canvasHeight !== 1440
+    || mixedRatioSlide.aspectRatio !== "1:1" || mixedRatioSlide.canvasWidth !== 1080 || mixedRatioSlide.canvasHeight !== 1080
+    || formatInspection.project.aspectRatio !== "3:4" || formatInspection.project.canvasWidth !== 1080 || formatInspection.project.canvasHeight !== 1440
+    || formatSlide?.aspectRatio !== "3:4" || formatSlide.canvasWidth !== 1080 || formatSlide.canvasHeight !== 1440
+    || formatSlide.width !== 1080 || formatSlide.height !== 1440 || formatSlide.background?.type !== "solid" || formatSlide.background.color !== "#18181B"
+    || squareSlide?.aspectRatio !== "1:1" || squareSlide.canvasWidth !== 1080 || squareSlide.canvasHeight !== 1080
+    || squareSlide.width !== 1080 || squareSlide.height !== 1080 || squareSlide.background?.type !== "solid" || squareSlide.background.color !== "#F4EFE6"
+    || sourceRatioSlide.aspectRatio !== "4:1" || sourceRatioSlide.canvasWidth !== 1080 || sourceRatioSlide.canvasHeight !== 270
+    || panoramaSlide?.aspectRatio !== "4:1" || panoramaSlide.canvasWidth !== 1080 || panoramaSlide.canvasHeight !== 270
+    || panoramaSlide.width !== 1600 || panoramaSlide.height !== 400 || panoramaSlide.background?.type !== "image"
+    || formatInspection.slide.aspectRatio !== "3:4" || formatInspection.slide.canvasWidth !== 1080 || formatInspection.slide.canvasHeight !== 1440
+    || formatInspection.slide.width !== 1080 || formatInspection.slide.height !== 1440 || formatInspection.slide.background?.type !== "solid" || formatInspection.slide.background.color !== "#18181B") {
+    throw new Error(`Custom aspect ratio or solid background metadata was not inspectable: ${JSON.stringify({ temporaryProject, formatInspection })}`);
+  }
+  const formatRender = await tool("render_slide", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, width: 360 });
+  const formatImage = formatRender.content.find((item) => item.type === "image");
+  const formatPng = formatImage?.data ? Buffer.from(formatImage.data, "base64") : null;
+  const formatPngWidth = formatPng?.length >= 24 ? formatPng.readUInt32BE(16) : null;
+  const formatPngHeight = formatPng?.length >= 24 ? formatPng.readUInt32BE(20) : null;
+  if (formatRender.structuredContent.width !== 360 || formatRender.structuredContent.height !== 480 || formatPngWidth !== 360 || formatPngHeight !== 480) {
+    throw new Error(`Custom-aspect render dimensions were incorrect: ${JSON.stringify({ rendered: formatRender.structuredContent, png: { width: formatPngWidth, height: formatPngHeight } })}`);
+  }
+  const sourceRatioRender = await tool("render_slide", { projectId: temporaryProject.projectId, slideId: sourceRatioSlide.createdSlideId, width: 360 });
+  const sourceRatioImage = sourceRatioRender.content.find((item) => item.type === "image");
+  const sourceRatioPng = sourceRatioImage?.data ? Buffer.from(sourceRatioImage.data, "base64") : null;
+  if (sourceRatioRender.structuredContent.width !== 360 || sourceRatioRender.structuredContent.height !== 90
+    || sourceRatioPng?.readUInt32BE(16) !== 360 || sourceRatioPng?.readUInt32BE(20) !== 90) {
+    throw new Error(`Source-ratio preview included padding or used the project ratio: ${JSON.stringify(sourceRatioRender.structuredContent)}`);
+  }
+  await tool("export_slide", { projectId: temporaryProject.projectId, slideId: sourceRatioSlide.createdSlideId, outputPath: sourceRatioExportPath });
+  const sourceRatioExport = await readFile(sourceRatioExportPath);
+  if (sourceRatioExport.readUInt32BE(16) !== 1080 || sourceRatioExport.readUInt32BE(20) !== 270) {
+    throw new Error(`Source-ratio export included workspace padding: ${JSON.stringify({ width: sourceRatioExport.readUInt32BE(16), height: sourceRatioExport.readUInt32BE(20) })}`);
+  }
+  const ratioText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, text: "One carousel, many shapes", role: "subtitle", x: 0.16, y: 0.24, width: 0.68, height: 0.14, color: "#111111" })).structuredContent;
+  const ratioAsset = (await tool("import_asset", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, path: join(rootPath, "assets", "airdrop.svg"), name: "Ratio test mark" })).structuredContent;
+  const ratioImage = (await tool("add_image", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, assetId: ratioAsset.assetId, x: 0.32, y: 0.56, width: 0.36 })).structuredContent;
+  const squareBeforeUpdate = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId })).structuredContent.slide;
+  const ratioUpdate = (await tool("update_slide", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, aspectRatio: "4:3" })).structuredContent;
+  const landscapeAfterUpdate = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId })).structuredContent.slide;
+  const beforeText = squareBeforeUpdate.texts.find((text) => text.id === ratioText.createdTextId);
+  const afterText = landscapeAfterUpdate.texts.find((text) => text.id === ratioText.createdTextId);
+  const beforeImage = squareBeforeUpdate.images.find((image) => image.id === ratioImage.createdImageId);
+  const afterImage = landscapeAfterUpdate.images.find((image) => image.id === ratioImage.createdImageId);
+  const centerY = (layer) => layer.y + layer.height / 2;
+  const expectedHeightScale = 1080 / 810;
+  if (ratioUpdate.aspectRatio !== "4:3" || ratioUpdate.canvasWidth !== 1080 || ratioUpdate.canvasHeight !== 810
+    || landscapeAfterUpdate.aspectRatio !== "4:3" || landscapeAfterUpdate.canvasWidth !== 1080 || landscapeAfterUpdate.canvasHeight !== 810
+    || landscapeAfterUpdate.width !== 1080 || landscapeAfterUpdate.height !== 810
+    || landscapeAfterUpdate.background?.type !== "solid" || landscapeAfterUpdate.background.color !== "#F4EFE6"
+    || !beforeText || !afterText || Math.abs(centerY(afterText) - centerY(beforeText)) > 0.000001 || Math.abs(afterText.height - beforeText.height * expectedHeightScale) > 0.000001
+    || !beforeImage || !afterImage || Math.abs(centerY(afterImage) - centerY(beforeImage)) > 0.000001 || Math.abs(afterImage.height - beforeImage.height * expectedHeightScale) > 0.000001) {
+    throw new Error(`Per-slide aspect-ratio update did not preserve layer geometry and solid background metadata: ${JSON.stringify({ ratioUpdate, squareBeforeUpdate, landscapeAfterUpdate })}`);
+  }
+  const landscapeRender = await tool("render_slide", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, width: 360 });
+  const landscapeImage = landscapeRender.content.find((item) => item.type === "image");
+  const landscapePng = landscapeImage?.data ? Buffer.from(landscapeImage.data, "base64") : null;
+  const landscapePngWidth = landscapePng?.length >= 24 ? landscapePng.readUInt32BE(16) : null;
+  const landscapePngHeight = landscapePng?.length >= 24 ? landscapePng.readUInt32BE(20) : null;
+  if (landscapeRender.structuredContent.width !== 360 || landscapeRender.structuredContent.height !== 270 || landscapePngWidth !== 360 || landscapePngHeight !== 270) {
+    throw new Error(`Slide-specific render dimensions were incorrect: ${JSON.stringify({ rendered: landscapeRender.structuredContent, png: { width: landscapePngWidth, height: landscapePngHeight } })}`);
+  }
+  await tool("export_slide", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, outputPath: mixedRatioExportPath });
+  const landscapeExport = await readFile(mixedRatioExportPath);
+  if (landscapeExport.length < 24 || landscapeExport.readUInt32BE(16) !== 1080 || landscapeExport.readUInt32BE(20) !== 810) {
+    throw new Error(`Slide-specific export dimensions were incorrect: ${JSON.stringify({ width: landscapeExport.length >= 24 ? landscapeExport.readUInt32BE(16) : null, height: landscapeExport.length >= 24 ? landscapeExport.readUInt32BE(20) : null })}`);
+  }
   const perLineText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Edited without taking over", role: "subtitle", x: 0.1, y: 0.2, width: 0.8, height: 0.16, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
   const autoFitText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Short body copy.", role: "body", x: 0.14, y: 0.5, width: 0.72, height: 0.045, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
   const autoFitBefore = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide.texts.find((text) => text.id === autoFitText.createdTextId);
@@ -827,7 +905,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, reconnectAfterDaemonReplacement: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 46, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, reconnectAfterDaemonReplacement: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, customAspectRatioAndSolidBackground: true, mixedSlideAspectRatios: true, sourceImageAspectRatios: true, sourceRatioExportsExcludeWorkspace: true, slideRatioLayerRemapping: true, slideRatioExportDimensions: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 58, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

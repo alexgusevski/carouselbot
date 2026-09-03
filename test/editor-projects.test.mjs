@@ -8,6 +8,7 @@ globalThis.document = {
 
 const { normalizeLoadedProjects } = await import("../src/editor-projects.mjs");
 const { projectChannel } = await import("../src/project-store.mjs");
+const { solidBackgroundDataUrl } = await import("../src/slide-background.mjs");
 
 test.after(() => projectChannel?.close());
 
@@ -32,6 +33,8 @@ test("normalizes legacy projects in place without replacing existing records", (
   assert.equal(result[0].slides[0], slide);
   assert.equal(result[0].slides[0].texts[0], text);
   assert.equal(project.revision, 0);
+  assert.equal(project.aspectRatio, "9:16");
+  assert.equal(slide.aspectRatio, "9:16");
   assert.equal(project.folderPath, null);
   assert.deepEqual(project.assets, []);
   assert.deepEqual(project.fonts, []);
@@ -55,6 +58,81 @@ test("normalizes project folder paths without changing project identity", () => 
   assert.equal(project.id, "project-folder");
   assert.equal(project.folderPath, "/my-folder");
   assert.equal(project.revision, 3);
+});
+
+test("normalizes per-slide formats, solid colors, and overlay geometry against the slide canvas", () => {
+  const overlay = {
+    id: "overlay-square",
+    assetId: "asset-square",
+    width: 0.4,
+    cropX: 0.1,
+    cropY: 0.2,
+    cropW: 0.5,
+    cropH: 0.25,
+  };
+  const slide = {
+    id: "slide-square",
+    aspectRatio: "03:04",
+    width: 640,
+    height: 480,
+    backgroundColor: "#aBc",
+    imageData: solidBackgroundDataUrl("#ABC", { aspectRatio: "1:1" }, { aspectRatio: "3:4" }),
+    overlays: [overlay],
+    texts: [],
+  };
+  const project = {
+    id: "project-square",
+    aspectRatio: "1:1",
+    revision: 1,
+    assets: [{ id: "asset-square", width: 800, height: 400 }],
+    slides: [slide],
+  };
+
+  normalizeLoadedProjects([project]);
+
+  assert.equal(project.aspectRatio, "1:1");
+  assert.equal(slide.aspectRatio, "3:4");
+  assert.equal(slide.width, 640, "slide width remains the background's natural width");
+  assert.equal(slide.height, 480, "slide height remains the background's natural height");
+  assert.equal(slide.backgroundColor, "#AABBCC");
+  assert.ok(Math.abs(overlay.height - 0.075) < Number.EPSILON);
+});
+
+test("removes a stale solid color when the stored background is a replacement image", () => {
+  const replacementImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='640' height='480'></svg>";
+  const slide = {
+    id: "slide-replaced-background",
+    width: 640,
+    height: 480,
+    backgroundColor: "#ABC",
+    imageData: replacementImage,
+    overlays: [],
+    texts: [],
+  };
+  const project = {
+    id: "project-replaced-background",
+    aspectRatio: "1:1",
+    revision: 1,
+    assets: [],
+    slides: [slide],
+  };
+
+  normalizeLoadedProjects([project]);
+
+  assert.equal(slide.imageData, replacementImage);
+  assert.equal(slide.aspectRatio, "1:1");
+  assert.equal(Object.hasOwn(slide, "backgroundColor"), false);
+});
+
+test("falls back to inherited formats and removes malformed stored solid colors", () => {
+  const slide = { id: "slide-invalid", aspectRatio: "1:7", backgroundColor: "not-a-color", texts: [], overlays: [] };
+  const project = { id: "project-invalid", aspectRatio: "1:7", revision: 1, assets: [], slides: [slide] };
+
+  normalizeLoadedProjects([project]);
+
+  assert.equal(project.aspectRatio, "9:16");
+  assert.equal(slide.aspectRatio, "9:16");
+  assert.equal(Object.hasOwn(slide, "backgroundColor"), false);
 });
 
 test("derives cropped overlay height and missing layer order from legacy assets", () => {

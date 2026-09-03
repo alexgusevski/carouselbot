@@ -25,6 +25,7 @@ test("every local module import resolves to a committed source file", async () =
     "main.mjs",
     "project-fonts.mjs",
     "project-store.mjs",
+    "slide-background.mjs",
     "slide-renderer.mjs",
   ]);
 

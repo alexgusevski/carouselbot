@@ -10,6 +10,21 @@ const folderPath = z.string().min(2).max(160)
   .regex(/^\/(?!\/)\S(?:[\s\S]*\S)?$/, "Use a canonical folder path with one leading slash and no surrounding whitespace, for example /my-folder.")
   .refine((value) => value !== "/." && value !== "/..", "Folder paths cannot use the reserved names /. or /..");
 const color = z.string().regex(/^#?[0-9a-f]{3}(?:[0-9a-f]{3})?$/i, "Use a 3- or 6-digit hex color.");
+const ASPECT_RATIO_INPUT_MAX_LENGTH = 80;
+const aspectRatio = z.string().max(ASPECT_RATIO_INPUT_MAX_LENGTH)
+  .regex(/^\d{1,39}:\d{1,39}$/, "Use a positive width:height ratio such as 4:5 or 16:9.")
+  .refine((value) => {
+    try {
+      if (value.length > ASPECT_RATIO_INPUT_MAX_LENGTH) return false;
+      const [width, height] = value.split(":").map((part) => BigInt(part));
+      if (width <= 0n || height <= 0n) return false;
+      const canvasHeight = Number((1080n * height + width / 2n) / width);
+      return canvasHeight >= 180 && canvasHeight <= 3840;
+    } catch {
+      return false;
+    }
+  }, "The ratio must produce a canvas height between 180 and 3840 pixels at 1080 pixels wide.")
+  .describe("Canvas ratio. Presets: 9:16, 2:3, 3:4, 4:5, 1:1, 4:3, 16:9. Other positive W:H ratios are reduced to canonical form and must yield a 180–3840 px canvas height at 1080 px wide. A project ratio is the default for new slides; an add_slide or update_slide ratio applies to that slide only.");
 const unit = z.number().min(-0.5).max(1.5);
 const positiveUnit = z.number().min(0.01).max(2.4);
 const expectedRevision = z.number().int().min(0).optional().describe("Optional optimistic-concurrency guard from inspect_editor.");
@@ -26,7 +41,8 @@ const textFields = {
   fontId,
   fontWeight: z.number().int().min(1).max(1000).optional(),
   fontStyle: z.enum(["normal", "italic"]).optional(),
-  fontVariationSettings: z.record(z.string().regex(/^[A-Za-z0-9]{4}$/), z.number()).optional(),
+  fontVariationSettings: z.record(z.string().regex(/^[A-Za-z0-9]{4}$/), z.number()).optional()
+    .describe("Variable-font axis settings. Only wght currently has guaranteed DOM, fitting, and exported-canvas parity; preserve but do not newly apply other axes."),
   rotation: z.number().min(-720).max(720).optional(), z: z.number().optional(),
 };
 const imageFields = {
@@ -36,6 +52,13 @@ const imageFields = {
   cropW: z.number().min(0.05).max(1).optional(), cropH: z.number().min(0.05).max(1).optional(),
 };
 
+function backgroundSourceSchema(shape) {
+  return z.object(shape).strict().refine(
+    ({ backgroundColor, backgroundPath }) => !(backgroundColor && backgroundPath),
+    { message: "backgroundColor and backgroundPath are mutually exclusive; choose one background source." },
+  );
+}
+
 const definitions = new Map();
 
 function textResult(value, summary = value) {
@@ -43,7 +66,7 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["id", "editSessionId", "editorId", "projectId", "folderPath", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
+  const keys = ["id", "editSessionId", "editorId", "projectId", "aspectRatio", "canvasWidth", "canvasHeight", "folderPath", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
   return Object.fromEntries(keys.flatMap((key) => {
     if (key === "folderPath" && Object.hasOwn(value || {}, key)) return [[key, value[key] ?? null]];
     return value?.[key] == null ? [] : [[key, value[key]]];
@@ -171,14 +194,14 @@ export async function createCarouselBotMcpServer(companion) {
   register("list_project_fonts", "List fonts already imported into one project, including whether each face is currently available.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "list_project_fonts", args), { readOnlyHint: true });
   register("show_notification", "Show a short visual notification in a connected editor for status or marketing demos.", z.object({ editSessionId, message: z.string().min(1).max(240), tone: z.enum(["agent", "success", "info", "error"]).default("agent") }).strict(), ({ editSessionId, ...args }) => companion.call("notify", { ...args, editSessionId }), { destructiveHint: false, idempotentHint: false });
 
-  register("create_project", "Create an empty project without changing the user's current browser view. Pass a canonical folderPath such as /my-folder to create it inside that folder; omit it or use null for the dashboard root.", z.object({ editSessionId, name: z.string().min(1).max(160), folderPath: folderPath.nullable().optional() }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
+  register("create_project", "Create an empty project without changing the user's current browser view. Choose an optional aspect ratio: use a documented preset or a positive integer W:H value; legacy/default projects use 9:16. Pass a canonical folderPath such as /my-folder to create it inside that folder; omit it or use null for the dashboard root.", z.object({ editSessionId, name: z.string().min(1).max(160), aspectRatio: aspectRatio.optional(), folderPath: folderPath.nullable().optional() }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
   register("open_project", "Explicitly navigate the browser to a project and optionally a specific slide without changing content. Use only when the user asks to show it.", z.object({ editSessionId, projectId: id, slideId: optionalId }).strict(), (args) => browserOperation(companion, "open_project", args), { destructiveHint: false, idempotentHint: true });
   register("update_project", "Rename a project.", z.object({ ...targetProject, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_project", args), { destructiveHint: true });
   register("move_project", "Move a project into a folder by canonical slash path, move it between folders, or move it back to the dashboard root with folderPath=null. Folder cards are derived from project membership, so empty folders disappear.", z.object({ ...targetProject, projectId: id, folderPath: folderPath.nullable() }).strict(), (args) => browserOperation(companion, "move_project", args), { destructiveHint: true });
   register("delete_project", "Delete a project from browser storage.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "delete_project", args), { destructiveHint: true });
 
-  register("add_slide", "Add a slide using a solid color or local background image path. The browser follows it only when that project is already visible.", z.object({ ...targetProject, name: z.string().max(160).optional(), index: z.number().int().min(0).optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional() }).strict(), (args) => browserOperation(companion, "add_slide", args), { destructiveHint: false });
-  register("update_slide", "Rename a slide, replace its background, or change background pan/zoom. The browser follows it only when that project is already visible.", z.object({ ...targetSlide, name: z.string().max(160).optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional(), imageScale: z.number().min(1).max(3).optional(), imageX: unit.optional(), imageY: unit.optional() }).strict(), (args) => browserOperation(companion, "update_slide", args), { destructiveHint: true });
+  register("add_slide", "Add a slide using a solid backgroundColor or local backgroundPath. A backgroundPath with no aspectRatio adopts the source image's exact reduced ratio, scales it to the 1080-pixel canvas width, and exports only that canvas. A solid slide with no aspectRatio uses the project's default; omit both background sources to use #EEEDE7. Pass aspectRatio to override either default. The browser follows it only when that project is already visible.", backgroundSourceSchema({ ...targetProject, name: z.string().max(160).optional(), index: z.number().int().min(0).optional(), aspectRatio: aspectRatio.optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional() }), (args) => browserOperation(companion, "add_slide", args), { destructiveHint: false });
+  register("update_slide", "Rename a slide, change only that slide's optional aspectRatio, replace its background with either a solid backgroundColor or local backgroundPath, or change background pan/zoom. Ratio changes preserve layer proportions and centers. The two background sources are mutually exclusive. The browser follows it only when that project is already visible.", backgroundSourceSchema({ ...targetSlide, name: z.string().max(160).optional(), aspectRatio: aspectRatio.optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional(), imageScale: z.number().min(1).max(3).optional(), imageX: unit.optional(), imageY: unit.optional() }), (args) => browserOperation(companion, "update_slide", args), { destructiveHint: true });
   register("duplicate_slide", "Duplicate a slide with all layers. The browser follows the copy only when that project is already visible.", z.object({ ...targetSlide, name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "duplicate_slide", args), { destructiveHint: false });
   register("reorder_slides", "Set the complete slide order using every slide ID exactly once.", z.object({ ...targetProject, slideIds: z.array(id).min(1) }).strict(), (args) => browserOperation(companion, "reorder_slides", args), { destructiveHint: true });
   register("delete_slide", "Delete one slide.", z.object({ ...targetSlide, slideId: id }).strict(), (args) => browserOperation(companion, "delete_slide", args), { destructiveHint: true });

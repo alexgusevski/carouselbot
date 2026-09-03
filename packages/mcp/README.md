@@ -28,12 +28,28 @@ The same validated tool surface is available through the package CLI when a runn
 npx -y carouselbot@latest call get_design_guidance
 npx -y carouselbot@latest call list_editors
 npx -y carouselbot@latest call begin_edit_session --json '{"editorId":"EDITOR_ID","purpose":"Build my deck"}'
-npx -y carouselbot@latest call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation","folderPath":"/campaigns"}'
+npx -y carouselbot@latest call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation","aspectRatio":"3:4","folderPath":"/campaigns"}'
 ```
 
 Every MCP tool name and JSON argument shape works with `call`. The CLI-only `list_tools` helper lists names compactly or returns selected schemas. `render_slide` writes image output to a temporary `previewPath` instead of dumping base64 into the terminal.
 
 Folders use exact canonical slash paths such as `/campaigns` and are derived from project membership. Pass `folderPath` to `create_project` to create a project in a folder. Use `move_project` with another slash path to move it between folders, or with `folderPath: null` to move it back to the dashboard root. Embedded slashes are part of the virtual path and do not create a nested UI hierarchy. Because folders are implicit, moving the last project out removes the empty folder card automatically. `inspect_editor` returns each project's current folder path.
+
+## Canvas formats and backgrounds
+
+Choose `aspectRatio` when creating a project to set the default for new slides. The editor offers `9:16`, `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, and `16:9`; MCP callers may also use another positive `W:H` ratio that produces a canvas between 180 and 3840 pixels high at the fixed 1080-pixel export width. Pass `aspectRatio` to `add_slide` when one slide should differ from the project default, or to `update_slide` to change only that slide. Existing text and image layers keep their proportions and relative centers when a slide ratio changes.
+
+An image-backed `add_slide` automatically adopts the source image's exact reduced ratio when `backgroundPath` is supplied without `aspectRatio`. The image therefore scales to the 1080-pixel canvas width without adding workspace padding to the output; exports contain only the image-shaped slide canvas and its layers. Pass `aspectRatio` alongside `backgroundPath` only for an intentional crop-to-format slide. Native browser uploads use the same source-ratio behavior.
+
+For example, a `3:4` project can contain an inherited `3:4` opener, a square slide, and a custom ultra-wide slide:
+
+```bash
+npx -y carouselbot@latest call add_slide --json '{"editSessionId":"SESSION_ID","projectId":"PROJECT_ID","backgroundColor":"#F4EFE6"}'
+npx -y carouselbot@latest call add_slide --json '{"editSessionId":"SESSION_ID","projectId":"PROJECT_ID","aspectRatio":"1:1","backgroundColor":"#111111"}'
+npx -y carouselbot@latest call add_slide --json '{"editSessionId":"SESSION_ID","projectId":"PROJECT_ID","aspectRatio":"18:5","backgroundColor":"#FFFFFF"}'
+```
+
+Create a flat slide directly with `add_slide({ backgroundColor: "#F4EFE6" })`, or replace a slide background with `update_slide`. A color is stored as project data and rendered natively, so no white or colored placeholder file is needed. `backgroundColor` and `backgroundPath` are mutually exclusive.
 
 Always use `list_editors` to check the browser connection. Do not open CarouselBot or click **Connect AI** through a sandboxed, remote, or agent-controlled browser: that is a different browser session and may not reach the local companion.
 
@@ -53,7 +69,7 @@ import_font({ editSessionId, projectId, localFontId })
 add_text({ editSessionId, projectId, slideId, text, fontId })
 ```
 
-`list_project_fonts` reports faces already embedded in a project. `add_text` and `update_text` accept the returned `fontId`, plus optional `fontWeight`, `fontStyle`, and variable-axis settings. The companion returns opaque local font IDs and never exposes font paths. A selected face is transferred over the authenticated loopback connection, persisted only in the browser's local IndexedDB project, and loaded before fitting or rendering. If the exact bytes are missing or invalid, rendering reports `FONT_UNAVAILABLE` instead of silently using a fallback.
+`list_project_fonts` reports faces already embedded in a project. `add_text` and `update_text` accept the returned `fontId`, plus optional `fontWeight` and `fontStyle`. The `wght` variable-font axis has editor/export parity; other axes are preserved for compatibility but should not be newly applied until the canvas renderer supports them exactly. The companion returns opaque local font IDs and never exposes font paths. A selected face is transferred over the authenticated loopback connection, persisted only in the browser's local IndexedDB project, and loaded before fitting or rendering. If the exact bytes are missing or invalid, rendering reports `FONT_UNAVAILABLE` instead of silently using a fallback. Ordinary typography remains an editable text layer; agents must not substitute a text-only image to imitate a font.
 
 Any MCP client can launch it with:
 

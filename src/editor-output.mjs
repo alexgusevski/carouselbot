@@ -1,4 +1,4 @@
-import { safeFilename } from "./editor-model.mjs";
+import { safeFilename, scaleCanvasDimensions, slideCanvasDimensions } from "./editor-model.mjs";
 import {
   state,
   app,
@@ -58,7 +58,8 @@ export function createEditorOutput({ toast }) {
     state.projectCoverVersions.set(project.id, version);
     target.classList.add("is-rendering");
     try {
-      const canvas = await renderSlideCanvas(slide, 270, 480, project);
+      const preview = scaleCanvasDimensions(project, 270, slide);
+      const canvas = await renderSlideCanvas(slide, preview.width, preview.height, project);
       const blob = await canvasToBlob(canvas);
       if (state.projectCoverVersions.get(project.id) !== version) return;
       const url = URL.createObjectURL(blob);
@@ -126,7 +127,9 @@ export function createEditorOutput({ toast }) {
       .filter((font) => fontIds.has(font.id))
       .map((font) => [font.id, font.fingerprint || font.localFontId || "", font.dataRevision || "", font.fontData?.length || 0]);
     return JSON.stringify([
+      slideCanvasDimensions(project, slide),
       slide.backgroundRevision || "",
+      slide.backgroundColor || "",
       slide.imageScale || 1,
       slide.imageX || 0,
       slide.imageY || 0,
@@ -167,7 +170,8 @@ export function createEditorOutput({ toast }) {
     await acquireThumbnailRenderSlot();
     try {
       if (state.thumbnailVersions.get(cacheKey) !== renderToken || !slideThumbnailTargets(slide.id, project).length) return;
-      const canvas = await renderSlideCanvas(slide, 540, 960, project);
+      const preview = scaleCanvasDimensions(project, 540, slide);
+      const canvas = await renderSlideCanvas(slide, preview.width, preview.height, project);
       const blob = await canvasToBlob(canvas);
       if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
       const url = URL.createObjectURL(blob);
@@ -304,9 +308,9 @@ export function createEditorOutput({ toast }) {
     });
   }
 
-  async function renderSlideBlob(slide = activeSlide()) {
+  async function renderSlideBlob(slide = activeSlide(), project = activeProject()) {
     if (!slide) return null;
-    const canvas = await renderSlideCanvas(slide);
+    const canvas = await renderSlideCanvas(slide, undefined, undefined, project);
     return new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
   }
 
@@ -398,7 +402,7 @@ export function createEditorOutput({ toast }) {
         files = [];
         for (const [index, slide] of project.slides.entries()) {
           if (shareButton) shareButton.textContent = `Preparing ${index + 1}/${project.slides.length}…`;
-          const blob = await renderSlideBlob(slide);
+          const blob = await renderSlideBlob(slide, project);
           if (!blob) throw new Error(`Could not create PNG for slide ${index + 1}`);
           files.push(new File([blob], slideExportName(slide, index), { type: "image/png" }));
         }

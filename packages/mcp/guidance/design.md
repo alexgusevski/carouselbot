@@ -4,7 +4,9 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 
 ## Defaults that usually look good
 
-- Build for a 9:16 phone canvas and keep one clear idea per slide.
+- Choose a project aspect ratio as the default for new slides. `9:16` is the default; presets also include `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, and `16:9`. Pass `aspectRatio` to `add_slide` or `update_slide` when an individual slide should differ, and use another validated positive `W:H` ratio when the reference demands it. Deliberate format changes can add rhythm and uniqueness; accidental inconsistency cannot. Keep one clear idea per slide.
+- When `add_slide` uses `backgroundPath` without an explicit `aspectRatio`, the slide adopts the image's exact reduced ratio. Use this for source-faithful image slides: the image scales to the fixed 1080-pixel canvas width, workspace space above or below stays outside the slide, and export contains only the visible slide canvas. Pass `aspectRatio` only when deliberate crop-to-format behavior is wanted.
+- For a flat background, call `add_slide` with `backgroundColor` (or `update_slide` with `backgroundColor`). Do not create, upload, or import a bitmap merely to get a solid color.
 - Prefer `boxed` text with `backgroundShape: "lines"` for highlighted copy. Treat per-line boxes as the default; use `full` only for a deliberate card or label.
 - `add_text` and `update_text` automatically preserve width and fit height around all wrapped lines with safety padding. Do not render just to discover clipping or call `fit_text_boxes` after ordinary copy edits.
 - Use `fit_text_boxes` with `mode: "both"` only when you intentionally want width to shrink as well. If automatic fitting rejects copy that cannot fit on one slide, shorten it or split it across slides.
@@ -21,6 +23,8 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Use rotation sparingly. Small intentional angles can add energy; arbitrary angles make carousels feel inconsistent.
 - Reuse a small palette and consistent type scale across the project.
 - For an installed Mac font, select an exact face with `list_local_fonts`, import its opaque ID with `import_font`, and apply only the returned project `fontId`. Reuse project faces through `list_project_fonts`; never guess family strings.
+- Use `fontWeight` (or the matching `wght` axis) for variable weight. Do not newly apply `wdth`, `opsz`, `slnt`, or custom axes until exported-canvas parity is available.
+- Keep ordinary typography as editable text layers, including typography that uses an imported font. Never generate or import a text-only PNG/SVG and place it with `add_image` just to imitate a font. If the requested face cannot be imported, keep the copy editable in an available face and report the substitution instead of baking the words into pixels.
 
 ## Working method
 
@@ -47,4 +51,5 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Keep tool responses and progress messages concise.
 - Prefer IDs returned by tools over guessed names or array positions.
 - Do not claim a slide looks good until you have inspected a rendered image.
+- Use `add_text` or `update_text` for all ordinary words. Reserve image assets for photographs, illustrations, logos, screenshots, and deliberate artwork that cannot be represented by editable CarouselBot layers.
 - Do not call `open_project` merely to edit or render another project. It intentionally changes the user's browser view; use it only when the user asks to see that project.

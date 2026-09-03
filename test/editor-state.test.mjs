@@ -121,15 +121,86 @@ test("derives and clamps a missing overlay height", () => {
   assert.equal(overlay.height, 0.16875);
 });
 
+test("derives overlay geometry from the owning slide rather than the project default", () => {
+  const project = installProject();
+  project.aspectRatio = "9:16";
+  const slide = project.slides[0];
+  slide.aspectRatio = "1:1";
+  const asset = projectAsset("asset-1");
+  const measured = getOverlayMetrics(
+    { id: "measured", assetId: asset.id, width: 0.4 },
+    asset,
+    { project, slide },
+  );
+  assert.ok(Math.abs(measured.height - 0.3) < Number.EPSILON);
+
+  const constrained = { id: "constrained", assetId: asset.id, width: 0.4, height: 0 };
+  constrainOverlay(constrained, asset, { project, slide });
+  assert.ok(Math.abs(constrained.height - 0.3) < Number.EPSILON);
+});
+
 test("clamps photo pan to the visible cover-image range", () => {
   const project = installProject();
   const slide = project.slides[0];
-  state.stageWidth = 1000;
-  state.stageHeight = 2000;
+  state.stageWidth = 540;
+  state.stageHeight = 960;
   slide.imageX = 5;
   slide.imageY = -5;
   constrainImagePosition(slide);
-  assert.equal(slide.imageX, 0.5);
+  assert.equal(slide.imageX, 7 / 18);
+  assert.equal(Math.abs(slide.imageY), 0);
+});
+
+test("constrains the active background image against its slide-specific format", () => {
+  const project = installProject();
+  project.aspectRatio = "9:16";
+  const slide = project.slides[0];
+  slide.aspectRatio = "1:1";
+  state.stageWidth = 540;
+  state.stageHeight = 540;
+  slide.imageX = 5;
+  slide.imageY = -5;
+
+  constrainImagePosition(slide, project);
+
+  assert.equal(Math.abs(slide.imageX), 0);
+  assert.equal(Math.abs(slide.imageY), 0);
+});
+
+test("does not constrain a non-active project with the visible project's stage ratio", () => {
+  installProject();
+  state.stageWidth = 540;
+  state.stageHeight = 960;
+  const project = {
+    id: "project-3x4",
+    aspectRatio: "3:4",
+  };
+  const slide = {
+    width: 1000,
+    height: 1000,
+    imageScale: 1,
+    imageX: 5,
+    imageY: -5,
+  };
+
+  constrainImagePosition(slide, project);
+
+  assert.ok(Math.abs(slide.imageX - (1 / 6)) < Number.EPSILON);
+  assert.equal(Math.abs(slide.imageY), 0);
+});
+
+test("ignores stale stage dimensions whose ratio does not match the active project", () => {
+  const project = installProject();
+  project.aspectRatio = "3:4";
+  state.stageWidth = 540;
+  state.stageHeight = 960;
+  const slide = project.slides[0];
+  slide.imageX = 5;
+  slide.imageY = -5;
+
+  constrainImagePosition(slide, project);
+
+  assert.ok(Math.abs(slide.imageX - (1 / 6)) < Number.EPSILON);
   assert.equal(Math.abs(slide.imageY), 0);
 });
 

@@ -1,6 +1,4 @@
 import {
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
   CANVAS_ZOOM_MIN,
@@ -10,6 +8,8 @@ import {
   adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
+  normalizeAspectRatio,
+  slideCanvasDimensions,
   textColor,
   rgbToHex,
   formatRgb,
@@ -76,6 +76,7 @@ export function createEditorUI({ projects, actions, output }) {
     deleteSelectedText,
     beginSlideBackgroundChange,
     handleSlideBackgroundChange,
+    setSlideAspectRatio,
     removeSlide,
     reorderSlide,
     addDroppedAssetsToSlide,
@@ -495,13 +496,16 @@ export function createEditorUI({ projects, actions, output }) {
 
     const renderProjectCard = (project) => {
       const previewId = `project-preview-${project.id}`;
-      const slides = project.slides.map((slide) => `
-        <span class="project-preview-slide" data-project-preview-slide-id="${slide.id}" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}">
-          ${state.thumbnailUrls.has(slideThumbnailKey(project.id, slide.id))
-            ? renderSlideThumbnail(slide, project)
-            : `<img class="project-preview-source" src="${slide.imageData}" alt="" draggable="false" loading="lazy" decoding="async" aria-hidden="true" />`}
-        </span>
-      `).join("");
+      const slides = project.slides.map((slide) => {
+        const canvas = slideCanvasDimensions(project, slide);
+        return `
+          <span class="project-preview-slide" data-project-preview-slide-id="${slide.id}" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}" style="aspect-ratio:${canvas.width} / ${canvas.height}">
+            ${state.thumbnailUrls.has(slideThumbnailKey(project.id, slide.id))
+              ? renderSlideThumbnail(slide, project)
+              : `<img class="project-preview-source" src="${slide.imageData}" alt="" draggable="false" loading="lazy" decoding="async" aria-hidden="true" />`}
+          </span>
+        `;
+      }).join("");
       return `
         <div class="project-card-shell">
           <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}, ${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"}. Right-click for actions." title="Right-click for actions">
@@ -618,7 +622,7 @@ export function createEditorUI({ projects, actions, output }) {
         ${renderAssetRail(project)}
         <section class="workspace" aria-label="Image editor">
           <div class="workspace-inner">
-            ${activeSlide() ? renderStage(activeSlide()) : renderEmptyStage()}
+            ${activeSlide() ? renderStage(activeSlide(), project) : renderEmptyStage(project)}
           </div>
         </section>
         ${renderInspector()}
@@ -688,6 +692,23 @@ export function createEditorUI({ projects, actions, output }) {
       activeProject().name = title.value || "New Project";
       document.title = `${activeProject().name} · CarouselBot`;
       scheduleSave();
+    });
+
+    app.querySelector("#project-aspect-ratio")?.addEventListener("change", (event) => {
+      const project = activeProject();
+      if (!project || project.slides.length) return;
+      const nextAspectRatio = normalizeAspectRatio(event.currentTarget.value, project.aspectRatio);
+      if (nextAspectRatio === project.aspectRatio) return;
+      recordHistory();
+      project.aspectRatio = nextAspectRatio;
+      scheduleSave();
+      renderEditor();
+    });
+
+    app.querySelector("#slide-aspect-ratio")?.addEventListener("change", (event) => {
+      const slide = activeSlide();
+      if (!slide) return;
+      setSlideAspectRatio(slide.id, event.currentTarget.value);
     });
 
     app.querySelectorAll('[data-action="upload"]').forEach((button) => {
@@ -1140,7 +1161,8 @@ export function createEditorUI({ projects, actions, output }) {
     const composition = inner.querySelector(".canvas-composition");
     const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;
     const canvasWidth = Math.max(1, availableWidth - (actions?.offsetWidth || 0) - toolbarGap);
-    const ratio = OUTPUT_WIDTH / OUTPUT_HEIGHT;
+    const canvas = slideCanvasDimensions(activeProject(), slide);
+    const ratio = canvas.width / canvas.height;
     let width = canvasWidth;
     let height = width / ratio;
     if (height > availableHeight) {
@@ -1153,7 +1175,7 @@ export function createEditorUI({ projects, actions, output }) {
     state.stageHeight = height;
     stage.style.width = `${width}px`;
     stage.style.height = `${height}px`;
-    stage.style.setProperty("--stage-scale", width / OUTPUT_WIDTH);
+    stage.style.setProperty("--stage-scale", width / canvas.width);
     updateStageImage(slide);
     activeSlide().texts.forEach(updateTextBox);
     (activeSlide().overlays || []).forEach(updateOverlayBox);

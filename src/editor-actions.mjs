@@ -8,6 +8,12 @@ import {
   layerKey,
   overlayCrop,
   initialOverlayWidth,
+  initialTextBoxHeight,
+  aspectRatioFromDimensions,
+  normalizeAspectRatio,
+  slideCanvasDimensions,
+  remapLayerGeometryBetweenCanvases,
+  clampLayerCoordinate,
   slideItems,
   nextLayerZ,
   clamp,
@@ -31,6 +37,7 @@ import {
 } from "./editor-state.mjs";
 import { putProject } from "./project-store.mjs";
 import { getImageDimensions, fingerprintData } from "./slide-renderer.mjs";
+import { canonicalSolidBackgroundColor, solidBackgroundDataUrl } from "./slide-background.mjs";
 import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_WEIGHT } from "./project-fonts.mjs";
 
 export function createEditorActions({
@@ -140,7 +147,7 @@ export function createEditorActions({
     if (!slide) return;
     recordHistory();
     const width = 0.64;
-    const height = 0.08;
+    const height = initialTextBoxHeight(activeProject(), 64, slide);
     const text = {
       id: uid(),
       text: "Your text",
@@ -213,6 +220,7 @@ export function createEditorActions({
       slide.imageData = imageData;
       slide.width = dimensions.width;
       slide.height = dimensions.height;
+      delete slide.backgroundColor;
       slide.backgroundRevision = uid();
       constrainImagePosition(slide);
       clearSlideThumbnail(slide.id, project.id);
@@ -223,6 +231,44 @@ export function createEditorActions({
       console.error(error);
       toast("That image couldn’t be used as the slide background.");
     }
+  }
+
+  function setSlideAspectRatio(slideId, value) {
+    const project = activeProject();
+    const slide = project?.slides.find((item) => item.id === slideId);
+    if (!project || !slide) return false;
+
+    const sourceCanvas = slideCanvasDimensions(project, slide);
+    const aspectRatio = normalizeAspectRatio(value, sourceCanvas.aspectRatio);
+    if (aspectRatio === sourceCanvas.aspectRatio) return false;
+    const solidBackgroundColor = canonicalSolidBackgroundColor(slide, project);
+    const targetSlide = { ...slide, aspectRatio };
+    const targetCanvas = slideCanvasDimensions(project, targetSlide);
+
+    exitCropMode();
+    recordHistory();
+    slide.texts = (slide.texts || []).map((text) => (
+      remapLayerGeometryBetweenCanvases(text, sourceCanvas, targetCanvas, { maxHeight: 2.4 })
+    ));
+    slide.overlays = (slide.overlays || []).map((overlay) => {
+      const geometry = remapLayerGeometryBetweenCanvases(overlay, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
+      const asset = project.assets?.find((item) => item.id === overlay.assetId);
+      return constrainOverlay(geometry, asset, { project, slide: targetSlide });
+    });
+    slide.aspectRatio = aspectRatio;
+    if (solidBackgroundColor) {
+      slide.imageData = solidBackgroundDataUrl(solidBackgroundColor, project, slide);
+      slide.width = targetCanvas.width;
+      slide.height = targetCanvas.height;
+      slide.backgroundRevision = uid();
+    }
+    constrainImagePosition(slide, project);
+    clearSlideThumbnail(slide.id, project.id);
+    state.shareAllCache = null;
+    scheduleSave();
+    renderEditor();
+    toast(`Slide format changed to ${aspectRatio}`);
+    return true;
   }
 
   function removeSlide(slideId) {
@@ -314,7 +360,7 @@ export function createEditorActions({
       assetId: asset.id,
       x: 0.33,
       y: 0.36,
-      width: initialOverlayWidth(asset),
+      width: initialOverlayWidth(asset, activeProject(), slide),
       rotation: 0,
       z: nextLayerZ(slide),
     }, asset);
@@ -448,6 +494,7 @@ export function createEditorActions({
           const slide = {
             id: uid(),
             name: file.name.replace(/\.[^.]+$/, "") || "Slide",
+            aspectRatio: aspectRatioFromDimensions(dimensions.width, dimensions.height, project.aspectRatio),
             imageData,
             width: dimensions.width,
             height: dimensions.height,
@@ -520,7 +567,7 @@ export function createEditorActions({
     });
     if (!copies.length) return;
     const token = uid();
-    const copied = { token, layers: copies };
+    const copied = { token, sourceCanvas: slideCanvasDimensions(activeProject(), activeSlide()), layers: copies };
     rememberCopiedLayer(copied);
     event.preventDefault();
     event.clipboardData?.setData(CLIPBOARD_LAYER_TYPE, JSON.stringify(copied));
@@ -556,6 +603,8 @@ export function createEditorActions({
     if (!project || !slide || !layers.length) return false;
     if (layers.some((layer) => layer.kind === "overlay" && !layer.asset)) return false;
     const offset = 0.03;
+    const targetCanvas = slideCanvasDimensions(project, slide);
+    const sourceCanvas = copied.sourceCanvas;
     const pastedLayers = [];
     const pastedKeys = [];
     let nextZ = nextLayerZ(slide);
@@ -572,25 +621,29 @@ export function createEditorActions({
           asset = { ...layer.asset, id: uid() };
           project.assets.push(asset);
         }
+        const geometry = remapLayerGeometryBetweenCanvases(layer.item, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
         const pasted = constrainOverlay({
-          ...layer.item,
+          ...geometry,
           id: uid(),
           assetId: asset.id,
-          x: layer.item.x + offset,
-          y: layer.item.y + offset,
+          x: geometry.x + offset,
+          y: geometry.y + offset,
           z: nextZ,
-        }, asset);
+        }, asset, { project, slide });
+        pasted.x = clampLayerCoordinate(pasted.x, pasted.width);
+        pasted.y = clampLayerCoordinate(pasted.y, pasted.height);
         nextZ += 1;
         slide.overlays.push(pasted);
         pastedLayers.push({ kind: "overlay", item: { ...pasted }, asset: { ...asset } });
         pastedKeys.push(layerKey("overlay", pasted.id));
         return;
       }
+      const geometry = remapLayerGeometryBetweenCanvases(layer.item, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
       const pasted = {
-        ...layer.item,
+        ...geometry,
         id: uid(),
-        x: clamp(layer.item.x + offset, 0, 1 - layer.item.width),
-        y: clamp(layer.item.y + offset, 0, 1 - layer.item.height),
+        x: clampLayerCoordinate(geometry.x + offset, geometry.width),
+        y: clampLayerCoordinate(geometry.y + offset, geometry.height),
         z: nextZ,
       };
       nextZ += 1;
@@ -599,6 +652,7 @@ export function createEditorActions({
       pastedKeys.push(layerKey("text", pasted.id));
     });
     copied.layers = pastedLayers;
+    copied.sourceCanvas = targetCanvas;
     setLayerSelection(pastedKeys);
     state.photoAdjustMode = false;
     state.mobileInspectorOpen = true;
@@ -709,6 +763,7 @@ export function createEditorActions({
     deleteSelectedText,
     beginSlideBackgroundChange,
     handleSlideBackgroundChange,
+    setSlideAspectRatio,
     removeSlide,
     reorderSlide,
     addDroppedAssetsToSlide,

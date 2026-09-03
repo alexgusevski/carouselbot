@@ -1,8 +1,6 @@
 import {
   DESIGN_WIDTH,
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
-  OUTLINE_RATIO,
+  DEFAULT_OUTLINE_WIDTH,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -10,6 +8,8 @@ import {
   BOX_BACKGROUND_VERTICAL_OFFSET,
   TEXT_BOX_EDGE_PADDING,
   BOX_CORNER_RADIUS,
+  slideCanvasDimensions,
+  scaleCanvasDimensions,
   textColor,
   outlineColorFor,
   overlayCrop,
@@ -21,6 +21,7 @@ import {
 } from "./editor-model.mjs";
 import { activeProject, getOverlayMetrics } from "./editor-state.mjs";
 import { ensureProjectFontsLoaded, textCanvasFont, textFontVariationCss } from "./project-fonts.mjs";
+import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 
 export function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
@@ -52,31 +53,46 @@ export function loadImage(src) {
   });
 }
 
-export async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT, project = activeProject()) {
+export async function renderSlideCanvas(slide, width, height, project = activeProject()) {
   await ensureProjectFontsLoaded(project, slide.texts || []);
-  const image = await loadImage(slide.imageData);
+  const dimensions = slideCanvasDimensions(project, slide);
+  const canvasWidth = Number.isFinite(Number(width)) && Number(width) > 0
+    ? Math.round(Number(width))
+    : dimensions.width;
+  const canvasHeight = Number.isFinite(Number(height)) && Number(height) > 0
+    ? Math.round(Number(height))
+    : width == null
+      ? dimensions.height
+      : scaleCanvasDimensions(project, canvasWidth, slide).height;
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
   const context = canvas.getContext("2d");
-  const imageLayout = getImageLayout(slide, width, height);
-  context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-  await drawSlideLayers(context, slide, width, height, project);
+  const backgroundColor = canonicalSolidBackgroundColor(slide, project);
+  if (backgroundColor) {
+    context.fillStyle = backgroundColor;
+    context.fillRect(0, 0, canvasWidth, canvasHeight);
+  } else {
+    const image = await loadImage(slide.imageData);
+    const imageLayout = getImageLayout(slide, canvasWidth, canvasHeight);
+    context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
+  }
+  await drawSlideLayers(context, slide, canvasWidth, canvasHeight, project);
   return canvas;
 }
 
 export async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject()) {
   for (const { kind, item } of slideItems(slide)) {
-    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project);
+    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project, slide);
     else drawTextLayer(context, item, canvasWidth, canvasHeight, project);
   }
 }
 
-export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject()) {
+export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject(), slide = null) {
   const asset = project?.assets?.find((item) => item.id === overlay.assetId);
   if (!asset) return;
   const image = await loadImage(asset.imageData);
-  const metrics = getOverlayMetrics(overlay, asset);
+  const metrics = getOverlayMetrics(overlay, asset, { project, slide });
   const width = metrics.width * canvasWidth;
   const height = metrics.height * canvasHeight;
   const x = overlay.x * canvasWidth;
@@ -158,8 +174,14 @@ export function drawTextLayer(context, text, imageWidth, imageHeight, project = 
     const lineY = startY + index * lineHeight;
     if (text.style === "outline") {
       context.strokeStyle = outlineColorFor(color);
-      context.lineWidth = fontSize * OUTLINE_RATIO;
-      context.strokeText(line, textX, lineY);
+      const outlineWidth = Number.isFinite(Number(text.outlineWidth))
+        ? Math.max(0, Number(text.outlineWidth))
+        : DEFAULT_OUTLINE_WIDTH;
+      const scaledOutlineWidth = outlineWidth * exportScale;
+      if (scaledOutlineWidth > 0) {
+        context.lineWidth = scaledOutlineWidth;
+        context.strokeText(line, textX, lineY);
+      }
       context.fillStyle = color;
       context.fillText(line, textX, lineY);
     } else {

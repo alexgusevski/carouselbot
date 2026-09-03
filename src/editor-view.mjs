@@ -1,8 +1,7 @@
 import {
   DESIGN_WIDTH,
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
-  OUTLINE_RATIO,
+  DEFAULT_OUTLINE_WIDTH,
+  SUPPORTED_ASPECT_RATIOS,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -26,6 +25,8 @@ import {
   sliderPositionFromFontSize,
   formatFontSize,
   getImageLayout,
+  projectCanvasDimensions,
+  slideCanvasDimensions,
   perLineBackgroundSvgPath,
   wrapText,
 } from "./editor-model.mjs";
@@ -169,12 +170,15 @@ export function renderSlideRail(project) {
     <aside class="slide-rail">
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
-        ${project.slides.map((slide, index) => `
-          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
-            <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-            <span class="thumb-image" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}">${renderSlideThumbnail(slide, project)}</span>
-          </button>
-        `).join("")}
+        ${project.slides.map((slide, index) => {
+          const canvas = slideCanvasDimensions(project, slide);
+          return `
+            <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
+              <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
+              <span class="thumb-image" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}" style="aspect-ratio:${canvas.width} / ${canvas.height}">${renderSlideThumbnail(slide, project)}</span>
+            </button>
+          `;
+        }).join("")}
       </div>
       <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">${icon("plus")}<span>New slide</span></button></div>
     </aside>
@@ -210,20 +214,39 @@ export function renderAssetRail(project) {
   `;
 }
 
-export function renderEmptyStage() {
+export function renderEmptyStage(project = activeProject()) {
+  const canvas = projectCanvasDimensions(project);
+  const aspectRatios = SUPPORTED_ASPECT_RATIOS.includes(canvas.aspectRatio)
+    ? SUPPORTED_ASPECT_RATIOS
+    : [canvas.aspectRatio, ...SUPPORTED_ASPECT_RATIOS];
   return `
     <div class="empty-stage">
       <div>
         <div class="empty-stage-graphic" aria-hidden="true"></div>
         <h2>Add your first photos</h2>
         <p>Choose one or several images from your computer. Each one becomes a slide.</p>
+        <label class="empty-stage-format" for="project-aspect-ratio">
+          <span>Canvas format</span>
+          <select id="project-aspect-ratio" aria-describedby="project-aspect-ratio-help">
+            ${aspectRatios.map((aspectRatio) => {
+              const dimensions = projectCanvasDimensions({ aspectRatio });
+              return `<option value="${escapeHtml(aspectRatio)}" ${aspectRatio === canvas.aspectRatio ? "selected" : ""}>${escapeHtml(aspectRatio)} · ${dimensions.width} × ${dimensions.height}</option>`;
+            }).join("")}
+          </select>
+          <small id="project-aspect-ratio-help">Default for solid slides. Uploaded images keep their own shape.</small>
+        </label>
         <button class="button button--primary" type="button" data-action="upload">Choose photos</button>
       </div>
     </div>
   `;
 }
 
-export function renderStage(slide) {
+export function renderStage(slide, project = activeProject()) {
+  const canvas = slideCanvasDimensions(project, slide);
+  const aspectRatios = SUPPORTED_ASPECT_RATIOS.includes(canvas.aspectRatio)
+    ? SUPPORTED_ASPECT_RATIOS
+    : [canvas.aspectRatio, ...SUPPORTED_ASPECT_RATIOS];
+  const supportsTikTokOverlay = canvas.aspectRatio === "9:16";
   return `
     <div class="canvas-composition">
       <div class="stage-wrap">
@@ -231,14 +254,20 @@ export function renderStage(slide) {
           <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
           <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
             <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
-            ${renderTikTokOverlay()}
+            ${supportsTikTokOverlay ? renderTikTokOverlay() : ""}
           </div>
           <div class="layer-stack">
             ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
           </div>
         </div>
         <span class="stage-dimensions">
-          <span>${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
+          <span class="stage-size-label">${canvas.width} × ${canvas.height} · ${escapeHtml(canvas.aspectRatio)}</span>
+          <label class="slide-format-control" for="slide-aspect-ratio">
+            <span>Format</span>
+            <select id="slide-aspect-ratio" aria-label="Slide format">
+              ${aspectRatios.map((aspectRatio) => `<option value="${escapeHtml(aspectRatio)}" ${aspectRatio === canvas.aspectRatio ? "selected" : ""}>${escapeHtml(aspectRatio)}</option>`).join("")}
+            </select>
+          </label>
           <span class="canvas-zoom-controls" aria-label="Canvas zoom">
             <button class="canvas-zoom-button" type="button" data-action="canvas-zoom-out" aria-label="Zoom canvas out">−</button>
             <button class="canvas-zoom-level" type="button" data-action="canvas-zoom-reset" title="Reset canvas zoom">${Math.round(state.canvasZoom * 100)}%</button>
@@ -246,18 +275,19 @@ export function renderStage(slide) {
           </span>
         </span>
       </div>
-      ${renderCanvasActions()}
+      ${renderCanvasActions(project, slide)}
     </div>
   `;
 }
 
-export function renderCanvasActions() {
+export function renderCanvasActions(project = activeProject(), slide = activeSlide()) {
+  const supportsTikTokOverlay = slideCanvasDimensions(project, slide).aspectRatio === "9:16";
   return `
     <div class="canvas-actions" aria-label="Canvas actions">
       <button class="canvas-action" type="button" data-action="add-text" title="Add text">${icon("text")}<span>Text</span></button>
       <button class="canvas-action" type="button" data-action="upload-assets" title="Add image">${icon("image")}<span>Image</span></button>
       <button class="canvas-action ${state.photoAdjustMode ? "is-active" : ""}" type="button" data-action="adjust-photo" aria-pressed="${state.photoAdjustMode}" title="Adjust photo">${icon("adjust")}<span>Adjust photo</span></button>
-      <button class="canvas-action ${state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${state.showTikTokOverlay}" title="Toggle TikTok UI overlay">${icon("preview")}<span>Overlay</span></button>
+      <button class="canvas-action ${supportsTikTokOverlay && state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${supportsTikTokOverlay && state.showTikTokOverlay}" title="${supportsTikTokOverlay ? "Toggle TikTok UI overlay" : "TikTok UI preview is available for 9:16 canvases"}" ${supportsTikTokOverlay ? "" : "disabled"}>${icon("preview")}<span>Overlay</span></button>
     </div>
   `;
 }
@@ -649,7 +679,10 @@ export function paintTextContent(text, content, box) {
       node.setAttribute("dominant-baseline", "middle");
       node.setAttribute("fill", textColor(text));
       node.setAttribute("stroke", outlineColorFor(textColor(text)));
-      node.setAttribute("stroke-width", String(fontSize * OUTLINE_RATIO));
+      const outlineWidth = Number.isFinite(Number(text.outlineWidth))
+        ? Math.max(0, Number(text.outlineWidth))
+        : DEFAULT_OUTLINE_WIDTH;
+      node.setAttribute("stroke-width", String(outlineWidth * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH)));
       node.setAttribute("stroke-linejoin", "round");
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("paint-order", "stroke fill");

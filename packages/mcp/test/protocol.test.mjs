@@ -82,12 +82,20 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
 
     const tools = Object.fromEntries(listed.result.tools.map((tool) => [tool.name, tool]));
     const createProjectSchema = tools.create_project.inputSchema;
+    const addSlideSchema = tools.add_slide.inputSchema;
+    const updateSlideSchema = tools.update_slide.inputSchema;
     const moveProjectSchema = tools.move_project.inputSchema;
+    const updateProjectSchema = tools.update_project.inputSchema;
     const allowsNull = (schema) => schema?.type === "null"
       || (Array.isArray(schema?.type) && schema.type.includes("null"))
       || schema?.anyOf?.some(allowsNull);
     const stringVariant = (schema) => schema?.type === "string" ? schema : schema?.anyOf?.find((item) => item.type === "string");
     assert.ok(createProjectSchema.properties.folderPath, "create_project should expose folderPath");
+    assert.equal(createProjectSchema.properties.aspectRatio.type, "string");
+    assert.equal(createProjectSchema.properties.aspectRatio.pattern, "^\\d{1,39}:\\d{1,39}$");
+    assert.equal(createProjectSchema.properties.aspectRatio.maxLength, 80);
+    assert.match(createProjectSchema.properties.aspectRatio.description, /9:16, 2:3, 3:4, 4:5, 1:1, 4:3, 16:9/);
+    assert.equal(createProjectSchema.required.includes("aspectRatio"), false, "create_project aspectRatio should be optional for legacy callers");
     assert.equal(createProjectSchema.required.includes("folderPath"), false, "create_project folderPath should be optional");
     assert.ok(allowsNull(createProjectSchema.properties.folderPath), "create_project folderPath should accept null for the dashboard root");
     assert.equal(stringVariant(createProjectSchema.properties.folderPath).pattern, "^\\/(?!\\/)\\S(?:[\\s\\S]*\\S)?$", "folder paths should use one canonical leading slash");
@@ -97,6 +105,19 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
     assert.equal(moveProjectSchema.required.includes("editSessionId"), false, "move_project editSessionId should remain optional for compatibility");
     assert.ok(allowsNull(moveProjectSchema.properties.folderPath), "move_project folderPath should accept null for the dashboard root");
     assert.equal(moveProjectSchema.additionalProperties, false, "move_project should reject unknown arguments");
+    assert.equal(Object.hasOwn(updateProjectSchema.properties, "aspectRatio"), false, "project format changes should remain creation-only");
+    for (const [name, schema] of [["add_slide", addSlideSchema], ["update_slide", updateSlideSchema]]) {
+      assert.equal(schema.properties.aspectRatio.type, "string", `${name} should expose aspectRatio`);
+      assert.equal(schema.properties.aspectRatio.pattern, "^\\d{1,39}:\\d{1,39}$");
+      assert.equal(schema.properties.aspectRatio.maxLength, 80);
+      assert.equal((schema.required || []).includes("aspectRatio"), false, `${name} aspectRatio should be optional`);
+    }
+    assert.match(tools.add_slide.description, /source image's exact reduced ratio/);
+    assert.match(tools.add_slide.description, /exports only that canvas/);
+    assert.match(tools.update_slide.description, /only that slide's optional aspectRatio/);
+    assert.match(tools.update_slide.description, /preserve layer proportions and centers/);
+    assert.match(tools.add_slide.description, /omit both background sources to use #EEEDE7/);
+    assert.match(tools.update_slide.description, /mutually exclusive/);
 
     const blocked = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Blocked until guidance" } });
     assert.equal(blocked.result.isError, true);
@@ -107,10 +128,43 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
     assert.match(guidance.result.content[0].text, /fit_text_boxes/);
     assert.match(guidance.result.content[0].text, /automatically preserve width and fit height/);
     assert.match(guidance.result.content[0].text, /body copy `54–68`/);
+    assert.match(guidance.result.content[0].text, /ordinary typography as editable text layers/);
+    assert.match(guidance.result.content[0].text, /text-only PNG\/SVG/);
+    assert.match(guidance.result.content[0].text, /individual slide should differ/);
 
     const invalidFolder = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Invalid folder", folderPath: "/.." } });
     assert.equal(invalidFolder.result.isError, true);
     assert.match(invalidFolder.result.content[0].text, /reserved names/);
+
+    const invalidAspectRatio = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Invalid format", aspectRatio: "1:7" } });
+    assert.equal(invalidAspectRatio.result.isError, true);
+    assert.match(invalidAspectRatio.result.content[0].text, /between 180 and 3840/);
+
+    const oversizedAspectRatio = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Oversized format", aspectRatio: `${"9".repeat(81)}:9` } });
+    assert.equal(oversizedAspectRatio.result.isError, true);
+
+    for (const [name, arguments_] of [
+      ["add_slide", { projectId: "project-1", aspectRatio: "1:7" }],
+      ["update_slide", { projectId: "project-1", slideId: "slide-1", aspectRatio: "1:7" }],
+    ]) {
+      const invalidSlideAspectRatio = await rpc.request("tools/call", { name, arguments: arguments_ });
+      assert.equal(invalidSlideAspectRatio.result.isError, true, `${name} should validate aspectRatio`);
+      assert.match(invalidSlideAspectRatio.result.content[0].text, /between 180 and 3840/);
+    }
+
+    for (const name of ["add_slide", "update_slide"]) {
+      const conflictingBackground = await rpc.request("tools/call", {
+        name,
+        arguments: {
+          projectId: "project-1",
+          ...(name === "update_slide" ? { slideId: "slide-1" } : {}),
+          backgroundColor: "#FFFFFF",
+          backgroundPath: "/tmp/background.png",
+        },
+      });
+      assert.equal(conflictingBackground.result.isError, true, `${name} should reject two background sources`);
+      assert.match(conflictingBackground.result.content[0].text, /mutually exclusive/);
+    }
 
     const editors = await rpc.request("tools/call", { name: "list_editors", arguments: {} });
     assert.deepEqual(editors.result.structuredContent.editors, []);
