@@ -1778,8 +1778,20 @@ button:disabled {
   filter: drop-shadow(0 24px 30px rgba(26, 24, 20, 0.18));
 }
 
+.tiktok-screen-preview {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  place-items: center;
+  background: #050505;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2), inset 0 0 0 1px rgba(0, 0, 0, 0.92);
+  user-select: none;
+}
+
 .stage-frame {
   position: relative;
+  flex: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.34);
 }
 
 .stage-image-ghost {
@@ -1872,6 +1884,19 @@ button:disabled {
   font-weight: 650;
   letter-spacing: 0.08em;
   white-space: nowrap;
+}
+
+.tiktok-screen-note {
+  position: absolute;
+  top: -20px;
+  left: 0;
+  color: #555850;
+  font-size: 9px;
+  font-weight: 780;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+  text-transform: uppercase;
 }
 
 .slide-format-control {

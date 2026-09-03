@@ -1149,9 +1149,11 @@ export function createEditorUI({ projects, actions, output }) {
   function sizeStage() {
     const inner = app.querySelector(".workspace-inner");
     const workspace = app.querySelector(".workspace");
+    const screenPreview = app.querySelector(".tiktok-screen-preview");
+    const stageFrame = app.querySelector(".stage-frame");
     const stage = app.querySelector(".stage");
     const slide = activeSlide();
-    if (!inner || !workspace || !stage || !slide) return;
+    if (!inner || !workspace || !screenPreview || !stageFrame || !stage || !slide) return;
     const innerStyle = getComputedStyle(inner);
     const horizontalPadding = (parseFloat(innerStyle.paddingLeft) || 0) + (parseFloat(innerStyle.paddingRight) || 0);
     const verticalPadding = (parseFloat(innerStyle.paddingTop) || 0) + (parseFloat(innerStyle.paddingBottom) || 0);
@@ -1162,17 +1164,32 @@ export function createEditorUI({ projects, actions, output }) {
     const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;
     const canvasWidth = Math.max(1, availableWidth - (actions?.offsetWidth || 0) - toolbarGap);
     const canvas = slideCanvasDimensions(activeProject(), slide);
-    const ratio = canvas.width / canvas.height;
-    let width = canvasWidth;
-    let height = width / ratio;
-    if (height > availableHeight) {
-      height = availableHeight;
-      width = height * ratio;
+    const screenRatio = 9 / 16;
+    let screenWidth = canvasWidth;
+    let screenHeight = screenWidth / screenRatio;
+    if (screenHeight > availableHeight) {
+      screenHeight = availableHeight;
+      screenWidth = screenHeight * screenRatio;
     }
-    width *= state.canvasZoom;
-    height *= state.canvasZoom;
+    screenWidth *= state.canvasZoom;
+    screenHeight *= state.canvasZoom;
+
+    const slideRatio = canvas.width / canvas.height;
+    let width;
+    let height;
+    if (slideRatio >= screenRatio) {
+      width = screenWidth;
+      height = width / slideRatio;
+    } else {
+      height = screenHeight;
+      width = height * slideRatio;
+    }
     state.stageWidth = width;
     state.stageHeight = height;
+    screenPreview.style.width = `${screenWidth}px`;
+    screenPreview.style.height = `${screenHeight}px`;
+    stageFrame.style.width = `${width}px`;
+    stageFrame.style.height = `${height}px`;
     stage.style.width = `${width}px`;
     stage.style.height = `${height}px`;
     stage.style.setProperty("--stage-scale", width / canvas.width);
