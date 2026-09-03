@@ -316,12 +316,19 @@ try {
   const formatUi = await waitFor(
     () => evaluate(cdp, `(() => {
       const stage = document.querySelector('.stage');
+      const screen = document.querySelector('.tiktok-screen-preview');
       const thumbnail = document.querySelector('.thumb-image');
       const stageRect = stage?.getBoundingClientRect();
+      const screenRect = screen?.getBoundingClientRect();
       const thumbnailRect = thumbnail?.getBoundingClientRect();
-      if (!stageRect?.width || !thumbnailRect?.width) return null;
+      if (!stageRect?.width || !screenRect?.width || !thumbnailRect?.width) return null;
       return {
         stageRatio: stageRect.width / stageRect.height,
+        screenRatio: screenRect.width / screenRect.height,
+        blackBarTop: stageRect.top - screenRect.top,
+        blackBarBottom: screenRect.bottom - stageRect.bottom,
+        screenBackground: getComputedStyle(screen).backgroundColor,
+        screenLabel: document.querySelector('.tiktok-screen-note')?.textContent?.trim(),
         thumbnailRatio: thumbnailRect.width / thumbnailRect.height,
         dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
         overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
@@ -332,6 +339,11 @@ try {
   );
   if (
     Math.abs(formatUi.stageRatio - (3 / 4)) > 0.01
+    || Math.abs(formatUi.screenRatio - (9 / 16)) > 0.01
+    || formatUi.blackBarTop < 8
+    || Math.abs(formatUi.blackBarTop - formatUi.blackBarBottom) > 1
+    || formatUi.screenBackground !== "rgb(5, 5, 5)"
+    || formatUi.screenLabel !== "9:16 preview · black not exported"
     || Math.abs(formatUi.thumbnailRatio - (3 / 4)) > 0.01
     || formatUi.dimensions !== "1080 × 1440 · 3:4"
     || !formatUi.overlayDisabled

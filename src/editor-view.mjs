@@ -250,16 +250,19 @@ export function renderStage(slide, project = activeProject()) {
   return `
     <div class="canvas-composition">
       <div class="stage-wrap">
-        <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
-          <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
-          <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
-            <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
-            ${supportsTikTokOverlay ? renderTikTokOverlay() : ""}
-          </div>
-          <div class="layer-stack">
-            ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
+        <div class="tiktok-screen-preview ${supportsTikTokOverlay ? "is-native-format" : "has-letterbox"}" aria-label="9:16 TikTok screen preview. Black area is outside the slide and is not exported.">
+          <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
+            <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
+            <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
+              <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
+              ${supportsTikTokOverlay ? renderTikTokOverlay() : ""}
+            </div>
+            <div class="layer-stack">
+              ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
+            </div>
           </div>
         </div>
+        ${supportsTikTokOverlay ? "" : `<span class="tiktok-screen-note">9:16 preview · black not exported</span>`}
         <span class="stage-dimensions">
           <span class="stage-size-label">${canvas.width} × ${canvas.height} · ${escapeHtml(canvas.aspectRatio)}</span>
           <label class="slide-format-control" for="slide-aspect-ratio">
