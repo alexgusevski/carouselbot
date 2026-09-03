@@ -171,11 +171,10 @@ export function renderSlideRail(project) {
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
         ${project.slides.map((slide, index) => {
-          const canvas = slideCanvasDimensions(project, slide);
           return `
             <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
               <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-              <span class="thumb-image" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}" style="aspect-ratio:${canvas.width} / ${canvas.height}">${renderSlideThumbnail(slide, project)}</span>
+              <span class="thumb-image" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}" aria-label="9:16 screen preview; black area is not exported">${renderSlideThumbnail(slide, project)}</span>
             </button>
           `;
         }).join("")}

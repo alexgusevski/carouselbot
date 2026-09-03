@@ -321,7 +321,8 @@ try {
       const stageRect = stage?.getBoundingClientRect();
       const screenRect = screen?.getBoundingClientRect();
       const thumbnailRect = thumbnail?.getBoundingClientRect();
-      if (!stageRect?.width || !screenRect?.width || !thumbnailRect?.width) return null;
+      const thumbnailRendered = thumbnail?.querySelector('img');
+      if (!stageRect?.width || !screenRect?.width || !thumbnailRect?.width || !thumbnailRendered) return null;
       return {
         stageRatio: stageRect.width / stageRect.height,
         screenRatio: screenRect.width / screenRect.height,
@@ -330,6 +331,8 @@ try {
         screenBackground: getComputedStyle(screen).backgroundColor,
         screenLabel: document.querySelector('.tiktok-screen-note')?.textContent?.trim(),
         thumbnailRatio: thumbnailRect.width / thumbnailRect.height,
+        thumbnailBackground: getComputedStyle(thumbnail).backgroundColor,
+        thumbnailFit: getComputedStyle(thumbnailRendered).objectFit,
         dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
         overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
         overlayPresent: Boolean(document.querySelector('.tiktok-overlay')),
@@ -344,7 +347,9 @@ try {
     || Math.abs(formatUi.blackBarTop - formatUi.blackBarBottom) > 1
     || formatUi.screenBackground !== "rgb(5, 5, 5)"
     || formatUi.screenLabel !== "9:16 preview · black not exported"
-    || Math.abs(formatUi.thumbnailRatio - (3 / 4)) > 0.01
+    || Math.abs(formatUi.thumbnailRatio - (9 / 16)) > 0.01
+    || formatUi.thumbnailBackground !== "rgb(5, 5, 5)"
+    || formatUi.thumbnailFit !== "contain"
     || formatUi.dimensions !== "1080 × 1440 · 3:4"
     || !formatUi.overlayDisabled
     || formatUi.overlayPresent
@@ -931,11 +936,15 @@ try {
   const mixedSlideFormatUi = await waitFor(
     () => evaluate(cdp, `(() => {
       const stage = document.querySelector('.stage')?.getBoundingClientRect();
-      const thumbs = [...document.querySelectorAll('.thumb-image')].map((item) => item.getBoundingClientRect());
-      if (!stage?.width || thumbs.some((item) => !item.width)) return null;
+      const thumbnailElements = [...document.querySelectorAll('.thumb-image')];
+      const thumbs = thumbnailElements.map((item) => item.getBoundingClientRect());
+      const thumbnailRendered = thumbnailElements.map((item) => item.querySelector('.thumb-rendered'));
+      if (!stage?.width || thumbs.some((item) => !item.width) || thumbnailRendered.some((item) => !item)) return null;
       return {
         stageRatio: stage.width / stage.height,
         thumbnailRatios: thumbs.map((item) => item.width / item.height),
+        thumbnailFits: thumbnailRendered.map((item) => getComputedStyle(item).objectFit),
+        thumbnailBackgrounds: thumbnailElements.map((item) => getComputedStyle(item).backgroundColor),
         dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
         overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
         overlayPresent: Boolean(document.querySelector('.tiktok-overlay')),
@@ -945,8 +954,9 @@ try {
   );
   if (
     Math.abs(mixedSlideFormatUi.stageRatio - 1) > 0.01
-    || Math.abs(mixedSlideFormatUi.thumbnailRatios[0] - 1) > 0.01
-    || Math.abs(mixedSlideFormatUi.thumbnailRatios[1] - (2 / 3)) > 0.01
+    || mixedSlideFormatUi.thumbnailRatios.some((ratio) => Math.abs(ratio - (9 / 16)) > 0.01)
+    || mixedSlideFormatUi.thumbnailFits.some((fit) => fit !== "contain")
+    || mixedSlideFormatUi.thumbnailBackgrounds.some((background) => background !== "rgb(5, 5, 5)")
     || mixedSlideFormatUi.dimensions !== "1080 × 1080 · 1:1"
     || !mixedSlideFormatUi.overlayDisabled
     || mixedSlideFormatUi.overlayPresent
