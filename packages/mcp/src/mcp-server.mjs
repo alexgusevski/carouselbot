@@ -37,7 +37,7 @@ const textFields = {
   role: z.enum(["title", "subtitle", "body", "caption"]).optional().describe("Semantic size role. Recommended ranges: title 92-124, subtitle 68-84, body 54-68, caption 44-52."),
   size: z.number().min(20).max(180).optional(), style: z.enum(["plain", "outline", "boxed"]).optional(),
   outlineWidth: z.number().min(0).max(40).optional()
-    .describe("Relative outline thickness. The default 12 renders at 17% of the font size; all values scale proportionally with the font."),
+    .describe("Relative outline thickness. The default 12 renders at 14.4% of the font size; all values scale proportionally with the font."),
   color: color.optional(), background: z.enum(["white", "black"]).optional(),
   backgroundShape: z.enum(["lines", "full"]).optional(), align: z.enum(["left", "center", "right"]).optional(),
   fontId,

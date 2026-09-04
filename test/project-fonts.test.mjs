@@ -120,7 +120,7 @@ test("normalizes legacy text to CarouselBot's actual bundled default", () => {
     fontStyle: DEFAULT_FONT_STYLE,
   });
   assert.equal(DEFAULT_FONT_FAMILY, "TikTok Sans");
-  assert.equal(DEFAULT_FONT_WEIGHT, 500);
+  assert.equal(DEFAULT_FONT_WEIGHT, 535);
   assert.equal(project.slides[0].texts[1].fontFamily, DEFAULT_FONT_FAMILY);
   assert.equal(project.slides[0].texts[1].fontWeight, 725);
   assert.equal(project.slides[0].texts[1].fontStyle, "italic");
@@ -270,7 +270,7 @@ test("registers exact stored bytes once and waits for the bundled default font",
     assert.equal(environment.constructed[0].family, font.cssFamily);
     assert.deepEqual(environment.constructed[0].descriptors, { weight: "400", style: "normal" });
     assert.deepEqual([...new Uint8Array(environment.constructed[0].source)], [0, 1, 2, 3, 255]);
-    assert.ok(environment.defaultLoads.every((value) => value === '500 64px "TikTok Sans"'));
+    assert.ok(environment.defaultLoads.every((value) => value === '535 64px "TikTok Sans"'));
     assert.equal(isTextFontAvailable(project, customText), true);
     assert.equal(isTextFontLoaded(project, customText), true);
   } finally {

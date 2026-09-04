@@ -2386,7 +2386,7 @@ button:disabled {
   color: var(--text-color, #fff);
   font-family: var(--text-font-family, "TikTok Sans", sans-serif);
   font-style: var(--text-font-style, normal);
-  font-weight: var(--text-font-weight, 500);
+  font-weight: var(--text-font-weight, 535);
   font-variation-settings: var(--text-font-variations, normal);
   line-height: 1.12;
   text-align: center;

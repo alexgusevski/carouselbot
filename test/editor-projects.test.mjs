@@ -232,7 +232,7 @@ test("restores every legacy text default while preserving valid values", () => {
     rotation: 0,
     z: 2,
     fontFamily: "TikTok Sans",
-    fontWeight: 500,
+    fontWeight: 535,
     fontStyle: "normal",
   });
   assert.equal(legacyBoxed.color, "#FFFFFF");
@@ -254,7 +254,7 @@ test("restores every legacy text default while preserving valid values", () => {
     rotation: 25,
     z: 40,
     fontFamily: "TikTok Sans",
-    fontWeight: 500,
+    fontWeight: 535,
     fontStyle: "normal",
   });
   assert.equal(projects[0].slides[0].imageScale, 0);
