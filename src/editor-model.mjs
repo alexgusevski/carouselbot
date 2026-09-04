@@ -294,6 +294,16 @@ export function outlineColorFor(hex) {
   return luminance > 0.55 ? "#111111" : "#FFFFFF";
 }
 
+export function outlineWidthForFontSize(fontSize, outlineWidth = DEFAULT_OUTLINE_WIDTH) {
+  const size = Number(fontSize);
+  if (!Number.isFinite(size) || size <= 0) return 0;
+  const requestedWidth = Number(outlineWidth);
+  const relativeWidth = Number.isFinite(requestedWidth)
+    ? Math.max(0, requestedWidth) / DEFAULT_OUTLINE_WIDTH
+    : 1;
+  return size * OUTLINE_RATIO * relativeWidth;
+}
+
 export function ensureBoxedTextContrast(text) {
   if (text?.style !== "boxed") return;
   const backgroundColor = text.background === "black" ? "#111111" : "#FFFFFF";
@@ -654,7 +664,6 @@ export function remapLayerGeometryBetweenCanvases(item, sourceCanvas, targetCanv
     remapped.width = originalWidth * capScale;
     remapped.x = centerX - remapped.width / 2;
     if (Number.isFinite(originalFontSize) && originalFontSize > 0) remapped.size = originalFontSize * capScale;
-    if (Number.isFinite(Number(item?.outlineWidth))) remapped.outlineWidth = Number(item.outlineWidth) * capScale;
   }
   return remapped;
 }

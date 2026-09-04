@@ -1,6 +1,5 @@
 import {
   DESIGN_WIDTH,
-  DEFAULT_OUTLINE_WIDTH,
   SUPPORTED_ASPECT_RATIOS,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
@@ -18,6 +17,7 @@ import {
   textColor,
   formatRgb,
   outlineColorFor,
+  outlineWidthForFontSize,
   overlayCrop,
   textAlignment,
   layerClipCss,
@@ -681,10 +681,7 @@ export function paintTextContent(text, content, box) {
       node.setAttribute("dominant-baseline", "middle");
       node.setAttribute("fill", textColor(text));
       node.setAttribute("stroke", outlineColorFor(textColor(text)));
-      const outlineWidth = Number.isFinite(Number(text.outlineWidth))
-        ? Math.max(0, Number(text.outlineWidth))
-        : DEFAULT_OUTLINE_WIDTH;
-      node.setAttribute("stroke-width", String(outlineWidth * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH)));
+      node.setAttribute("stroke-width", String(outlineWidthForFontSize(fontSize, text.outlineWidth)));
       node.setAttribute("stroke-linejoin", "round");
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("paint-order", "stroke fill");

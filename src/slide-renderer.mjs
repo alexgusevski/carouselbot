@@ -1,6 +1,5 @@
 import {
   DESIGN_WIDTH,
-  DEFAULT_OUTLINE_WIDTH,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -12,6 +11,7 @@ import {
   scaleCanvasDimensions,
   textColor,
   outlineColorFor,
+  outlineWidthForFontSize,
   overlayCrop,
   textAlignment,
   slideItems,
@@ -174,12 +174,9 @@ export function drawTextLayer(context, text, imageWidth, imageHeight, project = 
     const lineY = startY + index * lineHeight;
     if (text.style === "outline") {
       context.strokeStyle = outlineColorFor(color);
-      const outlineWidth = Number.isFinite(Number(text.outlineWidth))
-        ? Math.max(0, Number(text.outlineWidth))
-        : DEFAULT_OUTLINE_WIDTH;
-      const scaledOutlineWidth = outlineWidth * exportScale;
-      if (scaledOutlineWidth > 0) {
-        context.lineWidth = scaledOutlineWidth;
+      const outlineWidth = outlineWidthForFontSize(fontSize, text.outlineWidth);
+      if (outlineWidth > 0) {
+        context.lineWidth = outlineWidth;
         context.strokeText(line, textX, lineY);
       }
       context.fillStyle = color;

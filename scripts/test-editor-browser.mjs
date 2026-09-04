@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
+import { DEFAULT_OUTLINE_WIDTH, OUTLINE_RATIO } from "../src/editor-model.mjs";
 
 const root = new URL("..", import.meta.url);
 const rootPath = decodeURIComponent(root.pathname);
@@ -568,13 +569,16 @@ try {
     const before = agent.inspect({ includeAllProjects: false });
     const text = before.slide?.texts?.[0];
     if (!text) throw new Error('The editable text layer was unavailable for the outline-width regression.');
-    const original = { style: text.style, outlineWidth: text.outlineWidth };
+    const original = { style: text.style, size: text.size, outlineWidth: text.outlineWidth };
     const readDomOutline = () => {
       const box = [...document.querySelectorAll('.text-box')].find((item) => item.dataset.textId === text.id);
       return {
         stageWidth: document.querySelector('.stage')?.getBoundingClientRect().width || 0,
-        strokeWidths: [...(box?.querySelectorAll('.outline-line text') || [])]
-          .map((node) => Number(node.getAttribute('stroke-width'))),
+        outlines: [...(box?.querySelectorAll('.outline-line text') || [])]
+          .map((node) => ({
+            strokeWidth: Number(node.getAttribute('stroke-width')),
+            fontSize: Number.parseFloat(node.getAttribute('font-size')),
+          })),
       };
     };
     let result;
@@ -611,27 +615,57 @@ try {
         type: 'text.update',
         projectId: before.project.id,
         slideId: before.slide.id,
-        updates: [{ id: text.id, style: 'outline', outlineWidth: 40 }],
+        updates: [{ id: text.id, style: 'outline', size: 40, outlineWidth: ${DEFAULT_OUTLINE_WIDTH} }],
       });
-      const thickText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
-      const thickDom = readDomOutline();
-      const thickRender = await agent.execute({
+      const smallText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const smallDom = readDomOutline();
+      const smallRender = await agent.execute({
         type: 'slide.render',
         projectId: before.project.id,
         slideId: before.slide.id,
         width: 270,
       });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'outline', size: 80, outlineWidth: ${DEFAULT_OUTLINE_WIDTH} }],
+      });
+      const largeText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const largeDom = readDomOutline();
+      const largeRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, outlineWidth: 24 }],
+      });
+      const customText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const customDom = readDomOutline();
       result = {
         zeroModelWidth: zeroText?.outlineWidth,
-        thickModelWidth: thickText?.outlineWidth,
+        smallModel: { size: smallText?.size, outlineWidth: smallText?.outlineWidth },
+        largeModel: { size: largeText?.size, outlineWidth: largeText?.outlineWidth },
+        customModel: { size: customText?.size, outlineWidth: customText?.outlineWidth },
         zeroDom,
-        thickDom,
+        smallDom,
+        largeDom,
+        customDom,
         render: {
           plain: { mimeType: plainRender?.mimeType, width: plainRender?.width, height: plainRender?.height, dataLength: plainRender?.data?.length || 0 },
           zero: { mimeType: zeroRender?.mimeType, width: zeroRender?.width, height: zeroRender?.height, dataLength: zeroRender?.data?.length || 0 },
-          thick: { mimeType: thickRender?.mimeType, width: thickRender?.width, height: thickRender?.height, dataLength: thickRender?.data?.length || 0 },
+          small: { mimeType: smallRender?.mimeType, width: smallRender?.width, height: smallRender?.height, dataLength: smallRender?.data?.length || 0 },
+          large: { mimeType: largeRender?.mimeType, width: largeRender?.width, height: largeRender?.height, dataLength: largeRender?.data?.length || 0 },
           zeroMatchesPlain: zeroRender?.data === plainRender?.data,
-          changed: zeroRender?.data !== thickRender?.data,
+          smallChanged: zeroRender?.data !== smallRender?.data,
+          sizeChanged: smallRender?.data !== largeRender?.data,
         },
       };
     } finally {
@@ -644,30 +678,47 @@ try {
     }
     return result;
   })()`);
-  const expectedThickDomWidth = 40 * outlineWidthRegression.thickDom.stageWidth / 1080;
+  const hasExpectedOutlineRatio = (entry, size, outlineWidth = DEFAULT_OUTLINE_WIDTH) => (
+    entry.stageWidth > 0
+    && entry.outlines.length >= 1
+    && entry.outlines.every(({ strokeWidth, fontSize }) => (
+      Math.abs(fontSize - size * entry.stageWidth / 1080) <= 0.01
+      && Math.abs(strokeWidth / fontSize - OUTLINE_RATIO * outlineWidth / DEFAULT_OUTLINE_WIDTH) <= 0.0001
+    ))
+  );
   if (
     outlineWidthRegression.zeroModelWidth !== 0
-    || outlineWidthRegression.thickModelWidth !== 40
-    || outlineWidthRegression.thickDom.stageWidth <= 0
-    || outlineWidthRegression.zeroDom.strokeWidths.length < 1
-    || outlineWidthRegression.zeroDom.strokeWidths.some((width) => width !== 0)
-    || outlineWidthRegression.thickDom.strokeWidths.length !== outlineWidthRegression.zeroDom.strokeWidths.length
-    || outlineWidthRegression.thickDom.strokeWidths.some((width) => Math.abs(width - expectedThickDomWidth) > 0.01)
+    || outlineWidthRegression.smallModel.size !== 40
+    || outlineWidthRegression.smallModel.outlineWidth !== DEFAULT_OUTLINE_WIDTH
+    || outlineWidthRegression.largeModel.size !== 80
+    || outlineWidthRegression.largeModel.outlineWidth !== DEFAULT_OUTLINE_WIDTH
+    || outlineWidthRegression.customModel.size !== 80
+    || outlineWidthRegression.customModel.outlineWidth !== 24
+    || outlineWidthRegression.zeroDom.outlines.length < 1
+    || outlineWidthRegression.zeroDom.outlines.some(({ strokeWidth }) => strokeWidth !== 0)
+    || !hasExpectedOutlineRatio(outlineWidthRegression.smallDom, 40)
+    || !hasExpectedOutlineRatio(outlineWidthRegression.largeDom, 80)
+    || !hasExpectedOutlineRatio(outlineWidthRegression.customDom, 80, 24)
     || outlineWidthRegression.render.plain.mimeType !== "image/png"
     || outlineWidthRegression.render.zero.mimeType !== "image/png"
-    || outlineWidthRegression.render.thick.mimeType !== "image/png"
+    || outlineWidthRegression.render.small.mimeType !== "image/png"
+    || outlineWidthRegression.render.large.mimeType !== "image/png"
     || outlineWidthRegression.render.plain.width !== 270
     || outlineWidthRegression.render.zero.width !== 270
-    || outlineWidthRegression.render.thick.width !== 270
+    || outlineWidthRegression.render.small.width !== 270
+    || outlineWidthRegression.render.large.width !== 270
     || outlineWidthRegression.render.plain.height !== outlineWidthRegression.render.zero.height
-    || outlineWidthRegression.render.zero.height !== outlineWidthRegression.render.thick.height
+    || outlineWidthRegression.render.zero.height !== outlineWidthRegression.render.small.height
+    || outlineWidthRegression.render.small.height !== outlineWidthRegression.render.large.height
     || outlineWidthRegression.render.plain.dataLength < 100
     || outlineWidthRegression.render.zero.dataLength < 100
-    || outlineWidthRegression.render.thick.dataLength < 100
+    || outlineWidthRegression.render.small.dataLength < 100
+    || outlineWidthRegression.render.large.dataLength < 100
     || !outlineWidthRegression.render.zeroMatchesPlain
-    || !outlineWidthRegression.render.changed
+    || !outlineWidthRegression.render.smallChanged
+    || !outlineWidthRegression.render.sizeChanged
   ) {
-    throw new Error(`Outline width did not reach editable SVG text and canvas rendering: ${JSON.stringify(outlineWidthRegression)}`);
+    throw new Error(`Outline width did not stay proportional in editable SVG text and canvas rendering: ${JSON.stringify(outlineWidthRegression)}`);
   }
 
   const pointerInteraction = await evaluate(cdp, `(() => {

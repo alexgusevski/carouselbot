@@ -36,7 +36,9 @@ const textFields = {
   text: z.string().max(4000).optional(), x: unit.optional(), y: unit.optional(), width: positiveUnit.optional(), height: positiveUnit.optional(),
   role: z.enum(["title", "subtitle", "body", "caption"]).optional().describe("Semantic size role. Recommended ranges: title 92-124, subtitle 68-84, body 54-68, caption 44-52."),
   size: z.number().min(20).max(180).optional(), style: z.enum(["plain", "outline", "boxed"]).optional(),
-  outlineWidth: z.number().min(0).max(40).optional(), color: color.optional(), background: z.enum(["white", "black"]).optional(),
+  outlineWidth: z.number().min(0).max(40).optional()
+    .describe("Relative outline thickness. The default 12 renders at 17% of the font size; all values scale proportionally with the font."),
+  color: color.optional(), background: z.enum(["white", "black"]).optional(),
   backgroundShape: z.enum(["lines", "full"]).optional(), align: z.enum(["left", "center", "right"]).optional(),
   fontId,
   fontWeight: z.number().int().min(1).max(1000).optional(),
