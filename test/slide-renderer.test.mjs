@@ -20,8 +20,40 @@ globalThis.document = {
   },
 };
 
-const { renderSlideCanvas } = await import("../src/slide-renderer.mjs");
+const { drawTextLayer, renderSlideCanvas } = await import("../src/slide-renderer.mjs");
+const { OUTLINE_RATIO, outlineWidthForFontSize } = await import("../src/editor-model.mjs");
 const { canonicalSolidBackgroundColor, solidBackgroundDataUrl } = await import("../src/slide-background.mjs");
+
+function recordedOutlineWidths(size, outlineWidth = undefined, canvasWidth = 1080) {
+  const widths = [];
+  const context = {
+    save() {},
+    translate() {},
+    rotate() {},
+    restore() {},
+    measureText(value) {
+      return { width: String(value).length * 10 };
+    },
+    strokeText() {
+      widths.push(this.lineWidth);
+    },
+    fillText() {},
+  };
+  drawTextLayer(context, {
+    id: "outline",
+    text: "Outline",
+    x: 0.1,
+    y: 0.1,
+    width: 0.8,
+    height: 0.4,
+    size,
+    style: "outline",
+    outlineWidth,
+    color: "#FFFFFF",
+    align: "center",
+  }, canvasWidth, canvasWidth * 16 / 9, { fonts: [] });
+  return widths;
+}
 
 test("renders each slide at its own format and scales an omitted height from that format", async () => {
   const project = { id: "project", aspectRatio: "9:16", assets: [], fonts: [], slides: [] };
@@ -58,4 +90,19 @@ test("does not accept a project-sized solid payload for a differently sized slid
   };
 
   assert.equal(canonicalSolidBackgroundColor(slide, project), null);
+});
+
+test("renders canvas outlines as a stable percentage of the font size", () => {
+  const [small] = recordedOutlineWidths(40);
+  const [large] = recordedOutlineWidths(160);
+  const [scaledExport] = recordedOutlineWidths(160, undefined, 270);
+  const [custom] = recordedOutlineWidths(160, 24);
+
+  assert.equal(small, outlineWidthForFontSize(40));
+  assert.equal(large, outlineWidthForFontSize(160));
+  assert.ok(Math.abs(small / 40 - OUTLINE_RATIO) < Number.EPSILON);
+  assert.ok(Math.abs(large / 160 - OUTLINE_RATIO) < Number.EPSILON);
+  assert.ok(Math.abs(scaledExport - large / 4) < Number.EPSILON);
+  assert.ok(Math.abs(custom - large * 2) < Number.EPSILON);
+  assert.deepEqual(recordedOutlineWidths(160, 0), []);
 });

@@ -5,6 +5,8 @@ import {
   ASPECT_RATIO_PRESETS,
   ASPECT_RATIO_INPUT_MAX_LENGTH,
   DEFAULT_ASPECT_RATIO,
+  DEFAULT_OUTLINE_WIDTH,
+  OUTLINE_RATIO,
   SUPPORTED_ASPECT_RATIOS,
   aspectRatioFromDimensions,
   adjacentSlideId,
@@ -31,6 +33,7 @@ import {
   normalizeFolderPath,
   normalizeHexColor,
   outlineColorFor,
+  outlineWidthForFontSize,
   overlayCrop,
   parseCopiedLayer,
   parseLayerKey,
@@ -133,9 +136,22 @@ test("scales capped cross-format layers uniformly instead of distorting or clipp
   assert.ok(Math.abs(remapped.height - 2.4) < 1e-12);
   assert.ok(Math.abs(remapped.width - original.width * scale) < 1e-12);
   assert.ok(Math.abs(remapped.size - original.size * scale) < 1e-12);
-  assert.ok(Math.abs(remapped.outlineWidth - original.outlineWidth * scale) < 1e-12);
+  assert.equal(remapped.outlineWidth, original.outlineWidth);
   assert.ok(Math.abs((remapped.x + remapped.width / 2) - (original.x + original.width / 2)) < 1e-12);
   assert.ok(Math.abs((remapped.y + remapped.height / 2) - (original.y + original.height / 2)) < 1e-12);
+});
+
+test("keeps outline thickness proportional to font size", () => {
+  for (const size of [20, 64, 180]) {
+    const width = outlineWidthForFontSize(size);
+    assert.ok(Math.abs(width / size - OUTLINE_RATIO) < Number.EPSILON);
+  }
+  assert.equal(outlineWidthForFontSize(64, 0), 0);
+  assert.ok(Math.abs(
+    outlineWidthForFontSize(120, 40) / 120
+      - OUTLINE_RATIO * (40 / DEFAULT_OUTLINE_WIDTH),
+  ) < Number.EPSILON);
+  assert.equal(outlineWidthForFontSize("invalid"), 0);
 });
 
 test("keeps extreme custom-format remaps within the layer height limit", () => {
