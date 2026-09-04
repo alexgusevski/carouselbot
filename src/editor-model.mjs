@@ -28,9 +28,13 @@ export const INITIAL_OVERLAY_MAX_SIZE = 0.82;
 
 export const DEFAULT_OUTLINE_WIDTH = 12;
 
-export const OUTLINE_RATIO = 0.17;
+// SVG and canvas strokes straddle the glyph edge. Painting the fill last hides
+// the inner half, leaving a native TikTok-sized visible border of about 7.2%.
+export const OUTLINE_RATIO = 0.144;
 
-export const TEXT_WEIGHT = 500;
+// The native TikTok Sans outline silhouette resolves closest to this point on
+// the bundled font's variable weight axis.
+export const TEXT_WEIGHT = 535;
 
 export const TEXT_LINE_HEIGHT = 1.12;
 
@@ -291,7 +295,7 @@ export function formatRgb(hex) {
 export function outlineColorFor(hex) {
   const { r, g, b } = hexToRgb(hex);
   const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return luminance > 0.55 ? "#111111" : "#FFFFFF";
+  return luminance > 0.55 ? "#000000" : "#FFFFFF";
 }
 
 export function outlineWidthForFontSize(fontSize, outlineWidth = DEFAULT_OUTLINE_WIDTH) {
@@ -307,7 +311,7 @@ export function outlineWidthForFontSize(fontSize, outlineWidth = DEFAULT_OUTLINE
 export function ensureBoxedTextContrast(text) {
   if (text?.style !== "boxed") return;
   const backgroundColor = text.background === "black" ? "#111111" : "#FFFFFF";
-  if (textColor(text) === backgroundColor) text.color = outlineColorFor(backgroundColor);
+  if (textColor(text) === backgroundColor) text.color = text.background === "black" ? "#FFFFFF" : "#111111";
 }
 
 export function layerKey(kind, id) {

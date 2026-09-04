@@ -576,6 +576,7 @@ try {
         stageWidth: document.querySelector('.stage')?.getBoundingClientRect().width || 0,
         outlines: [...(box?.querySelectorAll('.outline-line text') || [])]
           .map((node) => ({
+            stroke: node.getAttribute('stroke'),
             strokeWidth: Number(node.getAttribute('stroke-width')),
             fontSize: Number.parseFloat(node.getAttribute('font-size')),
           })),
@@ -681,8 +682,9 @@ try {
   const hasExpectedOutlineRatio = (entry, size, outlineWidth = DEFAULT_OUTLINE_WIDTH) => (
     entry.stageWidth > 0
     && entry.outlines.length >= 1
-    && entry.outlines.every(({ strokeWidth, fontSize }) => (
-      Math.abs(fontSize - size * entry.stageWidth / 1080) <= 0.01
+    && entry.outlines.every(({ stroke, strokeWidth, fontSize }) => (
+      stroke === '#000000'
+      && Math.abs(fontSize - size * entry.stageWidth / 1080) <= 0.01
       && Math.abs(strokeWidth / fontSize - OUTLINE_RATIO * outlineWidth / DEFAULT_OUTLINE_WIDTH) <= 0.0001
     ))
   );

@@ -142,6 +142,7 @@ test("scales capped cross-format layers uniformly instead of distorting or clipp
 });
 
 test("keeps outline thickness proportional to font size", () => {
+  assert.equal(OUTLINE_RATIO, 0.144);
   for (const size of [20, 64, 180]) {
     const width = outlineWidthForFontSize(size);
     assert.ok(Math.abs(width / size - OUTLINE_RATIO) < Number.EPSILON);
@@ -246,7 +247,7 @@ test("preserves legacy text defaults and boxed contrast", () => {
   assert.equal(textColor({ style: "boxed", background: "white" }), "#111111");
   assert.equal(textColor({ style: "plain" }), "#FFFFFF");
   assert.equal(outlineColorFor("#111111"), "#FFFFFF");
-  assert.equal(outlineColorFor("#FFFFFF"), "#111111");
+  assert.equal(outlineColorFor("#FFFFFF"), "#000000");
   const lightBox = { style: "boxed", background: "white", color: "#FFFFFF" };
   const darkBox = { style: "boxed", background: "black", color: "#111111" };
   ensureBoxedTextContrast(lightBox);

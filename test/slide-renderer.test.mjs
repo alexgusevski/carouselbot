@@ -24,8 +24,8 @@ const { drawTextLayer, renderSlideCanvas } = await import("../src/slide-renderer
 const { OUTLINE_RATIO, outlineWidthForFontSize } = await import("../src/editor-model.mjs");
 const { canonicalSolidBackgroundColor, solidBackgroundDataUrl } = await import("../src/slide-background.mjs");
 
-function recordedOutlineWidths(size, outlineWidth = undefined, canvasWidth = 1080) {
-  const widths = [];
+function recordedOutlines(size, outlineWidth = undefined, canvasWidth = 1080) {
+  const outlines = [];
   const context = {
     save() {},
     translate() {},
@@ -35,7 +35,7 @@ function recordedOutlineWidths(size, outlineWidth = undefined, canvasWidth = 108
       return { width: String(value).length * 10 };
     },
     strokeText() {
-      widths.push(this.lineWidth);
+      outlines.push({ color: this.strokeStyle, width: this.lineWidth });
     },
     fillText() {},
   };
@@ -52,7 +52,7 @@ function recordedOutlineWidths(size, outlineWidth = undefined, canvasWidth = 108
     color: "#FFFFFF",
     align: "center",
   }, canvasWidth, canvasWidth * 16 / 9, { fonts: [] });
-  return widths;
+  return outlines;
 }
 
 test("renders each slide at its own format and scales an omitted height from that format", async () => {
@@ -93,16 +93,16 @@ test("does not accept a project-sized solid payload for a differently sized slid
 });
 
 test("renders canvas outlines as a stable percentage of the font size", () => {
-  const [small] = recordedOutlineWidths(40);
-  const [large] = recordedOutlineWidths(160);
-  const [scaledExport] = recordedOutlineWidths(160, undefined, 270);
-  const [custom] = recordedOutlineWidths(160, 24);
+  const [small] = recordedOutlines(40);
+  const [large] = recordedOutlines(160);
+  const [scaledExport] = recordedOutlines(160, undefined, 270);
+  const [custom] = recordedOutlines(160, 24);
 
-  assert.equal(small, outlineWidthForFontSize(40));
-  assert.equal(large, outlineWidthForFontSize(160));
-  assert.ok(Math.abs(small / 40 - OUTLINE_RATIO) < Number.EPSILON);
-  assert.ok(Math.abs(large / 160 - OUTLINE_RATIO) < Number.EPSILON);
-  assert.ok(Math.abs(scaledExport - large / 4) < Number.EPSILON);
-  assert.ok(Math.abs(custom - large * 2) < Number.EPSILON);
-  assert.deepEqual(recordedOutlineWidths(160, 0), []);
+  assert.deepEqual(small, { color: "#000000", width: outlineWidthForFontSize(40) });
+  assert.deepEqual(large, { color: "#000000", width: outlineWidthForFontSize(160) });
+  assert.ok(Math.abs(small.width / 40 - OUTLINE_RATIO) < Number.EPSILON);
+  assert.ok(Math.abs(large.width / 160 - OUTLINE_RATIO) < Number.EPSILON);
+  assert.ok(Math.abs(scaledExport.width - large.width / 4) < Number.EPSILON);
+  assert.ok(Math.abs(custom.width - large.width * 2) < Number.EPSILON);
+  assert.deepEqual(recordedOutlines(160, 0), []);
 });
