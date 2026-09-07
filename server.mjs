@@ -21,7 +21,7 @@ const files = new Map([
   ["/assets/codex-logo-colored-53743834.svg", ["assets/codex-logo-colored-53743834.svg", "image/svg+xml"]],
   ["/assets/hermes-agent-icon-e5340726.webp", ["assets/hermes-agent-icon-e5340726.webp", "image/webp"]],
   ["/assets/Octicons-mark-github.svg", ["assets/Octicons-mark-github.svg", "image/svg+xml"]],
-  ["/assets/favicon.svg", ["assets/favicon.svg", "image/svg+xml"]],
+  ["/assets/carouselbot-bot-icon.svg", ["assets/carouselbot-bot-icon.svg", "image/svg+xml"]],
 ]);
 
 const server = createServer(async (request, response) => {
