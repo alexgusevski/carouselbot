@@ -651,7 +651,7 @@ try {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
     x: 0.1, y: 0.2, width: 0.8, height: 0.16, size: 82, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF",
   })).structuredContent;
-  const imported = (await tool("import_asset", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, path: join(rootPath, "assets", "favicon.svg"), name: "CarouselBot mark" })).structuredContent;
+  const imported = (await tool("import_asset", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, path: join(rootPath, "assets", "carouselbot-bot-icon.svg"), name: "CarouselBot mark" })).structuredContent;
   const image = (await tool("add_image", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, assetId: imported.assetId, x: 0.34, y: 0.52, width: 0.32, rotation: 6 })).structuredContent;
   const batch = await tool("apply_operations", { operations: [
     { tool: "add_text", arguments: { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Claude · Codex · Hermes · OpenCode · OpenClaw", x: 0.1, y: 0.76, width: 0.8, height: 0.1, size: 44, style: "plain", color: "#25F4EE" } },
