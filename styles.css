@@ -1196,6 +1196,54 @@ button:disabled {
   font-size: 0;
 }
 
+.folder-preview-collage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  filter: grayscale(0.45);
+}
+
+.folder-preview-mini {
+  border-radius: 2px;
+}
+
+.folder-preview-folder-mark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 5px;
+  color: #fff;
+  background: rgba(32, 34, 32, 0.48);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.folder-preview-folder-mark svg {
+  width: 52%;
+  height: auto;
+  max-width: 44px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.4));
+}
+
+.folder-preview-folder-mark > span {
+  width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
 .folder-preview-more {
   position: absolute;
   inset: 0;
