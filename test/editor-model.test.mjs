@@ -19,6 +19,7 @@ import {
   duplicateProjectData,
   folderParentPath,
   folderAncestors,
+  folderPreviewItems,
   folderContains,
   movedFolderPath,
   normalizeStoredFolderPath,
@@ -476,4 +477,24 @@ test("duplicates entire projects with independent IDs and preserved content", ()
   assert.equal(duplicateProjectData(source).folderPath, "/Client");
   assert.equal(duplicateProjectData(source, { folderPath: null }).folderPath, null);
   assert.throws(() => duplicateProjectData(source, { folderPath: "/a/b/c" }), /two folder levels/);
+});
+
+
+test("folder previews represent direct children without flattening subfolder projects", () => {
+  const projects = [
+    { id: "direct", folderPath: "/Client", updatedAt: 99 },
+    { id: "a1", folderPath: "/Client/A", updatedAt: 1 },
+    { id: "a2", folderPath: "/Client/A", updatedAt: 3 },
+    { id: "b1", folderPath: "/Client/B", updatedAt: 2 },
+    { id: "other", folderPath: "/Client2", updatedAt: 100 },
+  ];
+  const items = folderPreviewItems(projects, "/Client");
+  assert.deepEqual(items.map(item => item.path || item.project.id), ["/Client/A", "/Client/B", "direct"]);
+  assert.deepEqual(items[0].projects.map(project => project.id), ["a2", "a1"]);
+  assert.deepEqual(folderPreviewItems(projects, "/Client/A").map(item => item.project.id), ["a2", "a1"]);
+  assert.equal(projects[1].id, "a1");
+  const empty = folderPreviewItems([], "/Client", [{ path: "/Client/Empty", updatedAt: 4 }, { path: "/Other/Empty", updatedAt: 5 }]);
+  assert.equal(empty.length, 1);
+  assert.equal(empty[0].path, "/Client/Empty");
+  assert.deepEqual(empty[0].projects, []);
 });

@@ -154,6 +154,32 @@ export function normalizeStoredFolderPath(value) {
   return normalizeFolderPath(parts.length > 2 ? `${parts[0]}/${parts.slice(1).join(" ∕ ")}` : value);
 }
 
+export function folderPreviewItems(projects, folderPath, folders = []) {
+  const children = new Map();
+  for (const folder of folders) {
+    if (folderParentPath(folder.path) === folderPath) {
+      children.set(folder.path, { type: "folder", path: folder.path, projects: [], updatedAt: Number(folder.updatedAt) || 0 });
+    }
+  }
+  const direct = [];
+  for (const project of projects) {
+    if (!folderContains(folderPath, project.folderPath)) continue;
+    if (project.folderPath === folderPath) {
+      direct.push({ type: "project", project, updatedAt: Number(project.updatedAt) || 0 });
+      continue;
+    }
+    const path = `${folderPath}/${project.folderPath.slice(folderPath.length + 1).split("/")[0]}`;
+    if (!children.has(path)) children.set(path, { type: "folder", path, projects: [], updatedAt: 0 });
+    const child = children.get(path);
+    child.projects.push(project);
+    child.updatedAt = Math.max(child.updatedAt, Number(project.updatedAt) || 0);
+  }
+  const recentFirst = (a, b) => b.updatedAt - a.updatedAt;
+  for (const child of children.values()) child.projects.sort(recentFirst);
+  // Show subfolders first so their contents cannot crowd them out of the preview.
+  return [...children.values()].sort(recentFirst).concat(direct.sort(recentFirst));
+}
+
 export function folderParentPath(value) {
   const path = String(value || "");
   const index = path.lastIndexOf("/");
