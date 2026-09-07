@@ -185,6 +185,10 @@ try {
   // Simulate a pre-update tab retaining the v1 database connection.
   const legacySetup = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
     const legacyRequest = indexedDB.open('carouselbot-db', 1);
+    // Queue another upgrade first, as happens when the user already has a blank tab.
+    const queuedUpgrade = indexedDB.open('carouselbot-db', 2);
+    queuedUpgrade.onupgradeneeded = () => queuedUpgrade.result.createObjectStore('folders', { keyPath: 'path' });
+    queuedUpgrade.onsuccess = () => queuedUpgrade.result.close();
     legacyRequest.onupgradeneeded = () => legacyRequest.result.createObjectStore('projects', { keyPath: 'id' });
     legacyRequest.onsuccess = () => {
       window.__legacyDatabase = legacyRequest.result;

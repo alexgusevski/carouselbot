@@ -16,6 +16,9 @@ export const projectChannelSource = crypto.randomUUID?.() || `${Date.now()}-${Ma
 export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersionChange = async () => {}, onVersionChange = () => {} } = {}) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName, DB_VERSION);
+    // A request queued behind another tab's blocked upgrade receives no blocked event.
+    // Surface recovery guidance even when the browser never dispatches that event here.
+    const blockedTimer = setTimeout(onBlocked, 1500);
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains("folders")) db.createObjectStore("folders", { keyPath: "path" });
@@ -25,6 +28,7 @@ export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersion
     };
     request.onblocked = () => onBlocked();
     request.onsuccess = () => {
+      clearTimeout(blockedTimer);
       const db = request.result;
       db.onversionchange = async () => {
         try {
@@ -38,7 +42,7 @@ export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersion
       };
       resolve(db);
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => { clearTimeout(blockedTimer); reject(request.error); };
   });
 }
 
