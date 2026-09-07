@@ -4070,7 +4070,8 @@ input[type="range"]::-webkit-slider-thumb {
 }
 /* Home-screen agent invitation. Decorative motion stays inside the button. */
 .home-agent-connect { position: relative; }
-.home-agent-connect .agent-connect-button { isolation: isolate; overflow: hidden; border-color: transparent; background: #f4efeb; color: #25232b; }
+.home-agent-connect .agent-connect-button { isolation: isolate; overflow: hidden; }
+.home-agent-connect .agent-connect-button:not([data-mcp-status="connected"]) { border-color: transparent; background: #f4efeb; color: #25232b; }
 .agent-color-clouds { position: absolute; inset: 0; z-index: -1; overflow: hidden; border-radius: inherit; pointer-events: none; }
 .agent-color-clouds i { position: absolute; inset: -75% -35%; opacity: .65; filter: blur(7px); background: radial-gradient(ellipse at center,#db946af0 0%,#ecb591c9 25%,#efd0b960 46%,transparent 68%); animation: agent-copper-cloud 19s ease-in-out infinite; }
 .agent-color-clouds i:nth-child(2) { inset: -90% -40%; background: radial-gradient(ellipse at center,#9585e8eb 0%,#b6a5f2ba 24%,#cfc7f960 46%,transparent 69%); animation: agent-violet-cloud 23s ease-in-out infinite; }
