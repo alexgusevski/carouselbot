@@ -192,7 +192,7 @@ export function createEditorUI({ projects, actions, output }) {
     positionLayerMenu(menu, event.clientX, event.clientY);
   }
 
-  function showAssetDeleteMenu(event, assetId) {
+  function showAssetMenu(event, assetId) {
     event.preventDefault();
     event.stopPropagation();
     closeLayerMenu();
@@ -204,14 +204,14 @@ export function createEditorUI({ projects, actions, output }) {
     const menu = document.createElement("div");
     menu.className = "layer-menu layer-menu--confirm";
     menu.setAttribute("role", "menu");
-    menu.setAttribute("aria-label", `Delete ${asset.name}?`);
+    menu.setAttribute("aria-label", `Actions for ${asset.name}`);
 
     const button = document.createElement("button");
     button.type = "button";
     button.className = "layer-menu-item is-danger";
     button.setAttribute("role", "menuitem");
-    button.setAttribute("aria-label", `Delete ${asset.name}`);
-    button.innerHTML = `${icon("trash")}<span>Delete?</span>`;
+    button.setAttribute("aria-label", `Remove ${asset.name}`);
+    button.innerHTML = `${icon("trash")}<span>Remove</span>`;
     button.addEventListener("click", (clickEvent) => {
       clickEvent.stopPropagation();
       closeLayerMenu();
@@ -1360,6 +1360,7 @@ export function createEditorUI({ projects, actions, output }) {
     app.querySelectorAll(".asset-item").forEach((item) => {
       const assetId = item.dataset.assetId;
       const previewSrc = item.querySelector("img")?.src;
+      item.addEventListener("contextmenu", (event) => showAssetMenu(event, assetId));
       item.addEventListener("click", (event) => {
         if (event.target.closest("button") || state.draggingAssetId) return;
         openAssetPreview(assetId);
@@ -1394,11 +1395,6 @@ export function createEditorUI({ projects, actions, output }) {
         hideAssetPreview();
       });
     });
-    app.querySelectorAll('[data-action="delete-asset"]').forEach((button) => {
-      button.addEventListener("click", (event) => {
-        showAssetDeleteMenu(event, button.dataset.assetId);
-      });
-    });
     bindAssetTrash();
   }
 
@@ -1431,6 +1427,7 @@ export function createEditorUI({ projects, actions, output }) {
   }
 
   function showAssetPreview(src, clientX, clientY) {
+    if (document.querySelector(".layer-menu")) return;
     let preview = document.querySelector(".asset-hover-preview");
     if (!preview) {
       preview = document.createElement("img");
