@@ -1630,6 +1630,24 @@ try {
     () => evaluate(cdp, `location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === '/native-folder'`),
     "Opening the folder card did not show its dashboard route.",
   );
+  const folderHeader = await evaluate(cdp, `({
+    home: document.querySelector('.folder-breadcrumb')?.textContent.trim(),
+    fontSize: parseFloat(getComputedStyle(document.querySelector('.folder-breadcrumb')).fontSize),
+    counts: [...document.querySelectorAll('.dashboard p, .section-heading > span')].filter((item) => item.textContent.trim() === '1 project').length,
+  })`);
+  if (folderHeader.home !== 'Home' || folderHeader.fontSize < 16 || folderHeader.counts !== 1) {
+    throw new Error('The folder header should show a larger Home link and a single project count: ' + JSON.stringify(folderHeader));
+  }
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${folderUiProject.projectId}"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.slide-rail > .slide-rail-back')?.textContent.trim() === '/native-folder' && document.querySelector('.slide-rail-back')?.getAttribute('href') === '/folders/native-folder'`),
+    "The slide sidebar did not show the project's folder link.",
+  );
+  await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/folders/native-folder' && Boolean(document.querySelector('.folder-dashboard-title'))`),
+    "The slide sidebar link did not return to the folder.",
+  );
   await evaluate(cdp, "window.__carouselBotFolderReloadSentinel = true");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(
@@ -1653,6 +1671,16 @@ try {
         && this.carouselBotAgent.inspect().projects.find((item) => item.id === projectId)?.folderPath === null;
     }`, [folderUiProject.projectId]),
     "Moving the final project out did not remove the implicit folder and return to the dashboard.",
+  );
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${folderUiProject.projectId}"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.slide-rail > .slide-rail-back')?.textContent.trim() === 'Home' && document.querySelector('.slide-rail-back')?.getAttribute('href') === '/' && Boolean(document.querySelector('.slide-rail-back svg'))`),
+    "The slide sidebar did not show Home for an unfiled project.",
+  );
+  await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/' && Boolean(document.querySelector('.dashboard'))`),
+    "The slide sidebar Home link did not return home.",
   );
   await callPageFunction(cdp, `function(projectId) {
     return this.carouselBotAgent.execute({ type: 'project.delete', projectId });
