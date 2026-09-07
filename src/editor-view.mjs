@@ -15,6 +15,7 @@ import {
   TEXT_COLOR_PRESETS,
   escapeHtml,
   folderRoutePath,
+  folderDisplayName,
   textColor,
   formatRgb,
   outlineColorFor,
@@ -67,6 +68,7 @@ export function formatDate(timestamp) {
 
 export function icon(name) {
   const icons = {
+    "square-stack": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><path d="M10 16c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><rect width="8" height="8" x="14" y="14" rx="2"/></svg>',
     home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-8H9v8H4a1 1 0 0 1-1-1Z"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     forward: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
@@ -170,7 +172,7 @@ export function renderLegacyMigrationNotice(projects, migrationController, dismi
 export function renderSlideRail(project) {
   return `
     <aside class="slide-rail">
-      <a class="slide-rail-back" data-action="open-project-parent" href="${project.folderPath ? folderRoutePath(project.folderPath) : "/"}" title="${escapeHtml(project.folderPath || "Home")}">${icon(project.folderPath ? "back" : "home")}<span>${escapeHtml(project.folderPath || "Home")}</span></a>
+      <a class="slide-rail-back" data-action="open-project-parent" href="${project.folderPath ? folderRoutePath(project.folderPath) : "/"}" title="${escapeHtml(folderDisplayName(project.folderPath) || "Home")}">${icon(project.folderPath ? "folder" : "home")}<span>${escapeHtml(folderDisplayName(project.folderPath) || "Home")}</span></a>
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
         ${project.slides.map((slide, index) => {

@@ -1547,7 +1547,7 @@ try {
     const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
     const next = shell?.querySelector('[data-project-preview-direction="next"]');
     const meta = card?.querySelector('.project-meta');
-    const title = meta?.querySelector('strong');
+    const title = meta?.querySelector('.project-meta-name > span');
     const details = meta?.lastElementChild;
     if (!card || !shell || !strip || slides.length !== 8 || slides.some((slide) => !slide.querySelector('img'))) return false;
     const stripRect = strip.getBoundingClientRect();
@@ -1679,7 +1679,7 @@ try {
     strip.dispatchEvent(new Event('scroll'));
     const next = shell.querySelector('[data-project-preview-direction="next"]');
     const meta = shell.querySelector('.project-meta');
-    const title = meta?.querySelector('strong');
+    const title = meta?.querySelector('.project-meta-name > span');
     const details = meta?.lastElementChild;
     return !next.hidden ? {
       viewportWidth: innerWidth,
@@ -1762,7 +1762,7 @@ try {
     };
   })()`), "Moving a project into a new folder did not render its eight-slot folder card.");
   if (
-    nativeFolderCard.name !== "/native-folder"
+    nativeFolderCard.name !== "native-folder"
     || nativeFolderCard.href !== "/folders/native-folder"
     || nativeFolderCard.gap !== 6
     || nativeFolderCard.padding !== 8
@@ -1774,22 +1774,32 @@ try {
   );
   await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/native-folder"]').click()`);
   await waitFor(
-    () => evaluate(cdp, `location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === '/native-folder'`),
+    () => evaluate(cdp, `location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'native-folder'`),
     "Opening the folder card did not show its dashboard route.",
   );
+  const projectCardIcon = await evaluate(cdp, `Boolean(document.querySelector('.project-card .project-meta-name svg rect[x="14"][y="14"]'))`);
+  if (!projectCardIcon) throw new Error('Project cards must show the square-stack icon.');
   const folderHeader = await evaluate(cdp, `({
     home: document.querySelector('.folder-breadcrumb')?.textContent.trim(),
     fontSize: parseFloat(getComputedStyle(document.querySelector('.folder-breadcrumb')).fontSize),
-    counts: [...document.querySelectorAll('.dashboard p, .section-heading > span')].filter((item) => item.textContent.trim() === '1 project').length,
+    heading: document.querySelector('.section-heading h2')?.textContent.trim(),
+    rightCount: Boolean(document.querySelector('.section-heading > span')),
   })`);
-  if (folderHeader.home !== 'Home' || folderHeader.fontSize < 16 || folderHeader.counts !== 1) {
+  if (folderHeader.home !== 'Home' || folderHeader.fontSize < 16 || folderHeader.heading !== '1 project' || folderHeader.rightCount) {
     throw new Error('The folder header should show a larger Home link and a single project count: ' + JSON.stringify(folderHeader));
   }
   await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${folderUiProject.projectId}"]').click()`);
   await waitFor(
-    () => evaluate(cdp, `document.querySelector('.slide-rail > .slide-rail-back')?.textContent.trim() === '/native-folder' && document.querySelector('.slide-rail-back')?.getAttribute('href') === '/folders/native-folder'`),
+    () => evaluate(cdp, `document.querySelector('.slide-rail > .slide-rail-back')?.textContent.trim() === 'native-folder' && document.querySelector('.slide-rail-back')?.getAttribute('href') === '/folders/native-folder'`),
     "The slide sidebar did not show the project's folder link.",
   );
+  const parentLinkSize = await evaluate(cdp, `(() => {
+    const link = document.querySelector('.slide-rail-back');
+    return { fontSize: parseFloat(getComputedStyle(link).fontSize), height: link.getBoundingClientRect().height, iconWidth: link.querySelector('svg').getBoundingClientRect().width };
+  })()`);
+  if (parentLinkSize.fontSize < 18 || parentLinkSize.height < 48 || parentLinkSize.iconWidth < 24) {
+    throw new Error('The folder link must remain large and easy to click: ' + JSON.stringify(parentLinkSize));
+  }
   await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
   await waitFor(
     () => evaluate(cdp, `location.pathname === '/folders/native-folder' && Boolean(document.querySelector('.folder-dashboard-title'))`),
@@ -1798,7 +1808,7 @@ try {
   await evaluate(cdp, "window.__carouselBotFolderReloadSentinel = true");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(
-    () => evaluate(cdp, `document.readyState === 'complete' && !window.__carouselBotFolderReloadSentinel && window.carouselBotAgent && location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === '/native-folder' && [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
+    () => evaluate(cdp, `document.readyState === 'complete' && !window.__carouselBotFolderReloadSentinel && window.carouselBotAgent && location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'native-folder' && [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
     "The folder deep route did not survive a reload.",
   );
   await evaluate(cdp, `(() => {

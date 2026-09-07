@@ -115,6 +115,10 @@ export function projectPath(projectId) {
   return `/projects/${encodeURIComponent(projectId)}`;
 }
 
+export function folderDisplayName(value) {
+  return String(value ?? "").replace(/^\/+/, "");
+}
+
 export function normalizeFolderPath(value) {
   if (value == null) return null;
   let content = String(value).trim();

@@ -5,6 +5,7 @@ import {
   uid,
   projectPath,
   folderRoutePath,
+  folderDisplayName,
   routeFromPathname,
   escapeHtml,
   normalizeAspectRatio,
@@ -417,7 +418,7 @@ export function createEditorProjects({
       clearProjectHistory([projectId]);
       leaveMissingActiveFolder();
       renderDashboard();
-      toast(folderPath ? `Moved to ${folderPath}` : "Moved to all projects");
+      toast(folderPath ? `Moved to ${folderDisplayName(folderPath)}` : "Moved to all projects");
       return updated;
     } catch (error) {
       if (error.code === "STALE_PROJECT") await reloadProjectFromDb(projectId);
@@ -456,12 +457,12 @@ export function createEditorProjects({
     backdrop.innerHTML = `
       <form class="modal" data-folder-move-form role="dialog" aria-modal="true" aria-labelledby="folder-move-title" aria-describedby="folder-move-description">
         <h2 id="folder-move-title">Move project</h2>
-        <p id="folder-move-description">Enter a folder path such as <strong>/my-folder</strong>. Leave it empty to show the project on the home screen.</p>
-        <input name="folderPath" value="${escapeHtml(project.folderPath || "")}" placeholder="/my-folder" maxlength="160" list="folder-path-options" autocomplete="off" aria-label="Folder path" />
+        <p id="folder-move-description">Enter a folder name such as <strong>${icon("folder")} my-folder</strong>. Leave it empty to show the project on the home screen.</p>
+        <input name="folderPath" value="${escapeHtml(folderDisplayName(project.folderPath))}" placeholder="my-folder" maxlength="160" list="folder-path-options" autocomplete="off" aria-label="Folder name" />
         <datalist id="folder-path-options">
-          ${folderPaths.map((folderPath) => `<option value="${escapeHtml(folderPath)}"></option>`).join("")}
+          ${folderPaths.map((folderPath) => `<option value="${escapeHtml(folderDisplayName(folderPath))}"></option>`).join("")}
         </datalist>
-        <p class="folder-path-hint">A new path creates the folder automatically.</p>
+        <p class="folder-path-hint">A new name creates the folder automatically.</p>
         <div class="modal-actions">
           <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
           <button class="button button--primary" type="submit">Move project</button>
@@ -483,7 +484,7 @@ export function createEditorProjects({
       event.preventDefault();
       const folderPath = normalizeFolderPath(input.value);
       if (input.value.trim() && !folderPath) {
-        input.setCustomValidity("Enter a folder name after the slash. /. and /.. are not folder names.");
+        input.setCustomValidity("Enter a folder name. A dot or double dot is not a folder name.");
         input.reportValidity();
         return;
       }
@@ -515,9 +516,9 @@ export function createEditorProjects({
     backdrop.innerHTML = `
       <form class="modal" data-folder-rename-form role="dialog" aria-modal="true" aria-labelledby="folder-rename-title" aria-describedby="folder-rename-description">
         <h2 id="folder-rename-title">Rename folder</h2>
-        <p id="folder-rename-description">Changing the path moves every project in <strong>${escapeHtml(sourceFolderPath)}</strong> together.</p>
-        <input name="folderPath" value="${escapeHtml(sourceFolderPath)}" placeholder="/my-folder" maxlength="160" autocomplete="off" aria-label="Folder path" required />
-        <p class="folder-path-hint">Using an existing path merges the two folders.</p>
+        <p id="folder-rename-description">Changing the name moves every project in <strong>${icon("folder")} ${escapeHtml(folderDisplayName(sourceFolderPath))}</strong> together.</p>
+        <input name="folderPath" value="${escapeHtml(folderDisplayName(sourceFolderPath))}" placeholder="my-folder" maxlength="160" autocomplete="off" aria-label="Folder name" required />
+        <p class="folder-path-hint">Using an existing name merges the two folders.</p>
         <div class="modal-actions">
           <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
           <button class="button button--primary" type="submit">Rename folder</button>
@@ -539,7 +540,7 @@ export function createEditorProjects({
       event.preventDefault();
       const folderPath = normalizeFolderPath(input.value);
       if (!folderPath) {
-        input.setCustomValidity("Enter a folder name after the slash. /. and /.. are not folder names.");
+        input.setCustomValidity("Enter a folder name. A dot or double dot is not a folder name.");
         input.reportValidity();
         return;
       }
@@ -551,7 +552,7 @@ export function createEditorProjects({
       try {
         const moved = await moveFolderProjects(sourceFolderPath, folderPath);
         close();
-        toast(`Moved ${moved.length} ${moved.length === 1 ? "project" : "projects"} to ${folderPath}`);
+        toast(`Moved ${moved.length} ${moved.length === 1 ? "project" : "projects"} to ${folderDisplayName(folderPath)}`);
       } catch (error) {
         console.error(error);
         cancelButton.disabled = false;
@@ -668,7 +669,7 @@ export function createEditorProjects({
     const menu = document.createElement("div");
     menu.className = "layer-menu";
     menu.setAttribute("role", "menu");
-    menu.setAttribute("aria-label", `Actions for ${folderPath}`);
+    menu.setAttribute("aria-label", `Actions for ${folderDisplayName(folderPath)}`);
 
     const renameButton = document.createElement("button");
     renameButton.type = "button";

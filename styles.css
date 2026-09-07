@@ -1255,6 +1255,16 @@ button:disabled {
   white-space: nowrap;
 }
 
+.project-meta .project-meta-name {
+  align-items: baseline;
+  font-weight: 650;
+}
+
+.project-meta .folder-meta-name {
+  font-weight: 800;
+}
+
+.project-meta-name,
 .folder-meta-name {
   display: flex !important;
   gap: 7px;
@@ -1262,12 +1272,14 @@ button:disabled {
   align-items: center;
 }
 
+.project-meta-name svg,
 .folder-meta-name svg {
   width: 17px;
   height: 17px;
   flex: 0 0 auto;
 }
 
+.project-meta .project-meta-name > span,
 .project-meta .folder-meta-name > span {
   min-width: 0;
   overflow: hidden;
@@ -1362,24 +1374,30 @@ button:disabled {
 .slide-rail-back {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   min-width: 0;
+  min-height: 48px;
   margin: 12px 12px 0;
-  padding: 6px 4px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+  padding: 10px 8px;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 750;
   text-decoration: none;
-  border-radius: 4px;
+  border-radius: 8px;
 }
 
 .slide-rail-back:hover {
-  color: var(--ink);
+  background: var(--panel);
+}
+
+.slide-rail-back:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .slide-rail-back svg {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
 }
 
@@ -4039,3 +4057,14 @@ input[type="range"]::-webkit-slider-thumb {
 /* A mixed range has no representative value until the user chooses one. */
 #font-size[data-mixed="true"]::-webkit-slider-thumb { opacity: 0; }
 #font-size[data-mixed="true"]::-moz-range-thumb { opacity: 0; }
+
+.new-project-card small svg,
+.folder-dialog strong svg {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+}
+
+.project-meta-name svg {
+  align-self: center;
+}
