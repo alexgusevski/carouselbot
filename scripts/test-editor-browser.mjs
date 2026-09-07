@@ -848,6 +848,35 @@ try {
       await run({ type: 'layer.delete', layerIds: [a, b] });
     }
   })()`);
+  const assetMenu = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const projectId = agent.inspect({ includeAllProjects: false }).project.id;
+    const bridge = window.carouselBotLocalMcpBridge;
+    const originalFetchMedia = bridge.fetchMedia;
+    bridge.fetchMedia = async () => ({ file: new File(['<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#123456"/></svg>'], 'context-menu.svg', { type: 'image/svg+xml' }), name: 'context-menu.svg' });
+    let asset;
+    try {
+      asset = await agent.execute({ type: 'asset.import', projectId, mediaId: 'context-menu', name: 'Context menu asset' });
+    } finally {
+      bridge.fetchMedia = originalFetchMedia;
+    }
+    const item = [...document.querySelectorAll('.asset-item')].find(item => item.dataset.assetId === asset.assetId);
+    const noRemoveButton = !document.querySelector('.asset-remove');
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 100, clientY: 200 });
+    item.dispatchEvent(event);
+    const menu = document.querySelector('.layer-menu');
+    const button = menu?.querySelector('[role="menuitem"]');
+    const opened = event.defaultPrevented && button?.textContent.trim() === 'Remove';
+    const noPreview = !document.querySelector('.asset-preview-modal');
+    button.click();
+    const removed = ![...document.querySelectorAll('.asset-item')].some(item => item.dataset.assetId === asset.assetId);
+    return { noRemoveButton, opened, noPreview, removed, closed: !document.querySelector('.layer-menu') };
+  })()`);
+  if (Object.values(assetMenu).some(value => !value)) {
+    throw new Error(`Asset context menu regression: ${JSON.stringify(assetMenu)}`);
+  }
+
+  await evaluate(cdp, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
 
   const imagePasteBefore = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });

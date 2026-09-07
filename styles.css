@@ -1594,29 +1594,6 @@ button:disabled {
   pointer-events: none;
 }
 
-.asset-remove {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  color: #fff;
-  background: rgba(21, 21, 21, 0.72);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-}
-
-.asset-item:hover .asset-remove,
-.asset-remove:focus-visible {
-  opacity: 1;
-}
-
 .overlay-asset-name {
   margin: 0;
   overflow: hidden;
@@ -3786,10 +3763,6 @@ input[type="range"]::-webkit-slider-thumb {
   .asset-grid {
     grid-template-columns: 1fr;
     padding: 4px 6px 10px;
-  }
-
-  .asset-remove {
-    opacity: 1;
   }
 
   .asset-trash {

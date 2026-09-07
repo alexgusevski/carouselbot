@@ -200,7 +200,6 @@ export function renderAssetRail(project) {
         ${assets.length ? assets.map((asset) => `
           <div class="asset-item" tabindex="0" aria-label="Preview ${escapeHtml(asset.name)}" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)}">
             <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
-            <button class="asset-remove" type="button" data-action="delete-asset" data-asset-id="${asset.id}" aria-label="Remove ${escapeHtml(asset.name)}">×</button>
           </div>
         `).join("") : `<p class="asset-empty">Upload logos, stickers, or extra photos. Drag them onto a photo to place them.</p>`}
       </div>
