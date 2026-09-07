@@ -16,6 +16,11 @@ import {
   escapeHtml,
   folderRoutePath,
   folderDisplayName,
+  folderParentPath,
+  folderAncestors,
+  folderContains,
+  movedFolderPath,
+  normalizeStoredFolderPath,
   fontSizeFromSliderPosition,
   formatFontSize,
   formatRgb,
@@ -425,4 +430,19 @@ test("folder display names omit the canonical prefix without changing stored pat
   assert.equal(folderDisplayName("///Campaign"), "Campaign");
   assert.equal(folderDisplayName(null), "");
   assert.equal(folderDisplayName("/Client/Campaign"), "Client/Campaign");
+});
+
+
+test("folders have two levels and subtree moves preserve account names", () => {
+  for (const path of ["/Client/Account/Campaign", "/Client//Account", "/Client/", "/Client/..", "/Client/.", "/Client/ Account"]) {
+    assert.equal(normalizeFolderPath(path), null, path);
+  }
+  assert.equal(normalizeStoredFolderPath("/Client/Account/Campaign"), "/Client/Account ∕ Campaign");
+  assert.deepEqual(folderAncestors("/Client/Account"), ["/Client", "/Client/Account"]);
+  assert.equal(folderParentPath("/Client"), null);
+  assert.equal(folderContains("/Client", "/Client/Account"), true);
+  assert.equal(folderContains("/Client", "/Client2/Account"), false);
+  assert.equal(movedFolderPath("/Client/Account", "/Client", "/Renamed"), "/Renamed/Account");
+  assert.equal(movedFolderPath("/Client/Account", "/Client", null), null);
+  assert.throws(() => movedFolderPath("/Client/Account", "/Client", "/Other/Subfolder"), /two folder levels/);
 });

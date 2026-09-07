@@ -1,4 +1,4 @@
-import { uid } from "./editor-model.mjs";
+import { uid, folderContains, movedFolderPath, normalizeStoredFolderPath } from "./editor-model.mjs";
 import { state } from "./editor-state.mjs";
 
 export const DB_VERSION = 1;
@@ -121,11 +121,19 @@ export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPa
     read.onerror = () => reject(read.error);
     read.onsuccess = () => {
       const now = Date.now();
+      // Validate the entire subtree before issuing any writes.
+      try {
+        for (const project of read.result || []) movedFolderPath(normalizeStoredFolderPath(project.folderPath), sourceFolderPath, destinationFolderPath);
+      } catch (error) {
+        reject(error);
+        transaction.abort();
+        return;
+      }
       for (const project of read.result || []) {
-        if ((project.folderPath || null) !== sourceFolderPath) continue;
+        if (!folderContains(sourceFolderPath, normalizeStoredFolderPath(project.folderPath))) continue;
         const updated = {
           ...project,
-          folderPath: destinationFolderPath,
+          folderPath: movedFolderPath(normalizeStoredFolderPath(project.folderPath), sourceFolderPath, destinationFolderPath),
           revision: (Number(project.revision) || 0) + 1,
           updatedAt: now,
         };

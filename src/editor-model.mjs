@@ -119,12 +119,42 @@ export function folderDisplayName(value) {
   return String(value ?? "").replace(/^\/+/, "");
 }
 
+// Older versions allowed arbitrarily deep strings as flat folder names.
+// Keep those projects grouped while limiting the new hierarchy to two levels.
+export function normalizeStoredFolderPath(value) {
+  const parts = String(value ?? "").trim().replace(/^\/+/, "").split("/");
+  return normalizeFolderPath(parts.length > 2 ? `${parts[0]}/${parts.slice(1).join(" ∕ ")}` : value);
+}
+
+export function folderParentPath(value) {
+  const path = String(value || "");
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : null;
+}
+
+export function folderContains(folderPath, projectFolderPath) {
+  return Boolean(folderPath && (projectFolderPath === folderPath || projectFolderPath?.startsWith(`${folderPath}/`)));
+}
+
+export function folderAncestors(value) {
+  if (!value) return [];
+  return folderParentPath(value) ? [folderParentPath(value), value] : [value];
+}
+
+export function movedFolderPath(path, source, destination) {
+  if (!folderContains(source, path)) return path;
+  if (!destination) return null;
+  const result = destination + path.slice(source.length);
+  if (!normalizeFolderPath(result) || result.length > 160) throw new Error("Use at most two folder levels: Client/Account (160 characters maximum).");
+  return result;
+}
+
 export function normalizeFolderPath(value) {
   if (value == null) return null;
   let content = String(value).trim();
   while (content.startsWith("/")) content = content.slice(1).trimStart();
   content = content.trim();
-  if (!content || content === "." || content === "..") return null;
+  if (!content || content.split("/").length > 2 || content.split("/").some((part) => !part.trim() || part !== part.trim() || part === "." || part === "..")) return null;
 
   // Keep the complete canonical path within the UI/MCP 160-code-unit limit
   // without cutting an emoji's surrogate pair in half. Invalid standalone
@@ -142,7 +172,7 @@ export function normalizeFolderPath(value) {
     } else if (code >= 0xDC00 && code <= 0xDFFF) bounded += "\uFFFD";
     else bounded += content[index];
   }
-  return bounded ? `/${bounded}` : null;
+  return bounded && !bounded.endsWith("/") ? `/${bounded}` : null;
 }
 
 function greatestCommonDivisor(left, right) {

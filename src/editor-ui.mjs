@@ -6,6 +6,8 @@ import {
   projectPath,
   folderRoutePath,
   folderDisplayName,
+  folderParentPath,
+  folderAncestors,
   adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
@@ -492,8 +494,11 @@ export function createEditorUI({ projects, actions, output }) {
     const foldersByPath = new Map();
     for (const project of sortedProjects) {
       if (!project.folderPath) continue;
-      if (!foldersByPath.has(project.folderPath)) foldersByPath.set(project.folderPath, []);
-      foldersByPath.get(project.folderPath).push(project);
+      for (const path of folderAncestors(project.folderPath)) {
+        if (folderParentPath(path) !== activeFolderPath) continue;
+        if (!foldersByPath.has(path)) foldersByPath.set(path, []);
+        foldersByPath.get(path).push(project);
+      }
     }
     const folders = [...foldersByPath.entries()].map(([folderPath, folderProjects]) => ({
       folderPath,
@@ -550,10 +555,10 @@ export function createEditorUI({ projects, actions, output }) {
         `;
       }).join("");
       return `
-        <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folderDisplayName(folder.folderPath))}. Right-click for actions." title="Right-click for actions">
+        <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folder.folderPath.split("/").at(-1))}. Right-click for actions." title="Right-click for actions">
           <span class="folder-preview">${slots}</span>
           <span class="project-meta">
-            <strong class="folder-meta-name">${icon("folder")}<span>${escapeHtml(folderDisplayName(folder.folderPath))}</span></strong>
+            <strong class="folder-meta-name">${icon("folder")}<span>${escapeHtml(folder.folderPath.split("/").at(-1))}</span></strong>
             <span>${folder.projects.length} ${folder.projects.length === 1 ? "project" : "projects"}</span>
           </span>
         </a>
@@ -564,10 +569,8 @@ export function createEditorUI({ projects, actions, output }) {
       ...visibleProjects.map((project) => ({ type: "project", updatedAt: Number(project.updatedAt) || 0, project })),
       ...folders.map((folder) => ({ type: "folder", updatedAt: folder.updatedAt, folder })),
     ].sort((a, b) => b.updatedAt - a.updatedAt);
-    const cards = activeFolderPath
-      ? visibleProjects.map(renderProjectCard).join("")
-      : rootItems.map((item) => item.type === "folder" ? renderFolderCard(item.folder) : renderProjectCard(item.project)).join("");
-    const projectCountLabel = `${visibleProjects.length} ${visibleProjects.length === 1 ? "project" : "projects"}`;
+    const cards = rootItems.map((item) => item.type === "folder" ? renderFolderCard(item.folder) : renderProjectCard(item.project)).join("");
+    const projectCountLabel = `${visibleProjects.length} ${visibleProjects.length === 1 ? "project" : "projects"}${folders.length ? ` · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}` : ""}`;
     app.innerHTML = `
       ${renderHeader()}
       ${renderLegacyMigrationNotice(sortedProjects, domainMigration, projects.isMigrationModalDismissed())}
@@ -576,7 +579,8 @@ export function createEditorUI({ projects, actions, output }) {
           <section class="folder-dashboard-header">
             <div>
               <a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} Home</a>
-              <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(folderDisplayName(activeFolderPath))}</span></h1>
+              ${folderParentPath(activeFolderPath) ? `<a class="folder-breadcrumb" href="${folderRoutePath(folderParentPath(activeFolderPath))}" data-folder-path="${escapeHtml(folderParentPath(activeFolderPath))}"> / ${escapeHtml(folderDisplayName(folderParentPath(activeFolderPath)))}</a>` : ""}
+              <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath.split("/").at(-1))}</span></h1>
             </div>
           </section>
         ` : `

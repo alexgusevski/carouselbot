@@ -1,6 +1,6 @@
 {
   "name": "slides-studio-mcp",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Compatibility package for the renamed CarouselBot MCP",
   "type": "module",
   "license": "MIT",
@@ -22,7 +22,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "carouselbot": "0.3.3"
+    "carouselbot": "0.3.4"
   },
   "publishConfig": {
     "access": "public",

@@ -134,7 +134,13 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
 
     const invalidFolder = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Invalid folder", folderPath: "/.." } });
     assert.equal(invalidFolder.result.isError, true);
-    assert.match(invalidFolder.result.content[0].text, /reserved names/);
+    assert.match(invalidFolder.result.content[0].text, /two folder levels/);
+
+    for (const path of ["/Client/Account/TooDeep", "/Client/", "/Client/..", "/Client//Account"]) {
+      const invalidNestedFolder = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Invalid nesting", folderPath: path } });
+      assert.equal(invalidNestedFolder.result.isError, true, path);
+      assert.match(invalidNestedFolder.result.content[0].text, /two folder levels/);
+    }
 
     const invalidAspectRatio = await rpc.request("tools/call", { name: "create_project", arguments: { name: "Invalid format", aspectRatio: "1:7" } });
     assert.equal(invalidAspectRatio.result.isError, true);
