@@ -16,6 +16,7 @@ import {
   escapeHtml,
   folderRoutePath,
   folderDisplayName,
+  duplicateProjectData,
   folderParentPath,
   folderAncestors,
   folderContains,
@@ -445,4 +446,34 @@ test("folders have two levels and subtree moves preserve account names", () => {
   assert.equal(movedFolderPath("/Client/Account", "/Client", "/Renamed"), "/Renamed/Account");
   assert.equal(movedFolderPath("/Client/Account", "/Client", null), null);
   assert.throws(() => movedFolderPath("/Client/Account", "/Client", "/Other/Subfolder"), /two folder levels/);
+});
+
+
+test("duplicates entire projects with independent IDs and preserved content", () => {
+  const source = { id: "project", name: "Original", folderPath: "/Client", revision: 9, createdAt: 1, updatedAt: 2,
+    assets: [{ id: "asset", data: "image bytes", width: 100 }],
+    fonts: [{ id: "font", data: "font bytes", variableAxes: [{ tag: "wght", min: 100 }] }],
+    slides: [{ id: "slide", imageData: "background bytes", aspectRatio: "4:5",
+      texts: [{ id: "text", fontId: "font", text: "Keep me", fontVariationSettings: { wght: 700 } }],
+      overlays: [{ id: "image", assetId: "asset", x: 0.25, cropW: 0.5 }] }] };
+  const copy = duplicateProjectData(source, { name: source.name, folderPath: "/Client/Variant" });
+  assert.notEqual(copy.id, source.id);
+  assert.equal(copy.revision, 1);
+  assert.equal(copy.folderPath, "/Client/Variant");
+  assert.equal(copy.name, source.name);
+  assert.equal(copy.slides[0].imageData, source.slides[0].imageData);
+  assert.notEqual(copy.slides[0].id, source.slides[0].id);
+  assert.notEqual(copy.slides[0].texts[0].id, source.slides[0].texts[0].id);
+  assert.notEqual(copy.assets[0].id, source.assets[0].id);
+  assert.notEqual(copy.fonts[0].id, source.fonts[0].id);
+  assert.equal(copy.slides[0].texts[0].fontId, copy.fonts[0].id);
+  assert.equal(copy.slides[0].overlays[0].assetId, copy.assets[0].id);
+  copy.slides[0].texts[0].fontVariationSettings.wght = 400;
+  copy.fonts[0].variableAxes[0].min = 200;
+  assert.equal(source.slides[0].texts[0].fontVariationSettings.wght, 700);
+  assert.equal(source.fonts[0].variableAxes[0].min, 100);
+  assert.equal(source.revision, 9);
+  assert.equal(duplicateProjectData(source).folderPath, "/Client");
+  assert.equal(duplicateProjectData(source, { folderPath: null }).folderPath, null);
+  assert.throws(() => duplicateProjectData(source, { folderPath: "/a/b/c" }), /two folder levels/);
 });

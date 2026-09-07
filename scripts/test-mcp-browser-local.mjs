@@ -769,6 +769,30 @@ try {
   if (exportedProject.fileCount !== 2 || (await readdir(projectExportDirectory)).filter((name) => name.endsWith(".png")).length !== 2) throw new Error("Project export did not write both slides.");
   await tool("delete_slide", { projectId: createdProject.projectId, slideId: duplicatedSlide.createdSlideId });
   await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP verified" });
+  const originalSession = editSessionId;
+  const originalState = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, includeAllProjects: false })).structuredContent;
+  const originalPreview = (await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).content.find((item) => item.type === "image");
+  const copies = [];
+  for (const variant of ["A", "B"]) {
+    const duplicate = (await tool("duplicate_project", { projectId: createdProject.projectId, expectedRevision: originalState.project.revision, name: originalState.project.name, folderPath: `/Copies/${variant}` })).structuredContent;
+    if (!duplicate.createdProjectId || duplicate.projectId !== createdProject.projectId) throw new Error("Duplicate result lost source session identity");
+    copies.push(duplicate.createdProjectId);
+  }
+  for (const copyId of copies) {
+    editSessionId = (await tool("begin_edit_session", { editorId: initialConnection.editorId, projectId: copyId, purpose: "Verify independent duplicate" })).structuredContent.editSessionId;
+    const copy = (await tool("inspect_editor", { projectId: copyId, includeAllProjects: false })).structuredContent;
+    if (copy.project.slideCount !== originalState.project.slideCount || copy.project.assetCount !== originalState.project.assetCount || copy.project.fontCount !== originalState.project.fontCount || copy.project.revision !== 1 || copy.activeProjectId !== originalState.activeProjectId) throw new Error("Duplicate lost content or navigated the editor");
+    const copySlideId = copy.project.slides[originalState.slide.index].id;
+    const copyPreview = (await tool("render_slide", { projectId: copyId, slideId: copySlideId })).content.find((item) => item.type === "image");
+    const pixels = await renderedPixelDifference(cdp, originalPreview.data, copyPreview.data);
+    if (!pixels.sameDimensions || pixels.changedPixels) throw new Error("Duplicate render differs from its source");
+    await tool("update_project", { projectId: copyId, name: "Independent copy" });
+    await tool("delete_project", { projectId: copyId });
+    await tool("end_edit_session", { editSessionId });
+    editSessionId = originalSession;
+  }
+  const sourceAfterCopies = (await tool("inspect_editor", { projectId: createdProject.projectId, includeAllProjects: false })).structuredContent;
+  if (sourceAfterCopies.project.revision !== originalState.project.revision || sourceAfterCopies.project.name !== originalState.project.name) throw new Error("Duplicating or editing copies modified the source");
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
   const pinnedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
@@ -939,7 +963,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, reconnectAfterDaemonReplacement: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, customAspectRatioAndSolidBackground: true, mixedSlideAspectRatios: true, sourceImageAspectRatios: true, sourceRatioExportsExcludeWorkspace: true, slideRatioLayerRemapping: true, slideRatioExportDimensions: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 58, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, reconnectAfterDaemonReplacement: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, independentProjectDuplicates: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, customAspectRatioAndSolidBackground: true, mixedSlideAspectRatios: true, sourceImageAspectRatios: true, sourceRatioExportsExcludeWorkspace: true, slideRatioLayerRemapping: true, slideRatioExportDimensions: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 58, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

@@ -14,6 +14,7 @@ import {
   aspectRatioFromDimensions,
   normalizeAspectRatio,
   normalizeFolderPath,
+  duplicateProjectData,
   folderContains,
   folderAncestors,
   folderParentPath,
@@ -507,6 +508,21 @@ async function executeCarouselBotAgentOperation(operation) {
       opened: false,
       visibleProjectId: state.activeProjectId,
     };
+  }
+
+  if (operation.type === "project.duplicate") {
+    const source = agentProject(operation.projectId);
+    const copy = duplicateProjectData(source, operation);
+    await putProject(copy);
+    state.projects.push(copy);
+    if (!state.activeProjectId) {
+      renderDashboard();
+      bindGlobalActions();
+    }
+    await agentNextFrame();
+    toast("AI agent duplicated a project");
+    // Keep the editing session bound to the source; the new project has its own ID.
+    return { projectId: source.id, createdProjectId: copy.id, name: copy.name, folderPath: copy.folderPath, revision: source.revision, opened: false };
   }
 
   if (operation.type === "project.move") {
