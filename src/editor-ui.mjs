@@ -35,6 +35,7 @@ import {
   setLayerSelection,
   selectOnlyLayer,
   projectAsset,
+  getOverlayMetrics,
   constrainImagePosition,
 } from "./editor-state.mjs";
 import {
@@ -288,16 +289,20 @@ export function createEditorUI({ projects, actions, output }) {
   async function applyFontToSelectedText(fontId) {
     const project = activeProject();
     const text = selectedText();
+    const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
+    const selection = selectedLayerKeys().join("|");
     if (!project || !text) return;
     const next = { ...text };
     applyProjectFontToText(project, next, fontId);
     await ensureProjectFontsLoaded(project, [next]);
-    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id) return;
+    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id || selectedLayerKeys().join("|") !== selection) return;
     recordHistory(project);
-    Object.assign(text, next);
+    targets.forEach((item) => {
+      applyProjectFontToText(project, item, fontId);
+      updateTextBox(item);
+      ensureTextFits(item, { force: true });
+    });
     refreshSelection();
-    updateTextBox(text);
-    ensureTextFits(text, { force: true });
     scheduleSave();
     const font = fontId ? project.fonts.find((item) => item.id === fontId) : null;
     if (font?.localFontId) {
@@ -310,6 +315,8 @@ export function createEditorUI({ projects, actions, output }) {
   async function addLocalFontToSelectedText(face) {
     const project = activeProject();
     const text = selectedText();
+    const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
+    const selection = selectedLayerKeys().join("|");
     const bridge = window.carouselBotLocalMcpBridge;
     if (!project || !text || !bridge) return;
     const existing = (project.fonts || []).find((item) => item.localFontId === face.localFontId) || null;
@@ -343,15 +350,17 @@ export function createEditorUI({ projects, actions, output }) {
     const next = { ...text };
     applyProjectFontToText(candidateProject, next, font.id);
     await ensureProjectFontsLoaded(candidateProject, [next]);
-    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id) return;
+    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id || selectedLayerKeys().join("|") !== selection) return;
     recordHistory(project);
     if (existing && repaired) project.fonts.splice(project.fonts.findIndex((item) => item.id === existing.id), 1, font);
     else if (!existing) (project.fonts ||= []).push(font);
-    Object.assign(text, next);
+    targets.forEach((item) => {
+      applyProjectFontToText(project, item, font.id);
+      updateTextBox(item);
+      ensureTextFits(item, { force: true });
+    });
     closeFontPicker();
     refreshSelection();
-    updateTextBox(text);
-    ensureTextFits(text, { force: true });
     scheduleSave();
     await bridge.markFontUsed?.(font.localFontId).catch((error) => {
       console.warn(`Could not update recent font usage for ${font.localFontId}:`, error);
@@ -856,6 +865,34 @@ export function createEditorUI({ projects, actions, output }) {
   }
 
   function bindInspectorControls() {
+    const geometryInputs = app.querySelectorAll("[data-shared-property]");
+    const updateSharedGeometryControls = () => {
+      const layers = selectedLayers();
+      geometryInputs.forEach((input) => {
+        if (input === document.activeElement) return;
+        const property = input.dataset.sharedProperty;
+        const values = layers.map(({ kind, item }) => property === "height" && kind === "overlay" ? getOverlayMetrics(item).height : item[property] || 0);
+        input.value = values.length && values.every((value) => value === values[0])
+          ? Math.round(values[0] * (property === "rotation" ? 10 : 1000)) / 10
+          : "";
+      });
+    };
+    geometryInputs.forEach((input) => {
+      input.addEventListener("focus", recordHistory);
+      input.addEventListener("input", () => {
+        if (input.value === "" || !Number.isFinite(Number(input.value))) return;
+        const property = input.dataset.sharedProperty;
+        const value = Number(input.value);
+        if (property !== "rotation" && value <= 0) return;
+        selectedLayers().forEach(({ kind, item }) => {
+          item[property] = property === "rotation" ? ((value % 360) + 360) % 360 : value / 100;
+          if (kind === "text") updateTextBox(item);
+          else updateOverlayBox(item);
+        });
+        updateSharedGeometryControls();
+        scheduleSave();
+      });
+    });
     const textarea = app.querySelector("#text-value");
     textarea?.addEventListener("input", () => {
       const text = selectedText();
@@ -869,7 +906,7 @@ export function createEditorUI({ projects, actions, output }) {
     const fontSelect = app.querySelector("#text-font");
     fontSelect?.addEventListener("change", async () => {
       if (fontSelect.value === "__add_local_font__") {
-        fontSelect.value = selectedText()?.fontId || "";
+        refreshSelection();
         openFontPicker();
         return;
       }
@@ -879,72 +916,77 @@ export function createEditorUI({ projects, actions, output }) {
       } catch (error) {
         console.error(error);
         toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "That font couldn’t be applied.");
-        fontSelect.value = selectedText()?.fontId || "";
+        refreshSelection();
       } finally {
         fontSelect.disabled = false;
       }
     });
 
-    app.querySelectorAll("[data-text-style]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.style = button.dataset.textStyle;
-        ensureBoxedTextContrast(text);
-        scheduleSave();
-        refreshSelection();
-        updateTextBox(text);
-        ensureTextFits(text);
+    const editSelectedTexts = (edit, { fit = false } = {}) => {
+      selectedLayers().filter(({ kind }) => kind === "text").forEach(({ item }) => {
+        edit(item);
+        updateTextBox(item);
+        if (fit) ensureTextFits(item);
       });
-    });
-
-    app.querySelectorAll("[data-text-align]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.align = button.dataset.textAlign;
-        app.querySelectorAll("[data-text-align]").forEach((item) => {
-          const active = item === button;
-          item.classList.toggle("is-active", active);
-          item.setAttribute("aria-pressed", String(active));
+      updateSharedGeometryControls();
+      scheduleSave();
+    };
+    const bindTextButtons = (selector, edit, options) => {
+      app.querySelectorAll(selector).forEach((button) => {
+        button.addEventListener("click", () => {
+          recordHistory();
+          editSelectedTexts((text) => edit(text, button), options);
+          refreshSelection();
         });
-        updateTextBox(text);
-        scheduleSave();
       });
-    });
+    };
+    bindTextButtons("[data-text-style]", (text, button) => {
+      text.style = button.dataset.textStyle;
+      ensureBoxedTextContrast(text);
+    }, { fit: true });
+    bindTextButtons("[data-text-align]", (text, button) => { text.align = button.dataset.textAlign; });
 
     const range = app.querySelector("#font-size");
     const number = app.querySelector("#font-size-number");
     const setSize = (value, { fromSlider = false } = {}) => {
-      const text = selectedText();
-      if (!text) return;
-      text.size = fromSlider
+      if (value === "" || !Number.isFinite(Number(value))) return;
+      const size = fromSlider
         ? fontSizeFromSliderPosition(value)
-        : Math.round(clamp(Number(value) || FONT_SIZE_MIN, FONT_SIZE_MIN, FONT_SIZE_MAX) * 2) / 2;
-      if (range) range.value = sliderPositionFromFontSize(text.size);
-      if (range) range.setAttribute("aria-valuetext", `${formatFontSize(text.size)} pixels`);
-      if (number) number.value = formatFontSize(text.size);
-      const output = app.querySelector(".control-label output");
-      if (output) output.textContent = `${formatFontSize(text.size)} px`;
-      updateTextBox(text);
-      ensureTextFits(text);
-      scheduleSave();
+        : Math.round(clamp(Number(value), FONT_SIZE_MIN, FONT_SIZE_MAX) * 2) / 2;
+      editSelectedTexts((text) => { text.size = size; }, { fit: true });
+      if (range) {
+        range.value = sliderPositionFromFontSize(size);
+        range.dataset.mixed = "false";
+        range.setAttribute("aria-valuetext", `${formatFontSize(size)} pixels`);
+      }
+      if (number) number.value = formatFontSize(size);
+      const output = app.querySelector('[for="font-size"] output');
+      if (output) output.textContent = `${formatFontSize(size)} px`;
     };
     range?.addEventListener("pointerdown", recordHistory);
+    range?.addEventListener("keydown", (event) => { if (!event.repeat && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) recordHistory(); });
     range?.addEventListener("input", () => setSize(range.value, { fromSlider: true }));
-    number?.addEventListener("pointerdown", recordHistory);
+    range?.addEventListener("pointerup", () => {
+      if (range.dataset.mixed === "true") setSize(range.value, { fromSlider: true });
+    });
+    number?.addEventListener("focus", recordHistory);
     number?.addEventListener("input", () => setSize(number.value));
 
     const colorPicker = app.querySelector("#text-color-picker");
     const hexInput = app.querySelector("#text-color-hex");
     const rgbInput = app.querySelector("#text-color-rgb");
+    const sharedTextColor = () => {
+      const colors = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => textColor(item));
+      return colors.every((color) => color === colors[0]) ? colors[0] || "" : "";
+    };
     const setTextColor = (value, { source = null } = {}) => {
       const text = selectedText();
       const color = normalizeHexColor(value);
       if (!text || !color) return false;
-      text.color = color;
+      editSelectedTexts((item) => { item.color = color; });
+      const colorLabel = app.querySelector(".color-picker-wrap span");
+      if (colorLabel) colorLabel.textContent = "Color wheel";
+      app.querySelectorAll("[data-copy-color]").forEach((button) => { button.disabled = false; });
       if (colorPicker && source !== "picker") colorPicker.value = color;
       if (hexInput && source !== "hex") hexInput.value = color;
       if (rgbInput && source !== "rgb") rgbInput.value = formatRgb(color);
@@ -966,7 +1008,7 @@ export function createEditorUI({ projects, actions, output }) {
     });
     colorPicker?.addEventListener("pointerdown", recordHistory);
     colorPicker?.addEventListener("input", () => setTextColor(colorPicker.value, { source: "picker" }));
-    hexInput?.addEventListener("focus", recordHistory, { once: true });
+    hexInput?.addEventListener("focus", recordHistory);
     hexInput?.addEventListener("input", () => {
       const fullHex = hexInput.value.trim().replace(/^#/, "");
       if (/^[0-9a-f]{6}$/i.test(fullHex)) setTextColor(fullHex, { source: "hex" });
@@ -974,9 +1016,9 @@ export function createEditorUI({ projects, actions, output }) {
     hexInput?.addEventListener("change", () => {
       const color = normalizeHexColor(hexInput.value);
       if (color) setTextColor(color);
-      else hexInput.value = textColor(selectedText());
+      else hexInput.value = sharedTextColor();
     });
-    rgbInput?.addEventListener("focus", recordHistory, { once: true });
+    rgbInput?.addEventListener("focus", recordHistory);
     rgbInput?.addEventListener("input", () => {
       const color = rgbToHex(rgbInput.value);
       if (color) setTextColor(color, { source: "rgb" });
@@ -984,7 +1026,7 @@ export function createEditorUI({ projects, actions, output }) {
     rgbInput?.addEventListener("change", () => {
       const color = rgbToHex(rgbInput.value);
       if (color) setTextColor(color);
-      else rgbInput.value = formatRgb(textColor(selectedText()));
+      else rgbInput.value = sharedTextColor() ? formatRgb(sharedTextColor()) : "";
     });
     app.querySelectorAll("[data-copy-color]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -993,31 +1035,13 @@ export function createEditorUI({ projects, actions, output }) {
       });
     });
 
-    app.querySelectorAll("[data-background-tone]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.background = button.dataset.backgroundTone;
-        ensureBoxedTextContrast(text);
-        refreshSelection();
-        updateTextBox(text);
-        scheduleSave();
-      });
+    bindTextButtons("[data-background-tone]", (text, button) => {
+      text.background = button.dataset.backgroundTone;
+      ensureBoxedTextContrast(text);
     });
-
-    app.querySelectorAll("[data-background-shape]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.backgroundShape = button.dataset.backgroundShape;
-        app.querySelectorAll("[data-background-shape]").forEach((item) => item.classList.toggle("is-active", item === button));
-        updateTextBox(text);
-        ensureTextFits(text);
-        scheduleSave();
-      });
-    });
+    bindTextButtons("[data-background-shape]", (text, button) => {
+      text.backgroundShape = button.dataset.backgroundShape;
+    }, { fit: true });
 
     const photoZoom = app.querySelector("#photo-zoom");
     photoZoom?.addEventListener("pointerdown", recordHistory);

@@ -77,3 +77,27 @@ test("hides a stored project face until its exact bytes finish loading", () => {
   assert.doesNotMatch(html, /is-font-missing/);
   assert.doesNotMatch(html, /missing-font-badge/);
 });
+
+test("shared inspector distinguishes mixed fonts, sizes, and formatting", async () => {
+  const { renderInspector } = await import("../src/editor-view.mjs");
+  const { setLayerSelection } = await import("../src/editor-state.mjs");
+  const first = { ...textLayer(undefined), id: "first", size: 50, align: "left" };
+  const second = { ...textLayer("other-font"), id: "second", size: 60, color: "#000000", align: "right" };
+  state.projects = [{ id: "shared-project", fonts: [{ id: "other-font", family: "Other", fullName: "Other Regular" }], slides: [{ id: "shared-slide", texts: [first, second], overlays: [] }] }];
+  state.activeProjectId = "shared-project";
+  state.activeSlideId = "shared-slide";
+  setLayerSelection(["text:first", "text:second"]);
+  const mixed = renderInspector();
+  assert.match(mixed, /value="__mixed__" selected disabled/);
+  assert.match(mixed, /id="font-size-number"[^>]*value=""/);
+  assert.match(mixed, /id="font-size" data-mixed="true"/);
+  assert.match(mixed, /id="text-color-hex"[^>]*value=""/);
+  assert.doesNotMatch(mixed, /alignment-option is-active/);
+  assert.doesNotMatch(mixed, /id="text-value"/);
+  second.fontId = first.fontId;
+  second.size = first.size = 56;
+  const same = renderInspector();
+  assert.doesNotMatch(same, /value="__mixed__"/);
+  assert.match(same, /id="font-size-number"[^>]*value="56"/);
+  assert.match(same, /value="" selected>TikTok Sans/);
+});

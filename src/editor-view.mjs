@@ -413,15 +413,19 @@ export function renderTextBox(text) {
 }
 
 export function renderInspector() {
-  const text = selectedText();
+  const layers = selectedLayers();
+  const texts = layers.filter(({ kind }) => kind === "text").map(({ item }) => item);
+  const text = texts.length === layers.length ? (texts[0] || selectedText()) : null;
+  const shared = (read) => layers.length && layers.every((entry) => Object.is(read(entry.item, entry.kind), read(layers[0].item, layers[0].kind))) ? read(layers[0].item, layers[0].kind) : null;
+  const commonText = (read) => !multiMode || texts.every((item) => Object.is(read(item), read(text)));
   const overlay = selectedOverlay();
-  const selectionCount = selectedLayers().length;
+  const selectionCount = layers.length;
   const multiMode = selectionCount > 1;
   const overlayAsset = overlay ? projectAsset(overlay.assetId) : null;
   const slide = activeSlide();
   const photoMode = Boolean(state.photoAdjustMode && slide);
   const overlayMode = Boolean(!photoMode && !multiMode && overlay);
-  const color = textColor(text);
+  const color = commonText(textColor) ? textColor(text) : "";
   return `
     <aside class="inspector ${state.mobileInspectorOpen ? "is-mobile-open" : ""}">
       <div class="inspector-header">
@@ -436,7 +440,7 @@ export function renderInspector() {
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
         </div>
-      ` : multiMode ? "" : overlayMode && state.croppingOverlayId === overlay.id ? `
+      ` : overlayMode && state.croppingOverlayId === overlay.id ? `
         <div class="inspector-body">
           <button class="button button--primary" type="button" data-action="done-crop">Done</button>
         </div>
@@ -456,15 +460,16 @@ export function renderInspector() {
         </div>
       ` : text ? `
         <div class="inspector-body">
-          <div class="control-group">
+          ${!multiMode ? `<div class="control-group">
             <label class="control-label" for="text-value">Words</label>
             <textarea id="text-value" class="text-input" maxlength="500" placeholder="Type something…">${escapeHtml(text.text)}</textarea>
-          </div>
+          </div>` : ""}
           <div class="control-group">
             <label class="control-label" for="text-font">Font</label>
             <select id="text-font" class="font-select" aria-label="Text font">
-              <option value="" ${text.fontId ? "" : "selected"}>TikTok Sans</option>
-              ${(activeProject()?.fonts || []).map((font) => `<option value="${escapeHtml(font.id)}" ${text.fontId === font.id ? "selected" : ""}>${escapeHtml(font.fullName || `${font.family} ${font.subfamily || ""}`.trim())}</option>`).join("")}
+              ${!commonText((item) => item.fontId || "") ? `<option value="__mixed__" selected disabled>— Mixed fonts</option>` : ""}
+              <option value="" ${commonText((item) => item.fontId || "") && !text.fontId ? "selected" : ""}>TikTok Sans</option>
+              ${(activeProject()?.fonts || []).map((font) => `<option value="${escapeHtml(font.id)}" ${commonText((item) => item.fontId || "") && text.fontId === font.id ? "selected" : ""}>${escapeHtml(font.fullName || `${font.family} ${font.subfamily || ""}`.trim())}</option>`).join("")}
               <option value="__add_local_font__">Add font from Mac…</option>
             </select>
             ${text.fontId && !isTextFontAvailable(activeProject(), text) ? `<p class="font-warning">${escapeHtml(textFontLabel(activeProject(), text))} is unavailable on this device.</p>` : ""}
@@ -472,22 +477,22 @@ export function renderInspector() {
           <div class="control-group">
             <div class="control-label">Style</div>
             <div class="style-options">
-              <button class="style-option ${text.style === "plain" ? "is-active" : ""}" type="button" data-text-style="plain">
+              <button class="style-option ${commonText((item) => item.style) && text.style === "plain" ? "is-active" : ""}" type="button" data-text-style="plain">
                 <span class="style-preview">Aa</span><small>Clean</small>
               </button>
-              <button class="style-option ${text.style === "outline" ? "is-active" : ""}" type="button" data-text-style="outline">
+              <button class="style-option ${commonText((item) => item.style) && text.style === "outline" ? "is-active" : ""}" type="button" data-text-style="outline">
                 <span class="style-preview style-preview--outline">Aa</span><small>Outline</small>
               </button>
-              <button class="style-option ${text.style === "boxed" ? "is-active" : ""}" type="button" data-text-style="boxed">
+              <button class="style-option ${commonText((item) => item.style) && text.style === "boxed" ? "is-active" : ""}" type="button" data-text-style="boxed">
                 <span class="style-preview style-preview--boxed">Aa</span><small>Box</small>
               </button>
             </div>
           </div>
           <div class="control-group">
-            <label class="control-label" for="font-size">Size <output>${formatFontSize(text.size)} px</output></label>
+            <label class="control-label" for="font-size">Size <output>${commonText((item) => item.size) ? `${formatFontSize(text.size)} px` : "—"}</output></label>
             <div class="range-wrap">
-              <input id="font-size" type="range" min="0" max="${FONT_SIZE_SLIDER_MAX}" step="${FONT_SIZE_SLIDER_STEP}" value="${sliderPositionFromFontSize(text.size)}" aria-valuetext="${formatFontSize(text.size)} pixels" />
-              <input id="font-size-number" class="number-input" type="number" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${formatFontSize(text.size)}" aria-label="Font size in pixels" />
+              <input id="font-size" data-mixed="${!commonText((item) => item.size)}" type="range" min="0" max="${FONT_SIZE_SLIDER_MAX}" step="${FONT_SIZE_SLIDER_STEP}" value="${sliderPositionFromFontSize(text.size)}" aria-valuetext="${commonText((item) => item.size) ? `${formatFontSize(text.size)} pixels` : "Mixed sizes"}" />
+              <input placeholder="—" id="font-size-number" class="number-input" type="number" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${commonText((item) => item.size) ? formatFontSize(text.size) : ""}" aria-label="Font size in pixels" />
             </div>
           </div>
           <div class="control-group color-control">
@@ -506,19 +511,19 @@ export function renderInspector() {
             </div>
             <div class="color-custom">
               <label class="color-picker-wrap" for="text-color-picker">
-                <input id="text-color-picker" type="color" value="${color}" aria-label="Choose a custom text color" />
-                <span>Color wheel</span>
+                <input id="text-color-picker" type="color" value="${color || "#ffffff"}" aria-label="Choose a custom text color" />
+                <span>${color ? "Color wheel" : "— Mixed colors"}</span>
               </label>
               <div class="color-values">
                 <div class="color-value-row">
                   <label for="text-color-hex">Hex</label>
-                  <input id="text-color-hex" type="text" value="${color}" maxlength="7" spellcheck="false" aria-label="Text color hex value" />
-                  <button type="button" data-copy-color="hex" aria-label="Copy hex color">Copy</button>
+                  <input id="text-color-hex" placeholder="—" type="text" value="${color}" maxlength="7" spellcheck="false" aria-label="Text color hex value" />
+                  <button type="button" data-copy-color="hex" ${color ? "" : "disabled"} aria-label="Copy hex color">Copy</button>
                 </div>
                 <div class="color-value-row">
                   <label for="text-color-rgb">RGB</label>
-                  <input id="text-color-rgb" type="text" value="${formatRgb(color)}" spellcheck="false" aria-label="Text color RGB value" />
-                  <button type="button" data-copy-color="rgb" aria-label="Copy RGB color">Copy</button>
+                  <input id="text-color-rgb" type="text" placeholder="—" value="${color ? formatRgb(color) : ""}" spellcheck="false" aria-label="Text color RGB value" />
+                  <button type="button" data-copy-color="rgb" ${color ? "" : "disabled"} aria-label="Copy RGB color">Copy</button>
                 </div>
               </div>
             </div>
@@ -526,29 +531,37 @@ export function renderInspector() {
           <div class="control-group">
             <div class="control-label">Alignment</div>
             <div class="alignment-options" role="group" aria-label="Text alignment">
-              ${["left", "center", "right"].map((align) => `<button class="alignment-option ${textAlignment(text) === align ? "is-active" : ""}" type="button" data-text-align="${align}" aria-label="Align text ${align}" aria-pressed="${textAlignment(text) === align}">${icon(`align-${align}`)}</button>`).join("")}
+              ${["left", "center", "right"].map((align) => `<button class="alignment-option ${commonText(textAlignment) && textAlignment(text) === align ? "is-active" : ""}" type="button" data-text-align="${align}" aria-label="Align text ${align}" aria-pressed="${commonText(textAlignment) && textAlignment(text) === align}">${icon(`align-${align}`)}</button>`).join("")}
             </div>
           </div>
-          ${text.style === "boxed" ? `
+          ${commonText((item) => item.style) && text.style === "boxed" ? `
             <div class="control-group">
               <div class="control-label">Background</div>
               <div class="tone-options">
-                <button class="tone-option ${text.background !== "black" ? "is-active" : ""}" type="button" data-background-tone="white"><span class="tone-swatch tone-swatch--white">Aa</span>White</button>
-                <button class="tone-option ${text.background === "black" ? "is-active" : ""}" type="button" data-background-tone="black"><span class="tone-swatch tone-swatch--black">Aa</span>Black</button>
+                <button class="tone-option ${commonText((item) => item.background || "white") && text.background !== "black" ? "is-active" : ""}" type="button" data-background-tone="white"><span class="tone-swatch tone-swatch--white">Aa</span>White</button>
+                <button class="tone-option ${commonText((item) => item.background) && text.background === "black" ? "is-active" : ""}" type="button" data-background-tone="black"><span class="tone-swatch tone-swatch--black">Aa</span>Black</button>
               </div>
             </div>
             <div class="control-group">
               <div class="control-label">Shape</div>
               <div class="shape-options">
-                <button class="shape-option ${text.backgroundShape !== "full" ? "is-active" : ""}" type="button" data-background-shape="lines"><span class="shape-preview shape-preview--lines"><i>Text line</i><i>Shorter</i></span><small>Per line</small></button>
-                <button class="shape-option ${text.backgroundShape === "full" ? "is-active" : ""}" type="button" data-background-shape="full"><span class="shape-preview shape-preview--full">Text box</span><small>Full box</small></button>
+                <button class="shape-option ${commonText((item) => item.backgroundShape || "lines") && text.backgroundShape !== "full" ? "is-active" : ""}" type="button" data-background-shape="lines"><span class="shape-preview shape-preview--lines"><i>Text line</i><i>Shorter</i></span><small>Per line</small></button>
+                <button class="shape-option ${commonText((item) => item.backgroundShape) && text.backgroundShape === "full" ? "is-active" : ""}" type="button" data-background-shape="full"><span class="shape-preview shape-preview--full">Text box</span><small>Full box</small></button>
               </div>
             </div>
           ` : ""}
         </div>
-      ` : `
+      ` : multiMode ? "" : `
         <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>
       `}
+      ${multiMode && !photoMode ? `<div class="inspector-body">
+        ${["width", "height", "rotation"].map((property) => {
+          const rotation = property === "rotation";
+          const value = shared((item, kind) => property === "height" && kind === "overlay" ? getOverlayMetrics(item).height : item[property] || 0);
+          const display = value === null ? "" : Math.round(value * (rotation ? 10 : 1000)) / 10;
+          return `<div class="control-group"><label class="control-label" for="shared-${property}">${rotation ? "Rotation (°)" : property === "width" ? "Width (% of slide)" : "Height (% of slide)"}</label><input id="shared-${property}" class="number-input" type="number" step="${rotation ? 1 : 0.1}" ${rotation ? "" : 'min="0.1"'} placeholder="—" value="${display}" data-shared-property="${property}" /></div>`;
+        }).join("")}
+      </div>` : ""}
     </aside>
   `;
 }

@@ -2651,8 +2651,6 @@ button:disabled {
   display: block;
 }
 
-.stage-frame.has-multi-selection .is-selected .resize-handle,
-.stage-frame.has-multi-selection .is-selected .edge-resize-handle,
 .stage-frame.has-multi-selection .is-selected .rotate-handle {
   display: none;
 }
@@ -4041,3 +4039,7 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 26px;
   cursor: pointer;
 }
+
+/* A mixed range has no representative value until the user chooses one. */
+#font-size[data-mixed="true"]::-webkit-slider-thumb { opacity: 0; }
+#font-size[data-mixed="true"]::-moz-range-thumb { opacity: 0; }
