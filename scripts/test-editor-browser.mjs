@@ -1748,6 +1748,34 @@ try {
     return this.carouselBotAgent.execute({ type: 'project.delete', projectId });
   }`, [filmstripProject.projectId]);
 
+  const folderCreation = await evaluate(cdp, `(() => {
+    const trigger = document.querySelector('[data-action="new-folder"]');
+    const projectButton = document.querySelector('.new-project-action');
+    const ratio = projectButton.offsetHeight / trigger.offsetHeight;
+    for (const method of ['cancel', 'close', 'outside', 'escape']) {
+      trigger.click();
+      const dialog = document.querySelector('.folder-dialog');
+      if (document.activeElement !== dialog.querySelector('input')) throw new Error('Folder name must receive focus');
+      if (method === 'cancel') dialog.querySelector('[data-cancel]').click();
+      if (method === 'close') dialog.querySelector('[aria-label="Close"]').click();
+      if (method === 'outside') dialog.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      if (method === 'escape') dialog.querySelector('input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      if (document.querySelector('.folder-dialog') || document.activeElement !== trigger) throw new Error('Folder dismissal failed: ' + method);
+    }
+    trigger.click();
+    const form = document.querySelector('[data-folder-create-form]');
+    form.elements.folderName.value = 'Created empty folder';
+    form.requestSubmit();
+    return ratio;
+  })()`);
+  if (Math.abs(folderCreation - 2) > 0.05) throw new Error('New project tile must use a two-thirds split');
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Created empty folder"]')) && !document.querySelector('[data-folder-create-form]')`), 'Empty folder was not created');
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Created empty folder"]').click()`);
+  await evaluate(cdp, `window.__emptyFolderReloadSentinel = true`);
+  await cdp.send('Page.reload');
+  await waitFor(() => evaluate(cdp, `document.readyState === "complete" && !window.__emptyFolderReloadSentinel && window.carouselBotAgent && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'Created empty folder'`), 'Empty folder did not survive reload');
+  await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
+
   const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
   const folderUiSlide = await callPageFunction(cdp, `function(projectId) {
     return this.carouselBotAgent.execute({

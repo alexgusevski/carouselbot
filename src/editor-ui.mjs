@@ -493,6 +493,11 @@ export function createEditorUI({ projects, actions, output }) {
     const activeFolderPath = state.activeFolderPath;
     document.title = activeFolderPath ? `${folderDisplayName(activeFolderPath)} · CarouselBot` : "CarouselBot";
     const foldersByPath = new Map();
+    for (const folder of state.folders) {
+      for (const path of folderAncestors(folder.path)) {
+        if (folderParentPath(path) === activeFolderPath) foldersByPath.set(path, []);
+      }
+    }
     for (const project of sortedProjects) {
       if (!project.folderPath) continue;
       for (const path of folderAncestors(project.folderPath)) {
@@ -504,7 +509,7 @@ export function createEditorUI({ projects, actions, output }) {
     const folders = [...foldersByPath.entries()].map(([folderPath, folderProjects]) => ({
       folderPath,
       projects: folderProjects,
-      updatedAt: Math.max(...folderProjects.map((project) => Number(project.updatedAt) || 0)),
+      updatedAt: Math.max(0, ...state.folders.filter((folder) => folder.path === folderPath).map((folder) => folder.updatedAt), ...folderProjects.map((project) => Number(project.updatedAt) || 0)),
     }));
     const visibleProjects = activeFolderPath
       ? sortedProjects.filter((project) => project.folderPath === activeFolderPath)
@@ -615,10 +620,10 @@ export function createEditorUI({ projects, actions, output }) {
             ${activeFolderPath ? "" : `<span>${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"} · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}</span>`}
           </div>
           <div class="project-grid">
-            <button class="new-project-card" type="button" data-action="new-project">
-              <span>+</span>
-              <span><strong>Start a project</strong><small>${activeFolderPath ? `Create it in ${icon("folder")} ${escapeHtml(folderDisplayName(activeFolderPath))}` : "Add photos when you’re ready"}</small></span>
-            </button>
+            <div class="new-project-card">
+              <button class="new-project-action" type="button" data-action="new-project"><span aria-hidden="true">⊕</span> New project</button>
+              <button class="new-folder-action" type="button" data-action="new-folder">${icon("folder")} New folder</button>
+            </div>
             ${cards}
           </div>
         </section>

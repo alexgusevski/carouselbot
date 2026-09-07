@@ -11,6 +11,7 @@ import {
 
 export const state = {
   projects: [],
+  folders: [],
   activeFolderPath: null,
   activeProjectId: null,
   activeSlideId: null,
