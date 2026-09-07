@@ -1771,8 +1771,9 @@ try {
   if (Math.abs(folderCreation - 2) > 0.05) throw new Error('New project tile must use a two-thirds split');
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Created empty folder"]')) && !document.querySelector('[data-folder-create-form]')`), 'Empty folder was not created');
   await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Created empty folder"]').click()`);
+  await evaluate(cdp, `window.__emptyFolderReloadSentinel = true`);
   await cdp.send('Page.reload');
-  await waitFor(() => evaluate(cdp, `window.carouselBotAgent && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'Created empty folder'`), 'Empty folder did not survive reload');
+  await waitFor(() => evaluate(cdp, `document.readyState === "complete" && !window.__emptyFolderReloadSentinel && window.carouselBotAgent && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'Created empty folder'`), 'Empty folder did not survive reload');
   await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
 
   const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
