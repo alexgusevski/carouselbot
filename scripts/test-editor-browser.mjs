@@ -779,6 +779,76 @@ try {
     "Pointer interaction changes were not persisted.",
   );
 
+  await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const original = agent.inspect({ includeAllProjects: false });
+    const scope = { projectId: original.project.id, slideId: original.slide.id };
+    const run = (operation) => agent.execute({ ...scope, ...operation });
+    const assert = (condition, message) => { if (!condition) throw new Error(message); };
+    const a = (await run({ type: 'text.add', text: 'First', size: 50, width: 0.3, height: 0.15 })).createdTextId;
+    const b = (await run({ type: 'text.add', text: 'Second', size: 60, color: '#000000', width: 0.5, height: 0.2 })).createdTextId;
+    const box = (id) => document.querySelector('[data-text-id="' + id + '"]');
+    const selectBoth = () => {
+      if (box(a).classList.contains("is-selected") && box(b).classList.contains("is-selected")) return;
+      box(a).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 301 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 301 }));
+      box(b).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 302, ctrlKey: true }));
+    };
+    const selected = () => agent.inspect({ includeAllProjects: false }).slide.texts.filter((text) => [a, b].includes(text.id));
+    const input = (selector, value) => {
+      const element = document.querySelector(selector);
+      element.focus(); element.value = value;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.blur();
+    };
+    try {
+      selectBoth();
+      assert(document.querySelector('#font-size-number').value === '', 'Mixed font sizes must be blank');
+      assert(document.querySelector('#font-size').dataset.mixed === 'true', 'Mixed size slider must have no representative thumb');
+      assert(!document.querySelector('[data-text-color].is-active'), 'Mixed colors must not activate a preset');
+      assert(!document.querySelector('#text-value'), 'Bulk formatting must preserve individual words');
+      input('#font-size-number', '56');
+      assert(selected().every((text) => text.size === 56), 'Number input must set both text sizes');
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      assert(selected().map((text) => text.size).join(',') === '50,60', 'Bulk size must undo in one step');
+      selectBoth();
+      input('#font-size-number', '56');
+      selectBoth();
+      assert(document.querySelector('#font-size-number').value === '56', 'Equal sizes must show the shared number');
+      input('#font-size', '50');
+      assert(selected()[0].size === selected()[1].size, 'Slider must apply to all texts');
+      document.querySelector('[data-text-color="#FFFFFF"]').click();
+      assert(selected().every((text) => text.color === '#FFFFFF'), 'Preset color must apply to all texts');
+      document.querySelector('[data-text-align="left"]').click();
+      assert(selected().every((text) => text.align === 'left'), 'Alignment must apply to all texts');
+      document.querySelector('[data-text-style="boxed"]').click();
+      document.querySelector('[data-background-shape="full"]').click();
+      document.querySelector('[data-background-tone="white"]').click();
+      assert(selected().every((text) => text.style === 'boxed' && text.backgroundShape === 'full' && text.background === 'white'), 'Box formatting must apply to all texts');
+      const font = document.querySelector('#text-font');
+      font.value = ''; font.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert(selected().every((text) => !text.fontId), 'Shared default font must apply to all texts');
+      const before = selected();
+      for (const id of [a, b]) assert(getComputedStyle(box(id).querySelector('[data-corner="se"]')).display !== 'none', 'Each selected layer needs resize handles');
+      box(a).querySelector('[data-corner="se"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 303, clientX: 100, clientY: 100 }));
+      window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 303, clientX: 130, clientY: 120 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 303, clientX: 130, clientY: 120 }));
+      const after = selected();
+      assert(after.every((text, i) => text.width > before[i].width && text.height > before[i].height), 'Resizing one selected text must resize both');
+      assert(Math.abs(after[0].width / before[0].width - after[1].width / before[1].width) < 0.00001, 'Selection must share proportional resizing');
+      input('#shared-rotation', '25');
+      assert(selected().every((text) => text.rotation === 25), 'Shared rotation must apply to all texts');
+      const untouched = agent.inspect({ includeAllProjects: false }).slide.texts.find((text) => text.id === original.slide.texts[0].id);
+      assert(JSON.stringify(untouched) === JSON.stringify(original.slide.texts[0]), 'Unselected text must stay unchanged');
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await run({ type: 'layer.delete', layerIds: [a, b] });
+    }
+  })()`);
+
   const imagePasteBefore = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="#FE2C55"/></svg>';
@@ -829,6 +899,54 @@ try {
   if (Object.values(assetPreview).some(value => !value)) {
     throw new Error(`Asset preview regression: ${JSON.stringify(assetPreview)}`);
   }
+
+  await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const original = agent.inspect({ includeAllProjects: false });
+    const scope = { projectId: original.project.id, slideId: original.slide.id };
+    const run = (operation) => agent.execute({ ...scope, ...operation });
+    const assert = (condition, message) => { if (!condition) throw new Error(message); };
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const textId = (await run({ type: 'text.add', text: 'Mixed resize', width: 0.4, height: 0.2, rotation: 15 })).createdTextId;
+    const imageId = (await run({ type: 'image.add', assetId: ${JSON.stringify(imagePaste.asset.id)}, width: 0.3, height: 0.15, rotation: 30 })).createdImageId;
+    const secondId = (await run({ type: 'image.add', assetId: ${JSON.stringify(imagePaste.asset.id)}, width: 0.6, height: 0.3, rotation: 30 })).createdImageId;
+    const box = (id) => document.querySelector('[data-text-id="' + id + '"], [data-overlay-id="' + id + '"]');
+    const click = (id, ctrlKey = false) => {
+      box(id).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 310, ctrlKey }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 310 }));
+    };
+    const inspect = (ids) => { const slide = agent.inspect({ includeAllProjects: false }).slide; return [...slide.texts, ...slide.images].filter((item) => ids.includes(item.id)); };
+    const resize = (id, handle) => {
+      box(id).querySelector(handle).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 311, clientX: 100, clientY: 100 }));
+      window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 311, clientX: 135, clientY: 135 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 311, clientX: 135, clientY: 135 }));
+    };
+    try {
+      click(imageId, true);
+      assert(!document.querySelector('#text-font') && !document.querySelector('#text-value'), 'Image selection must show only shared image controls');
+      assert(document.querySelector('#shared-rotation').value === '30', 'Equal image rotations must show their value');
+      const beforeImages = inspect([imageId, secondId]);
+      resize(secondId, '[data-corner="se"]');
+      const afterImages = inspect([imageId, secondId]);
+      assert(afterImages.every((item, i) => item.width > beforeImages[i].width && Math.abs(item.width / item.height - beforeImages[i].width / beforeImages[i].height) < 0.00001), 'Bulk image corner resize must preserve each aspect ratio');
+      click(textId);
+      click(imageId, true);
+      assert(!document.querySelector('#text-font') && !document.querySelector('[data-text-color]'), 'Mixed text and image selection must hide text-only controls');
+      assert(document.querySelector('#shared-rotation').value === '', 'Mixed rotations must be blank');
+      const beforeMixed = inspect([textId, imageId]);
+      resize(textId, '[data-edge="e"]');
+      const afterMixed = inspect([textId, imageId]);
+      assert(afterMixed.every((item, i) => item.width > beforeMixed[i].width && Math.abs(item.height - beforeMixed[i].height) < 0.00001), 'Mixed edge resize must change widths only');
+      assert(Math.abs(afterMixed[0].width / beforeMixed[0].width - afterMixed[1].width / beforeMixed[1].width) < 0.00001, 'Mixed resize must share the same scale');
+      const width = document.querySelector('#shared-width');
+      width.focus(); width.value = '45'; width.dispatchEvent(new Event('input', { bubbles: true })); width.blur();
+      assert(inspect([textId, imageId]).every((item) => item.width === 0.45), 'Shared width must set both text and image dimensions');
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await run({ type: 'layer.delete', layerIds: [textId, imageId, secondId] });
+      click(original.slide.images[0].id);
+    }
+  })()`);
 
   const layerCopy = await evaluate(cdp, `(() => {
     const before = structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }));
@@ -1715,6 +1833,8 @@ try {
     directUiTextEditing: true,
     outlineWidthRendering: true,
     pointerDragResize: true,
+    sharedSelectionFormatting: true,
+    sharedSelectionResizing: true,
     undoRedo: true,
     nativeClipboard: true,
     imageUpload: true,
