@@ -190,6 +190,31 @@ try {
   );
   await evaluate(cdp, "window.carouselBotReady");
 
+  const connectedPill = await evaluate(cdp, `(() => {
+    const button = document.querySelector('.home-agent-connect .agent-connect-button');
+    const previousStatus = button.getAttribute('data-mcp-status');
+    const idle = getComputedStyle(button);
+    const idleBackground = idle.backgroundColor;
+    button.dataset.mcpStatus = 'connected';
+    // Disable transitions so the final connected-state colors can be checked immediately.
+    button.style.transition = 'none';
+    const style = getComputedStyle(button);
+    const result = {
+      border: style.borderTopColor,
+      width: parseFloat(style.borderTopWidth),
+      backgroundChanged: style.backgroundColor !== idleBackground,
+      cloudsHidden: getComputedStyle(button.querySelector('.agent-color-clouds')).display === 'none',
+      calloutHidden: getComputedStyle(document.querySelector('.agent-callout')).display === 'none',
+    };
+    if (previousStatus === null) button.removeAttribute('data-mcp-status');
+    else button.setAttribute('data-mcp-status', previousStatus);
+    button.style.removeProperty('transition');
+    return result;
+  })()`);
+  if (connectedPill.border === 'rgba(0, 0, 0, 0)' || connectedPill.border === 'transparent' || connectedPill.width < 1 || !connectedPill.backgroundChanged || !connectedPill.cloudsHidden || !connectedPill.calloutHidden) {
+    throw new Error(`Connected home button lost its visible pill styling: ${JSON.stringify(connectedPill)}`);
+  }
+
   const initial = await evaluate(cdp, `({
     title: document.title,
     dashboard: Boolean(document.querySelector('.dashboard')),
