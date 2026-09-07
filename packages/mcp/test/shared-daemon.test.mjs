@@ -87,23 +87,24 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const sessionA = await first.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a", purpose: "Build deck A" });
     assert.equal(sessionA.editorId, "editor-a");
     assert.equal(sessionA.projectId, "project-a");
-    await assert.rejects(
-      second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-b", purpose: "Competing worker" }),
-      /EDITOR_BUSY/,
-    );
-    await assert.rejects(
-      second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-a", purpose: "Same project elsewhere" }),
-      /PROJECT_BUSY/,
-    );
+    const sharedSession = await second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a", purpose: "Shared project" });
+    const otherProject = await second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-b", purpose: "Background project" });
+    const otherTab = await second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-a", purpose: "Same project elsewhere" });
+    for (const session of [sharedSession, otherProject, otherTab]) await second.call("end_edit_session", { editSessionId: session.id });
     const sessionB = await second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-b", purpose: "Build deck B" });
 
+    const burstNotifications = new Set();
     async function nextCommand(editorId, token) {
       for (;;) {
         const event = await fetch(`${base}/events?editorId=${editorId}`, { headers: { Origin: origin, Authorization: `Bearer ${token}` } }).then((response) => response.json());
+        if (event.message?.startsWith("Burst ")) burstNotifications.add(event.message);
         if (event.kind === "command") return event;
       }
     }
 
+    await Promise.all(Array.from({ length: 110 }, (_, index) => first.call("notify", {
+      editSessionId: sessionA.id, message: `Burst ${index}`, tone: "info",
+    })));
     const preparedImport = await first.call("prepare_font", { editSessionId: sessionA.id, localFontId: indexedFont.localFontId });
     const importCall = first.call("browser", {
       toolName: "import_font", mutating: true, editSessionId: sessionA.id,
@@ -112,6 +113,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     });
     const importCommand = await nextCommand("editor-a", editorA.sessionToken);
     assert.equal(importCommand.operation.font.localFontId, indexedFont.localFontId);
+    assert.equal(burstNotifications.size, 110, "shared-window activity must not be discarded at the old queue limit");
     const importedBytes = await fetch(`${base}/font-media/${importCommand.operation.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
     assert.equal(importedBytes.status, 200);
     await importedBytes.arrayBuffer();
@@ -185,10 +187,44 @@ test("shares one daemon while preserving per-agent editor selection", async () =
       first.call("begin_edit_session", { editorId: "editor-a", purpose: "Worker one" }),
       second.call("begin_edit_session", { editorId: "editor-a", purpose: "Worker two" }),
     ]);
-    assert.equal(simultaneous.filter((result) => result.status === "fulfilled").length, 1, "only one simultaneous claim may win");
-    assert.match(simultaneous.find((result) => result.status === "rejected").reason.message, /EDITOR_BUSY/);
-    const winning = simultaneous.find((result) => result.status === "fulfilled").value;
-    await first.call("end_edit_session", { editSessionId: winning.id });
+    assert.equal(simultaneous.filter((result) => result.status === "fulfilled").length, 2, "both simultaneous sessions may share one editor");
+    for (const result of simultaneous) await first.call("end_edit_session", { editSessionId: result.value.id });
+
+    // Multiple agents retain independent project-bound targets in one editor.
+    const shared = await Promise.all([first, second].map((client) => client.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a" })));
+    const calls = [first, second].map((client, index) => client.call("browser", {
+      toolName: "add_slide", mutating: true, editSessionId: shared[index].id,
+      operation: { type: "slide.add" }, label: "Adding a slide…",
+    }));
+    for (let index = 0; index < 2; index += 1) {
+      const command = await nextCommand("editor-a", editorA.sessionToken);
+      assert.equal(command.operation.projectId, "project-a", "session supplies its target instead of the visible project");
+      await fetch(`${base}/result`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ editorId: "editor-a", requestId: command.requestId, ok: true, result: { projectId: "project-a", revision: index + 3 } }),
+      });
+    }
+    assert.deepEqual((await Promise.all(calls)).map((result) => result.revision).sort(), [3, 4]);
+    for (const session of shared) await first.call("end_edit_session", { editSessionId: session.id });
+
+    await second.call("select_editor", { editorId: "editor-a" });
+    const defaultSession = await first.call("begin_edit_session", { projectId: "project-a" });
+    const implicitCalls = [first, second].map((client) => client.call("browser", {
+      toolName: "add_slide", mutating: true, operation: { type: "slide.add", projectId: "project-a" },
+    }));
+    for (let index = 0; index < 2; index += 1) {
+      const command = await nextCommand("editor-a", editorA.sessionToken);
+      await fetch(`${base}/result`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ editorId: "editor-a", requestId: command.requestId, ok: true, result: { projectId: "project-a" } }),
+      });
+    }
+    await Promise.all(implicitCalls);
+    const implicitSessions = (await first.call("list_edit_sessions")).editSessions;
+    assert.equal(implicitSessions.length, 3, "two implicit clients can share a window with an explicit session");
+    const defaultSharedSession = await second.call("begin_edit_session", { projectId: "project-a" });
+    assert.equal(defaultSharedSession.editorId, defaultSession.editorId);
+    for (const session of [...implicitSessions, defaultSharedSession]) await first.call("end_edit_session", { editSessionId: session.id });
 
     const controller = new AbortController();
     const openPoll = (async () => {

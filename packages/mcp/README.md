@@ -93,8 +93,8 @@ The new companion accepts both `https://carousel.bot` and the legacy `https://sl
 
 ## Parallel agents and browser tabs
 
-Call `begin_edit_session` before editing and pass its `editSessionId` to all operations. A session atomically reserves one browser tab and one project, follows that tab instead of global focus, and expires after inactivity. Always call `end_edit_session` when finished.
+Call `begin_edit_session` before editing and pass its `editSessionId` to all operations. A session tracks one browser tab and one project, follows that target instead of global focus, and expires after inactivity. It does not lock either resource. Always call `end_edit_session` when finished.
 
-For parallel editing, reserve a different connected editor for each worker. The daemon rejects conflicting claims with `EDITOR_BUSY` or `PROJECT_BUSY` and records a sanitized local audit through `list_recent_operations`; it never records slide text, prompts, file paths, or image bytes.
+Any number of agents can share one connected browser tab, including editing the same project. Commands execute sequentially in that tab while notifications and project updates remain live. Use explicit project and slide IDs or a project-bound session to keep targets stable. The daemon records a sanitized local audit through `list_recent_operations`; it never records slide text, prompts, file paths, or image bytes.
 
 Browser writes use revision-checked IndexedDB transactions and cross-tab synchronization. A stale tab cannot replace a newer project snapshot; it reloads the canonical copy and returns `STALE_PROJECT` so the agent can inspect and retry.
