@@ -15,6 +15,7 @@ import {
   ensureBoxedTextContrast,
   escapeHtml,
   folderRoutePath,
+  folderDisplayName,
   fontSizeFromSliderPosition,
   formatFontSize,
   formatRgb,
@@ -417,4 +418,11 @@ test("recognizes image MIME types and supported filename extensions", () => {
   assert.equal(isImageFile({ type: "", name: "photo.AVIF" }), true);
   assert.equal(isImageFile({ type: "text/plain", name: "notes.txt" }), false);
   assert.equal(isImageFile(null), false);
+});
+
+test("folder display names omit the canonical prefix without changing stored paths", () => {
+  assert.equal(folderDisplayName("/Newly"), "Newly");
+  assert.equal(folderDisplayName("///Campaign"), "Campaign");
+  assert.equal(folderDisplayName(null), "");
+  assert.equal(folderDisplayName("/Client/Campaign"), "Client/Campaign");
 });

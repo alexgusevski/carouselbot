@@ -5,6 +5,7 @@ import {
   CANVAS_ZOOM_MAX,
   projectPath,
   folderRoutePath,
+  folderDisplayName,
   adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
@@ -487,7 +488,7 @@ export function createEditorUI({ projects, actions, output }) {
     clearLayerSelection();
     const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
     const activeFolderPath = state.activeFolderPath;
-    document.title = activeFolderPath ? `${activeFolderPath} · CarouselBot` : "CarouselBot";
+    document.title = activeFolderPath ? `${folderDisplayName(activeFolderPath)} · CarouselBot` : "CarouselBot";
     const foldersByPath = new Map();
     for (const project of sortedProjects) {
       if (!project.folderPath) continue;
@@ -522,7 +523,7 @@ export function createEditorUI({ projects, actions, output }) {
               ${slides || `<span class="project-preview-empty">No slides yet</span>`}
             </span>
             <span class="project-meta">
-              <strong>${escapeHtml(project.name)}</strong>
+              <strong class="project-meta-name">${icon("square-stack")}<span>${escapeHtml(project.name)}</span></strong>
               <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
             </span>
           </a>
@@ -549,10 +550,10 @@ export function createEditorUI({ projects, actions, output }) {
         `;
       }).join("");
       return `
-        <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folder.folderPath)}. Right-click for actions." title="Right-click for actions">
+        <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folderDisplayName(folder.folderPath))}. Right-click for actions." title="Right-click for actions">
           <span class="folder-preview">${slots}</span>
           <span class="project-meta">
-            <strong class="folder-meta-name">${icon("folder")}<span>${escapeHtml(folder.folderPath)}</span></strong>
+            <strong class="folder-meta-name">${icon("folder")}<span>${escapeHtml(folderDisplayName(folder.folderPath))}</span></strong>
             <span>${folder.projects.length} ${folder.projects.length === 1 ? "project" : "projects"}</span>
           </span>
         </a>
@@ -575,7 +576,7 @@ export function createEditorUI({ projects, actions, output }) {
           <section class="folder-dashboard-header">
             <div>
               <a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} Home</a>
-              <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath)}</span></h1>
+              <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(folderDisplayName(activeFolderPath))}</span></h1>
             </div>
           </section>
         ` : `
@@ -589,13 +590,13 @@ export function createEditorUI({ projects, actions, output }) {
         `}
         <section>
           <div class="section-heading">
-            <h2>${activeFolderPath ? "Projects" : "Your projects"}</h2>
-            <span>${activeFolderPath ? projectCountLabel : `${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"} · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}`}</span>
+            <h2>${activeFolderPath ? projectCountLabel : "Your projects"}</h2>
+            ${activeFolderPath ? "" : `<span>${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"} · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}</span>`}
           </div>
           <div class="project-grid">
             <button class="new-project-card" type="button" data-action="new-project">
               <span>+</span>
-              <span><strong>Start a project</strong><small>${activeFolderPath ? `Create it in ${escapeHtml(activeFolderPath)}` : "Add photos when you’re ready"}</small></span>
+              <span><strong>Start a project</strong><small>${activeFolderPath ? `Create it in ${icon("folder")} ${escapeHtml(folderDisplayName(activeFolderPath))}` : "Add photos when you’re ready"}</small></span>
             </button>
             ${cards}
           </div>

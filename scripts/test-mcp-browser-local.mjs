@@ -412,7 +412,7 @@ try {
     folderSlots: document.querySelector('.folder-card[data-folder-path="/mcp-folder"]')?.querySelectorAll('.folder-preview-slot').length,
     folderIcon: Boolean(document.querySelector('.folder-card[data-folder-path="/mcp-folder"] .folder-meta-name svg'))
   })`);
-  if (!dashboardUpdated.dashboardVisible || dashboardUpdated.projectNames.includes("Full MCP browser test") || !dashboardUpdated.folderNames.includes("/mcp-folder") || dashboardUpdated.folderSlots !== 8 || !dashboardUpdated.folderIcon || createdProject.folderPath !== "/mcp-folder") throw new Error(`Dashboard folder did not update live: ${JSON.stringify({ createdProject, dashboardUpdated })}`);
+  if (!dashboardUpdated.dashboardVisible || dashboardUpdated.projectNames.includes("Full MCP browser test") || !dashboardUpdated.folderNames.includes("mcp-folder") || dashboardUpdated.folderSlots !== 8 || !dashboardUpdated.folderIcon || createdProject.folderPath !== "/mcp-folder") throw new Error(`Dashboard folder did not update live: ${JSON.stringify({ createdProject, dashboardUpdated })}`);
   const folderInspection = (await tool("inspect_editor")).structuredContent;
   const inspectedFolder = folderInspection.folders.find((folder) => folder.path === "/mcp-folder");
   if (folderInspection.projects.find((project) => project.id === createdProject.projectId)?.folderPath !== "/mcp-folder" || inspectedFolder?.projectCount !== 1 || inspectedFolder.projectIds[0] !== createdProject.projectId) throw new Error(`Folder membership was not inspectable: ${JSON.stringify(folderInspection)}`);
