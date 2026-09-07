@@ -182,13 +182,33 @@ try {
   await cdp.send("Runtime.enable");
   await cdp.send("Log.enable");
   await cdp.send("Page.enable");
+  // Simulate a pre-update tab retaining the v1 database connection.
+  const legacySetup = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+    const legacyRequest = indexedDB.open('carouselbot-db', 1);
+    legacyRequest.onupgradeneeded = () => legacyRequest.result.createObjectStore('projects', { keyPath: 'id' });
+    legacyRequest.onsuccess = () => {
+      window.__legacyDatabase = legacyRequest.result;
+      const transaction = legacyRequest.result.transaction('projects', 'readwrite');
+      transaction.objectStore('projects').put({ id: 'upgrade-preserved', name: 'Upgrade preserved project', slides: [], assets: [], revision: 1 });
+    };
+  ` });
   await cdp.send("Page.navigate", { url: pageUrl });
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('[data-storage-blocked]'))`),
+    'An older tab blocking the database upgrade left the app blank.');
+  await evaluate(cdp, `window.__legacyDatabase.close()`);
+  await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: legacySetup.identifier });
+
 
   await waitFor(
     () => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent) && Boolean(window.carouselBotReady)"),
     "The modular editor did not finish loading.",
   );
   await evaluate(cdp, "window.carouselBotReady");
+  const preserved = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.some((project) => project.id === 'upgrade-preserved' && project.name === 'Upgrade preserved project')`);
+  if (!preserved) throw new Error('Database upgrade lost the existing project');
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: 'upgrade-preserved' })`);
+  if (await evaluate(cdp, `Boolean(document.querySelector('[data-storage-blocked]'))`)) throw new Error('Startup did not recover after closing the older connection');
+
 
   const connectedPill = await evaluate(cdp, `(() => {
     const button = document.querySelector('.home-agent-connect .agent-connect-button');

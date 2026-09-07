@@ -483,6 +483,17 @@ export function createEditorUI({ projects, actions, output }) {
     showInstalledFontBrowser(backdrop);
   }
 
+  function renderStorageBlocked() {
+    app.innerHTML = `
+      <main class="dashboard" data-storage-blocked role="status">
+        <section class="modal">
+          <h2>Close your other CarouselBot tabs</h2>
+          <p>Save your work and close the other CarouselBot tabs in this browser so this update can finish. This page will continue automatically.</p>
+          <p>Your projects are still stored in this browser. Do not clear your browser data.</p>
+        </section>
+      </main>`;
+  }
+
   function renderDashboard() {
     hideAssetPreview();
     state.activeProjectId = null;
@@ -1565,6 +1576,7 @@ export function createEditorUI({ projects, actions, output }) {
   return {
     toast,
     renderDashboard,
+    renderStorageBlocked,
     renderEditor,
     navigateSlides,
     refreshSelection,

@@ -95,7 +95,7 @@ try {
   await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && Boolean(window.carouselBotReady)"), "Legacy editor did not load.");
 
   await evaluate(legacyCdp, `new Promise((resolve, reject) => {
-    const request = indexedDB.open("slide-studio-db", 1);
+    const request = indexedDB.open("slide-studio-db");
     request.onupgradeneeded = () => request.result.createObjectStore("projects", { keyPath: "id" });
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
@@ -105,7 +105,7 @@ try {
         assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
         slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
       });
-      transaction.oncomplete = () => resolve(true);
+      transaction.oncomplete = () => { request.result.close(); resolve(true); };
       transaction.onerror = () => reject(transaction.error);
     };
   })`);
@@ -166,5 +166,5 @@ try {
   chrome.kill("SIGTERM");
   legacyWeb.kill("SIGTERM");
   canonicalWeb.kill("SIGTERM");
-  await rm(profile, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

@@ -13,7 +13,7 @@ export const projectChannel = typeof BroadcastChannel === "function" ? new Broad
 
 export const projectChannelSource = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 
-export function openDatabase(databaseName) {
+export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersionChange = async () => {}, onVersionChange = () => {} } = {}) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName, DB_VERSION);
     request.onupgradeneeded = () => {
@@ -23,7 +23,21 @@ export function openDatabase(databaseName) {
         db.createObjectStore(STORE_NAME, { keyPath: "id" });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onblocked = () => onBlocked();
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = async () => {
+        try {
+          await beforeVersionChange();
+          db.close();
+          onVersionChange();
+        } catch (error) {
+          // Keep the connection and unsaved edits available if flushing fails.
+          console.error("Could not save before updating browser storage", error);
+        }
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
   });
 }
