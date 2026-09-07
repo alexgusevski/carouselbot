@@ -15,7 +15,7 @@ const {
 test.after(() => projectChannel?.close());
 
 test("keeps stable browser-storage protocol identifiers", () => {
-  assert.equal(DB_VERSION, 1);
+  assert.equal(DB_VERSION, 2);
   assert.equal(STORE_NAME, "projects");
   assert.equal(PROJECT_CHANNEL_NAME, "carouselbot-projects-v1");
   assert.equal(PROJECT_SYNC_STORAGE_KEY, "carouselbot:project-change");
