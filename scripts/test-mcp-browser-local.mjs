@@ -448,6 +448,8 @@ try {
   await evaluate(cdp, `window.__nestedFolderReload = true`);
   await cdp.send("Page.reload");
   await waitFor(() => evaluate(cdp, `Boolean(!window.__nestedFolderReload && document.readyState === "complete" && window.carouselBotAgent && document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]'))`), "Nested folder reload failed");
+  await evaluate(cdp, `document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Client' && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Home'`), "Nested folder back link did not return to its parent");
   await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
   await evaluate(cdp, `(() => {
     document.querySelector('.folder-card[data-folder-path="/Client"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));

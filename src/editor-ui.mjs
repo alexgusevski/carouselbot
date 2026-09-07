@@ -611,8 +611,9 @@ export function createEditorUI({ projects, actions, output }) {
         ${activeFolderPath ? `
           <section class="folder-dashboard-header">
             <div>
-              <a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} Home</a>
-              ${folderParentPath(activeFolderPath) ? `<a class="folder-breadcrumb" href="${folderRoutePath(folderParentPath(activeFolderPath))}" data-folder-path="${escapeHtml(folderParentPath(activeFolderPath))}"> / ${escapeHtml(folderDisplayName(folderParentPath(activeFolderPath)))}</a>` : ""}
+              ${folderParentPath(activeFolderPath)
+                ? `<a class="folder-breadcrumb" href="${folderRoutePath(folderParentPath(activeFolderPath))}" data-folder-path="${escapeHtml(folderParentPath(activeFolderPath))}">${icon("back")} ${escapeHtml(folderDisplayName(folderParentPath(activeFolderPath)))}</a>`
+                : `<a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} Home</a>`}
               <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath.split("/").at(-1))}</span></h1>
             </div>
           </section>
