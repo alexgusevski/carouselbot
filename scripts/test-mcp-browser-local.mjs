@@ -432,6 +432,15 @@ try {
   const nestedInspection = (await tool("inspect_editor")).structuredContent;
   if (!nestedInspection.folders.some((folder) => folder.path === "/Client" && folder.projectCount === 1)
     || !nestedInspection.folders.some((folder) => folder.path === "/Client/Account" && folder.parentPath === "/Client")) throw new Error("MCP did not expose the nested hierarchy");
+  await waitFor(() => evaluate(cdp, `(() => {
+    const preview = document.querySelector('.folder-card[data-folder-path="/Client"] .folder-preview');
+    const subfolder = preview?.querySelector('.folder-preview-subfolder');
+    const cover = subfolder?.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]');
+    const mark = subfolder?.querySelector('.folder-preview-folder-mark');
+    return preview?.children.length === 8 && subfolder?.querySelectorAll('.folder-preview-mini').length === 4
+      && subfolder.title === 'Account' && mark?.querySelector('svg') && getComputedStyle(mark).color === 'rgb(255, 255, 255)'
+      && Boolean(cover) && !preview?.querySelector(':scope > [data-project-cover-id]');
+  })()`), "Parent folder preview did not group its child into a dimmed 2x2 collage with a white folder icon");
   await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Client"]').click()`);
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Client/Account"]')) && !document.querySelector('.project-card')`), "Parent folder did not show its account subfolder");
   await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Client/Account"]').click()`);

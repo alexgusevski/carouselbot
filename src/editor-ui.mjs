@@ -8,6 +8,7 @@ import {
   folderDisplayName,
   folderParentPath,
   folderAncestors,
+  folderPreviewItems,
   adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
@@ -540,19 +541,35 @@ export function createEditorUI({ projects, actions, output }) {
       `;
     };
 
+    const renderFolderProjectPreview = (project, extraClass = "", more = "") => {
+      if (!project) return `<span class="folder-preview-slot ${extraClass}" aria-hidden="true"></span>`;
+      const slide = project.slides[0];
+      const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
+      return `
+        <span class="folder-preview-slot ${extraClass}" data-project-cover-id="${project.id}" aria-hidden="true">
+          ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? ' data-composite-cover="true"' : ""} />` : ""}
+          ${more}
+        </span>
+      `;
+    };
+
     const renderFolderCard = (folder) => {
-      const overflow = Math.max(0, folder.projects.length - 8);
+      const items = folderPreviewItems(folder.projects, folder.folderPath);
+      const overflow = Math.max(0, items.length - 8);
       const slots = Array.from({ length: 8 }, (_, index) => {
-        const project = folder.projects[index];
-        if (!project) return '<span class="folder-preview-slot" aria-hidden="true"></span>';
-        const slide = project.slides[0];
-        const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
-        return `
-          <span class="folder-preview-slot" data-project-cover-id="${project.id}" aria-hidden="true">
-            ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : ""}
-            ${overflow && index === 7 ? `<span class="folder-preview-more">+${overflow}</span>` : ""}
-          </span>
-        `;
+        const item = items[index];
+        const more = overflow && index === 7 ? `<span class="folder-preview-more">+${overflow}</span>` : "";
+        if (item?.type === "folder") {
+          const name = item.path.split("/").at(-1);
+          return `
+            <span class="folder-preview-slot folder-preview-subfolder" title="${escapeHtml(name)}" aria-hidden="true">
+              <span class="folder-preview-collage">${Array.from({ length: 4 }, (_, cell) => renderFolderProjectPreview(item.projects[cell], "folder-preview-mini")).join("")}</span>
+              <span class="folder-preview-folder-mark">${icon("folder")}<span>${escapeHtml(name)}</span></span>
+              ${more}
+            </span>
+          `;
+        }
+        return renderFolderProjectPreview(item?.project, "", more);
       }).join("");
       return `
         <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folder.folderPath.split("/").at(-1))}. Right-click for actions." title="Right-click for actions">
