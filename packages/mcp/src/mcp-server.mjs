@@ -68,7 +68,7 @@ function textResult(value, summary = value) {
 }
 
 function compactMutation(value) {
-  const keys = ["id", "editSessionId", "editorId", "projectId", "aspectRatio", "canvasWidth", "canvasHeight", "folderPath", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
+  const keys = ["id", "editSessionId", "editorId", "projectId", "aspectRatio", "canvasWidth", "canvasHeight", "folderPath", "slideId", "revision", "leaseExpiresAt", "purpose", "released", "opened", "createdProjectId", "createdSlideId", "createdTextId", "fittedTextBox", "createdImageId", "createdLayers", "assetId", "fontId", "localFontId", "existing", "repaired", "deletedAssetId", "deletedProjectId", "deletedSlideId", "deletedLayerIds", "updatedTextIds", "fittedTextBoxes", "updatedImageIds", "applied", "path", "bytes"];
   return Object.fromEntries(keys.flatMap((key) => {
     if (key === "folderPath" && Object.hasOwn(value || {}, key)) return [[key, value[key] ?? null]];
     return value?.[key] == null ? [] : [[key, value[key]]];
@@ -89,7 +89,7 @@ async function pathExists(value) {
 
 function operationLabel(toolName) {
   return ({
-    create_project: "Creating a project…", update_project: "Updating the project…", move_project: "Moving the project…", delete_project: "Deleting a project…",
+    create_project: "Creating a project…", duplicate_project: "Duplicating a project…", update_project: "Updating the project…", move_project: "Moving the project…", delete_project: "Deleting a project…",
     open_project: "Opening a project…", add_slide: "Adding a slide…", update_slide: "Updating a slide…",
     duplicate_slide: "Duplicating a slide…", reorder_slides: "Reordering slides…", delete_slide: "Deleting a slide…",
     add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_font: "Adding a local font…", import_asset: "Importing a local image…",
@@ -125,7 +125,7 @@ async function prepareOperation(companion, toolName, args, editSessionId = null)
     operation.fontMediaId = prepared.fontMediaId;
   }
   const type = ({
-    create_project: "project.create", open_project: "project.open", update_project: "project.update", move_project: "project.move", delete_project: "project.delete",
+    create_project: "project.create", duplicate_project: "project.duplicate", open_project: "project.open", update_project: "project.update", move_project: "project.move", delete_project: "project.delete",
     add_slide: "slide.add", update_slide: "slide.update", duplicate_slide: "slide.duplicate", reorder_slides: "slide.reorder", delete_slide: "slide.delete",
     add_text: "text.add", update_text: "text.update", fit_text_boxes: "text.fit", import_font: "font.import", list_project_fonts: "font.list", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
     add_image: "image.add", update_image: "image.update", delete_layers: "layer.delete", duplicate_layers: "layer.duplicate", reorder_layers: "layer.reorder",
@@ -199,6 +199,7 @@ export async function createCarouselBotMcpServer(companion) {
   register("create_project", "Create an empty project without changing the user's current browser view. Choose an optional aspect ratio: use a documented preset or a positive integer W:H value; legacy/default projects use 9:16. Pass a canonical folderPath such as /Client or /Client/Account to create it inside that folder (maximum two levels); omit it or use null for the dashboard root.", z.object({ editSessionId, name: z.string().min(1).max(160), aspectRatio: aspectRatio.optional(), folderPath: folderPath.nullable().optional() }).strict(), (args) => browserOperation(companion, "create_project", args), { destructiveHint: false });
   register("open_project", "Explicitly navigate the browser to a project and optionally a specific slide without changing content. Use only when the user asks to show it.", z.object({ editSessionId, projectId: id, slideId: optionalId }).strict(), (args) => browserOperation(companion, "open_project", args), { destructiveHint: false, idempotentHint: true });
   register("update_project", "Rename a project.", z.object({ ...targetProject, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_project", args), { destructiveHint: true });
+  register("duplicate_project", "Duplicate a complete carousel, including all slides, image assets, fonts and editable layers, without changing the source or navigating the browser. Omit folderPath to keep the source folder, pass /Client/Account for another folder, or null for Home. Returns createdProjectId for the independent copy; projectId and the edit session remain bound to the source. Use a new session to edit the copy.", z.object({ ...targetProject, projectId: id, name: z.string().min(1).max(160).optional(), folderPath: folderPath.nullable().optional() }).strict(), (args) => browserOperation(companion, "duplicate_project", args), { destructiveHint: false });
   register("move_project", "Move a project into a folder by canonical slash path (/Client or /Client/Account, maximum two levels), move it between folders, or move it back to the dashboard root with folderPath=null. Folder cards are derived from project membership, so empty folders disappear.", z.object({ ...targetProject, projectId: id, folderPath: folderPath.nullable() }).strict(), (args) => browserOperation(companion, "move_project", args), { destructiveHint: true });
   register("delete_project", "Delete a project from browser storage.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "delete_project", args), { destructiveHint: true });
 

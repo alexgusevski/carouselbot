@@ -109,6 +109,34 @@ export function cloneProject(project) {
   };
 }
 
+export function duplicateProjectData(source, { name, folderPath = source.folderPath } = {}) {
+  const copy = cloneProject(source);
+  copy.id = uid();
+  copy.name = String(name || `${source.name} copy`).slice(0, 160);
+  copy.folderPath = normalizeFolderPath(folderPath);
+  if (folderPath != null && String(folderPath).trim() && !copy.folderPath) {
+    throw new Error("Use at most two folder levels: Client/Account.");
+  }
+  copy.createdAt = copy.updatedAt = Date.now();
+  copy.revision = 1;
+  const assets = new Map(copy.assets.map((asset) => [asset.id, uid()]));
+  const fonts = new Map(copy.fonts.map((font) => [font.id, uid()]));
+  copy.assets.forEach((asset) => { asset.id = assets.get(asset.id); });
+  copy.fonts.forEach((font) => { font.id = fonts.get(font.id); });
+  for (const slide of copy.slides) {
+    slide.id = uid();
+    for (const text of slide.texts) {
+      text.id = uid();
+      if (fonts.has(text.fontId)) text.fontId = fonts.get(text.fontId);
+    }
+    for (const overlay of slide.overlays) {
+      overlay.id = uid();
+      if (assets.has(overlay.assetId)) overlay.assetId = assets.get(overlay.assetId);
+    }
+  }
+  return copy;
+}
+
 export const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
 export function projectPath(projectId) {
