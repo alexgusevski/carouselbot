@@ -100,6 +100,7 @@ export function renderHeader({ editor = false } = {}) {
   const project = activeProject();
   const agentConnectButton = `
     <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect via MCP" title="Connect via MCP">
+      ${!editor ? '<span class="agent-color-clouds" aria-hidden="true"><i></i><i></i><i></i></span>' : ""}
       <span class="agent-logo-stack" aria-hidden="true">
         <img src="/assets/claude-ai-icon-f3a857f4.svg" alt="" />
         <img src="/assets/codex-logo-colored-53743834.svg" alt="" />
@@ -131,7 +132,7 @@ export function renderHeader({ editor = false } = {}) {
           <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide as PNG" title="Download PNG" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>PNG</span>
           </button>
-        ` : `${agentConnectButton}<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
+        ` : `<div class="home-agent-connect">${agentConnectButton}<span class="agent-callout" aria-hidden="true"><span>Connect your agent</span><svg viewBox="0 0 110 90" fill="none"><path d="M5 80 C63 89 97 45 98 7 M88 18 L98 7 L106 20" /></svg></span></div><button class="button button--primary" type="button" data-action="new-project">New project</button>`}
         <a class="icon-button github-link" href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer" aria-label="Open CarouselBot on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
       </div>
     </header>

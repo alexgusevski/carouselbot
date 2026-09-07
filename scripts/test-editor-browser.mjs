@@ -193,12 +193,13 @@ try {
   const initial = await evaluate(cdp, `({
     title: document.title,
     dashboard: Boolean(document.querySelector('.dashboard')),
+    agentInvitation: document.querySelector(".agent-callout")?.textContent.trim() === "Connect your agent" && document.querySelectorAll(".agent-color-clouds i").length === 3,
     protocolVersion: window.carouselBotAgent.protocolVersion,
     sameAgentAlias: window.carouselBotAgent === window.slideStudioAgent,
     sameReadyAlias: window.carouselBotReady === window.slideStudioReady,
     sourceModules: performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/')).map((entry) => new URL(entry.name).pathname),
   })`);
-  if (initial.title !== "CarouselBot" || !initial.dashboard || initial.protocolVersion !== 3 || !initial.sameAgentAlias || !initial.sameReadyAlias) {
+  if (initial.title !== "CarouselBot" || !initial.dashboard || !initial.agentInvitation || initial.protocolVersion !== 3 || !initial.sameAgentAlias || !initial.sameReadyAlias) {
     throw new Error(`Unexpected initial editor state: ${JSON.stringify(initial)}`);
   }
   if (!initial.sourceModules.includes("/src/main.mjs") || !initial.sourceModules.includes("/src/editor.mjs")) {
