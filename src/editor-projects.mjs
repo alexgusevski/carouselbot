@@ -36,6 +36,8 @@ import {
   projectChannel,
   projectChannelSource,
   getAllProjects,
+  getAllFolders,
+  createFolderInDb,
   getProjectFromDb,
   announceProjectChange,
   putProject,
@@ -112,7 +114,7 @@ export function createEditorProjects({
   }
 
   function folderExists(folderPath) {
-    return Boolean(folderPath && projectsInFolder(folderPath).length);
+    return Boolean(folderPath && (projectsInFolder(folderPath).length || state.folders.some((folder) => folderContains(folderPath, folder.path))));
   }
 
   function clearProjectHistory(projectIds) {
@@ -270,6 +272,11 @@ export function createEditorProjects({
   }
 
   async function handleExternalProjectEvent(data) {
+    if (state.db && data?.type === "folders.updated" && data.source !== projectChannelSource) {
+      state.folders = await getAllFolders();
+      if (!state.activeProjectId) { leaveMissingActiveFolder(); renderDashboard(); }
+      return;
+    }
     if (!data || data.source === projectChannelSource || !data.projectId || !state.db) return;
     const local = state.projects.find((project) => project.id === data.projectId);
     if (data.type === "project.deleted" || !local || Number(data.revision) > (Number(local.revision) || 0) || Number(data.updatedAt) > (Number(local.updatedAt) || 0)) {
@@ -440,6 +447,7 @@ export function createEditorProjects({
     // Persist that edit before the folder transaction reads and rewrites records.
     await flushPendingSave();
     const moved = await moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath);
+    state.folders = await getAllFolders();
     replaceMovedProjects(moved);
     if (folderContains(sourceFolderPath, state.activeFolderPath)) {
       state.activeFolderPath = movedFolderPath(state.activeFolderPath, sourceFolderPath, destinationFolderPath);
@@ -450,11 +458,78 @@ export function createEditorProjects({
     return moved;
   }
 
+  function showNewFolderDialog(returnFocus) {
+    closeFolderDialog();
+    const parent = state.activeFolderPath || "";
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop folder-dialog";
+    backdrop.innerHTML = `
+      <form class="modal new-folder-modal" data-folder-create-form role="dialog" aria-modal="true" aria-labelledby="folder-create-title">
+        <button class="icon-button folder-modal-close" type="button" aria-label="Close"><span aria-hidden="true">×</span></button>
+        <h2 id="folder-create-title">New folder</h2>
+        <input name="folderName" placeholder="Folder name" maxlength="160" autocomplete="off" aria-label="Folder name" required />
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-cancel>Cancel</button>
+          <button class="button button--primary" type="submit">Create</button>
+        </div>
+      </form>`;
+    const form = backdrop.querySelector("form");
+    const input = form.elements.folderName;
+    let saving = false;
+    const close = () => {
+      if (saving) return;
+      backdrop.remove();
+      (returnFocus?.isConnected ? returnFocus : app.querySelector('[data-action="new-folder"]'))?.focus({ preventScroll: true });
+    };
+    backdrop.querySelector("[data-cancel]").addEventListener("click", close);
+    backdrop.querySelector(".folder-modal-close").addEventListener("click", close);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); close(); }
+      if (event.key === "Tab") {
+        const controls = [...form.querySelectorAll("button, input")].filter((item) => !item.disabled);
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    });
+    input.addEventListener("input", () => input.setCustomValidity(""));
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (saving) return;
+      const name = input.value.trim();
+      const path = normalizeFolderPath(`${parent}/${name}`);
+      if (!name || name.includes("/") || !path || folderExists(path)) {
+        input.setCustomValidity(folderExists(path) ? "A folder with this name already exists." : "Enter a folder name. Folders support a maximum of two levels.");
+        input.reportValidity();
+        return;
+      }
+      saving = true;
+      const submit = form.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        await createFolderInDb(path);
+        state.folders = await getAllFolders();
+        renderDashboard();
+        saving = false;
+        close();
+      } catch (error) {
+        saving = false;
+        submit.disabled = false;
+        input.setCustomValidity(error.name === "ConstraintError" ? "A folder with this name already exists." : "Couldn’t save this folder. Please try again.");
+        input.reportValidity();
+      }
+    });
+    document.body.appendChild(backdrop);
+    input.focus();
+    input.select();
+  }
+
   function showProjectMoveDialog(projectId, returnFocus = null) {
     closeFolderDialog();
     const project = state.projects.find((item) => item.id === projectId);
     if (!project) return;
-    const folderPaths = [...new Set(state.projects.flatMap((item) => folderAncestors(item.folderPath)))]
+    const folderPaths = [...new Set([...state.folders.flatMap((item) => folderAncestors(item.path)), ...state.projects.flatMap((item) => folderAncestors(item.folderPath))])]
       .sort((a, b) => a.localeCompare(b));
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop folder-dialog";
@@ -573,7 +648,7 @@ export function createEditorProjects({
   function showFolderUnfileConfirmation(folderPath, returnFocus = null) {
     closeFolderDialog();
     const projectCount = projectsInFolder(folderPath).length;
-    if (!projectCount) return;
+    if (!folderExists(folderPath)) return;
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop folder-dialog";
     backdrop.innerHTML = `
@@ -915,6 +990,7 @@ export function createEditorProjects({
       event.preventDefault();
       openDashboard();
     });
+    app.querySelectorAll('[data-action="new-folder"]').forEach((button) => button.addEventListener("click", () => showNewFolderDialog(button)));
     app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
     app.querySelectorAll("[data-project-id]").forEach((link) => {
       link.addEventListener("click", (event) => {

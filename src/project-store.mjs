@@ -1,7 +1,7 @@
 import { uid, folderContains, movedFolderPath, normalizeStoredFolderPath } from "./editor-model.mjs";
 import { state } from "./editor-state.mjs";
 
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORE_NAME = "projects";
 
@@ -18,6 +18,7 @@ export function openDatabase(databaseName) {
     const request = indexedDB.open(databaseName, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      if (!db.objectStoreNames.contains("folders")) db.createObjectStore("folders", { keyPath: "path" });
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: "id" });
       }
@@ -27,11 +28,33 @@ export function openDatabase(databaseName) {
   });
 }
 
-export function getAllProjects() {
+export async function getAllProjects() {
+  state.folders = await getAllFolders();
   return new Promise((resolve, reject) => {
     const request = state.db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll();
     request.onsuccess = () => resolve(request.result || []);
     request.onerror = () => reject(request.error);
+  });
+}
+
+export function getAllFolders() {
+  return new Promise((resolve, reject) => {
+    const request = state.db.transaction("folders", "readonly").objectStore("folders").getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export function createFolderInDb(path) {
+  return new Promise((resolve, reject) => {
+    const transaction = state.db.transaction("folders", "readwrite");
+    transaction.objectStore("folders").add({ path, updatedAt: Date.now() });
+    transaction.oncomplete = () => {
+      announceProjectEvent({ type: "folders.updated", source: projectChannelSource });
+      resolve();
+    };
+    transaction.onabort = () => reject(transaction.error || new Error("Couldn’t create this folder."));
+    transaction.onerror = () => {};
   });
 }
 
@@ -114,9 +137,21 @@ export function deleteProjectFromDb(projectId, { expectedRevision = null, broadc
 
 export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath = null) {
   return new Promise((resolve, reject) => {
-    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const transaction = state.db.transaction([STORE_NAME, "folders"], "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const moved = [];
+    const folders = transaction.objectStore("folders");
+    const folderRead = folders.getAll();
+    folderRead.onsuccess = () => {
+      try {
+        for (const folder of folderRead.result) {
+          const path = movedFolderPath(folder.path, sourceFolderPath, destinationFolderPath);
+          if (!folderContains(sourceFolderPath, folder.path)) continue;
+          folders.delete(folder.path);
+          if (path) folders.put({ ...folder, path, updatedAt: Date.now() });
+        }
+      } catch { transaction.abort(); }
+    };
     const read = store.getAll();
     read.onerror = () => reject(read.error);
     read.onsuccess = () => {
@@ -142,6 +177,7 @@ export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPa
       }
     };
     transaction.oncomplete = () => {
+      announceProjectEvent({ type: "folders.updated", source: projectChannelSource });
       moved.forEach((project) => announceProjectChange("project.updated", project));
       resolve(moved);
     };
