@@ -258,6 +258,7 @@ export function createLayerInteractions({
   }
 
   function beginOverlayResize(event, box, handle, { preserveAspect = true } = {}) {
+    if (selectedLayers().length > 1) return beginSelectionResize(event, box, handle, preserveAspect);
     event.preventDefault();
     event.stopPropagation();
     const overlay = selectedOverlay();
@@ -355,7 +356,7 @@ export function createLayerInteractions({
       if (box.classList.contains("is-editing")) {
         if (contentTarget && !corner && !edge && !rotate) return;
         endTextEditing(box);
-      } else if (wasSelected && contentTarget && event.button === 0 && !(event.metaKey || event.ctrlKey)) {
+      } else if (wasSelected && selectedLayers().length === 1 && contentTarget && event.button === 0 && !(event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         event.stopPropagation();
         startTextEditing(box, { clientX: event.clientX, clientY: event.clientY });
@@ -547,7 +548,57 @@ export function createLayerInteractions({
     window.addEventListener("pointercancel", end);
   }
 
+  // Apply the grabbed layer's relative size change around each layer's opposite handle.
+  function beginSelectionResize(event, box, handle, preserveAspect) {
+    event.preventDefault();
+    event.stopPropagation();
+    const entries = selectedLayers().map(({ kind, item }) => {
+      const height = kind === "overlay" ? getOverlayMetrics(item).height : item.height;
+      return { kind, item, start: { ...item, height, rotation: item.rotation || 0,
+        centerX: item.x + item.width / 2, centerY: item.y + height / 2,
+        clientX: event.clientX, clientY: event.clientY } };
+    });
+    const primary = entries.find(({ item }) => item.id === (box.dataset.textId || box.dataset.overlayId));
+    if (!primary) return;
+    recordHistory();
+    try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+    const move = (moveEvent) => {
+      const delta = pointerDeltaInLayerAxes(moveEvent, primary.start, primary.start.rotation);
+      const next = resizeLayerRect(primary.start, handle, delta, {
+        minWidth: 0.001, minHeight: 0.001, preserveAspect,
+      });
+      // Clamp the shared scale once so smaller layers keep the same relative change.
+      const minX = Math.max(...entries.map(({ kind, start }) => (kind === "text" ? 0.1 : 0.04) / start.width));
+      const minY = Math.max(...entries.map(({ kind, start }) => (kind === "text" ? 0.045 : 0.025) / start.height));
+      const maxX = Math.min(...entries.map(({ kind, start }) => kind === "overlay" ? 2.4 / start.width : Infinity));
+      const maxY = Math.min(...entries.map(({ kind, start }) => kind === "overlay" ? 2.4 / start.height : Infinity));
+      let scaleX = handle.match(/[ew]/) ? clamp(next.width / primary.start.width, minX, maxX) : 1;
+      let scaleY = handle.match(/[ns]/) ? clamp(next.height / primary.start.height, minY, maxY) : 1;
+      if (preserveAspect) scaleX = scaleY = clamp(next.width / primary.start.width, Math.max(minX, minY), Math.min(maxX, maxY));
+      entries.forEach(({ kind, item, start }) => {
+        const resized = resizeLayerRect(start, handle, {
+          x: start.width * (scaleX - 1) * (handle.includes("w") ? -1 : 1),
+          y: start.height * (scaleY - 1) * (handle.includes("n") ? -1 : 1),
+        }, { minWidth: 0.001, minHeight: 0.001 });
+        Object.assign(item, resized);
+        if (kind === "text") updateTextBox(item);
+        else updateOverlayBox(item);
+      });
+      scheduleSave();
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      refreshSelection();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
+
   function beginResize(event, box, handle) {
+    if (selectedLayers().length > 1) return beginSelectionResize(event, box, handle, false);
     event.preventDefault();
     event.stopPropagation();
     const text = selectedText();
