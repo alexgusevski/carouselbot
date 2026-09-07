@@ -14,6 +14,7 @@ import {
   FONT_SIZE_SLIDER_STEP,
   TEXT_COLOR_PRESETS,
   escapeHtml,
+  folderRoutePath,
   textColor,
   formatRgb,
   outlineColorFor,
@@ -66,6 +67,7 @@ export function formatDate(timestamp) {
 
 export function icon(name) {
   const icons = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-8H9v8H4a1 1 0 0 1-1-1Z"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
     forward: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
@@ -168,6 +170,7 @@ export function renderLegacyMigrationNotice(projects, migrationController, dismi
 export function renderSlideRail(project) {
   return `
     <aside class="slide-rail">
+      <a class="slide-rail-back" data-action="open-project-parent" href="${project.folderPath ? folderRoutePath(project.folderPath) : "/"}" title="${escapeHtml(project.folderPath || "Home")}">${icon(project.folderPath ? "back" : "home")}<span>${escapeHtml(project.folderPath || "Home")}</span></a>
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
         ${project.slides.map((slide, index) => {

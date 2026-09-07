@@ -574,10 +574,9 @@ export function createEditorUI({ projects, actions, output }) {
         ${activeFolderPath ? `
           <section class="folder-dashboard-header">
             <div>
-              <a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} All projects</a>
+              <a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} Home</a>
               <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath)}</span></h1>
             </div>
-            <p class="folder-dashboard-summary">${projectCountLabel}</p>
           </section>
         ` : `
           <section class="dashboard-hero">

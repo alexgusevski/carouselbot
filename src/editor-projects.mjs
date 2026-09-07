@@ -968,6 +968,13 @@ export function createEditorProjects({
   }
 
   function bindGlobalActions() {
+    app.querySelector('[data-action="open-project-parent"]')?.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      const folderPath = activeProject()?.folderPath;
+      if (folderPath) openFolder(folderPath);
+      else openDashboard();
+    });
     if (!app.querySelector(".dashboard")) clearDashboardPreviewResizeTracking();
     const homeLink = app.querySelector('[data-action="home"]');
     homeLink?.addEventListener("click", (event) => {
