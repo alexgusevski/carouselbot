@@ -1337,6 +1337,16 @@ export function createEditorUI({ projects, actions, output }) {
     app.querySelectorAll(".asset-item").forEach((item) => {
       const assetId = item.dataset.assetId;
       const previewSrc = item.querySelector("img")?.src;
+      item.addEventListener("click", (event) => {
+        if (event.target.closest("button") || state.draggingAssetId) return;
+        openAssetPreview(assetId);
+      });
+      item.addEventListener("keydown", (event) => {
+        if (event.target !== item || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAssetPreview(assetId);
+      });
       item.addEventListener("pointerenter", (event) => {
         if (state.draggingAssetId || !previewSrc) return;
         showAssetPreview(previewSrc, event.clientX, event.clientY);
@@ -1367,6 +1377,34 @@ export function createEditorUI({ projects, actions, output }) {
       });
     });
     bindAssetTrash();
+  }
+
+  function openAssetPreview(assetId) {
+    const asset = projectAsset(assetId);
+    if (!asset) return;
+    hideAssetPreview();
+    closeLayerMenu();
+    document.querySelector(".asset-preview-modal")?.close();
+    const modal = document.createElement("dialog");
+    modal.className = "asset-preview-modal";
+    modal.setAttribute("aria-label", `Preview ${asset.name}`);
+    const image = document.createElement("img");
+    image.src = asset.imageData;
+    image.alt = asset.name;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "asset-preview-close";
+    close.setAttribute("aria-label", "Close asset preview");
+    close.textContent = "×";
+    close.addEventListener("click", () => modal.close());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.close();
+    });
+    modal.addEventListener("keydown", (event) => event.stopPropagation());
+    modal.addEventListener("close", () => modal.remove(), { once: true });
+    modal.append(image, close);
+    document.body.appendChild(modal);
+    modal.showModal();
   }
 
   function showAssetPreview(src, clientX, clientY) {

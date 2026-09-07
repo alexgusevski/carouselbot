@@ -805,6 +805,31 @@ try {
     throw new Error(`Clipboard image metadata changed: ${JSON.stringify(imagePaste.asset)}`);
   }
 
+  const assetPreview = await evaluate(cdp, `(async () => {
+    const item = document.querySelector('.asset-item');
+    item.focus();
+    item.click();
+    let modal = document.querySelector('.asset-preview-modal');
+    const opened = modal?.open && modal.matches(':modal')
+      && modal.querySelector('img').src === item.querySelector('img').src;
+    modal.querySelector('img').click();
+    const imageStaysOpen = modal.open;
+    modal.click();
+    const backdropCloses = !modal.open;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const removed = !document.querySelector('.asset-preview-modal');
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    modal = document.querySelector('.asset-preview-modal');
+    const keyboardOpens = modal?.open;
+    modal.querySelector('button').click();
+    const buttonCloses = !modal.open;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return { opened, imageStaysOpen, backdropCloses, removed, keyboardOpens, buttonCloses };
+  })()`);
+  if (Object.values(assetPreview).some(value => !value)) {
+    throw new Error(`Asset preview regression: ${JSON.stringify(assetPreview)}`);
+  }
+
   const layerCopy = await evaluate(cdp, `(() => {
     const before = structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }));
     const textBox = document.querySelector('.text-box');
