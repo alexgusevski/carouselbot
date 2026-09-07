@@ -1805,7 +1805,12 @@ try {
     form.requestSubmit();
   })()`);
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Created empty folder/Empty child"]'))`), 'Empty subfolder was not created');
-  await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Created empty folder/Empty child"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Created%20empty%20folder%2FEmpty%20child' && document.querySelectorAll('.folder-breadcrumb').length === 1 && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Created empty folder' && document.querySelector('.folder-breadcrumb')?.getAttribute('href') === '/folders/Created%20empty%20folder'`), 'Nested folder must show one back link named for its parent');
+  await evaluate(cdp, `document.querySelector('.folder-breadcrumb').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Created%20empty%20folder' && document.querySelectorAll('.folder-breadcrumb').length === 1 && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Home'`), 'Back from a nested folder must open its parent and show Home');
+  await evaluate(cdp, `document.querySelector('.folder-breadcrumb').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/' && !document.querySelector('.folder-dashboard-title')`), 'Second back click must open Home');
   await waitFor(() => evaluate(cdp, `(() => {
     const tile = document.querySelector('.folder-card[data-folder-path="/Created empty folder"] .folder-preview-subfolder');
     return tile?.title === 'Empty child' && tile.querySelectorAll('.folder-preview-mini').length === 4 && Boolean(tile.querySelector('.folder-preview-folder-mark svg'));
