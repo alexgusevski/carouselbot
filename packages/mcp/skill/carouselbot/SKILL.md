@@ -33,18 +33,18 @@ Every tool accepts the same JSON arguments as MCP. Use `list_tools` without argu
 
 Before the first mutation in a task, call `get_design_guidance`. The server intentionally rejects mutations until this guidance has been read.
 
-Before editing, reserve a target with `begin_edit_session`. Pass its `editSessionId` to every mutating tool, relevant reads, notifications, and `apply_operations`. Release it with `end_edit_session` as soon as the work finishes or fails. Reservations expire after inactivity, but explicit release is the normal cleanup path.
+Before editing, track a target with `begin_edit_session`. Pass its `editSessionId` to every mutating tool, relevant reads, notifications, and `apply_operations`. Release it with `end_edit_session` as soon as the work finishes or fails. Sessions expire after inactivity, but explicit release is the normal cleanup path.
 
 For parallel work, the parent agent owns orchestration:
 
 1. Call `list_editors` and `list_edit_sessions` before spawning editing workers.
-2. Reserve one distinct editor per editing worker with `begin_edit_session`, and assign one project per session. Never launch more editing workers than available unassigned editors. Research-only workers do not need a session.
-3. Give each worker its exact `editorId`, `editSessionId`, and `projectId` (once known). A worker must never select or use another worker's editor.
+2. Create one session per editing worker with `begin_edit_session`, and assign one project per session. Any number of workers can share the same editor and project; sessions do not lock them. Research-only workers do not need a session.
+3. Give each worker its exact `editorId`, `editSessionId`, and `projectId` (once known). Keep project and slide targets explicit; commands in a shared editor execute sequentially.
 4. If a worker creates a project, the daemon binds that new project to its session automatically. Report the returned `projectId` to the parent.
-5. Treat `EDITOR_BUSY`, `PROJECT_BUSY`, and `SESSION_PROJECT_MISMATCH` as coordination signals. Do not retry against a different target silently. Re-plan, wait, or use another unassigned editor.
+5. Treat `SESSION_PROJECT_MISMATCH` as a targeting error. Begin a session for the intended project instead of silently changing targets.
 6. End every worker session in cleanup, including after errors. Use `list_recent_operations` to investigate routing, conflicts, or failed edits without exposing prompts, text, paths, or image bytes.
 
-With only one agent and one editor, the server can create an implicit session for compatibility. Explicit sessions are still preferred because they make routing deterministic. Never rely on which tab is focused once multiple editors exist.
+The server can create an implicit session for each agent for compatibility, including when agents share an editor. Explicit sessions are still preferred because they make routing deterministic. Never rely on which tab is focused once multiple editors exist.
 
 Inspect the assigned editor before editing and keep the returned IDs and revision. Work on the assigned project and slide. Pass `expectedRevision` for sensitive mutations. If `STALE_PROJECT` is returned, the browser has reloaded the canonical IndexedDB copy; inspect again and retry with current IDs. Prefer `apply_operations` for compact related changes while preserving logical order.
 

@@ -147,10 +147,6 @@ function sessionForEditor(editorId) {
   return activeEditSessions().find((session) => session.editorId === editorId) || null;
 }
 
-function sessionForProject(projectId) {
-  return projectId ? activeEditSessions().find((session) => session.projectId === projectId) || null : null;
-}
-
 function requireEditSession(sessionId) {
   const session = editSessions.get(sessionId);
   if (!session || session.lastSeen < Date.now() - EDIT_SESSION_TTL_MS) {
@@ -167,11 +163,6 @@ function requireEditSession(sessionId) {
 
 function claimProject(session, projectId) {
   if (!projectId) return;
-  const conflict = sessionForProject(projectId);
-  if (conflict && conflict.id !== session.id) {
-    recordAudit({ action: "edit_session.conflict", status: "blocked", session, projectId, message: `Project held by ${conflict.owner.name}` });
-    throw codedError("PROJECT_BUSY", `Project ${projectId} is being edited by ${conflict.owner.name} (${conflict.purpose}). Use a different project or wait for edit session ${conflict.id} to end.`, { session: publicSession(conflict) });
-  }
   if (session.projectId && session.projectId !== projectId) {
     if (session.implicit) {
       session.projectId = projectId;
@@ -187,16 +178,7 @@ function beginEditSession(client, { editorId, projectId, purpose }) {
   if (!connected.length) throw codedError("NO_EDITOR", "No CarouselBot editor is connected. Open the editor in the user's normal browser and click Connect AI.");
   let editor = editorId ? connected.find((item) => item.id === editorId) : null;
   if (editorId && !editor) throw codedError("EDITOR_DISCONNECTED", `Editor is not connected: ${editorId}`);
-  if (!editor) {
-    const selected = client.selectedEditorId && connected.find((item) => item.id === client.selectedEditorId);
-    const available = connected.filter((item) => !sessionForEditor(item.id));
-    editor = selected && !sessionForEditor(selected.id) ? selected : available.length === 1 ? available[0] : null;
-    if (!editor) throw codedError("EDITOR_SELECTION_REQUIRED", "Multiple browser tabs are available. Call list_editors, choose an unassigned editor, then begin_edit_session with editorId.");
-  }
-  const editorConflict = sessionForEditor(editor.id);
-  if (editorConflict) throw codedError("EDITOR_BUSY", `Editor ${editor.id} is assigned to ${editorConflict.owner.name} (${editorConflict.purpose}) until ${new Date(editorConflict.lastSeen + EDIT_SESSION_TTL_MS).toISOString()}.`, { session: publicSession(editorConflict) });
-  const projectConflict = sessionForProject(projectId);
-  if (projectConflict) throw codedError("PROJECT_BUSY", `Project ${projectId} is being edited by ${projectConflict.owner.name} (${projectConflict.purpose}).`, { session: publicSession(projectConflict) });
+  if (!editor) editor = selectEditor(client.id);
   const now = Date.now();
   const session = {
     id: randomUUID(), editorId: editor.id, projectId: projectId || null,
@@ -285,8 +267,11 @@ function requireEditor(request, response, editorId, cors) {
 }
 
 function queueEditorEvent(editor, event) {
+  // Keep only the latest roster snapshot, but never drop commands or notifications.
+  if (event.kind === "system" && ["agents.changed", "edit-sessions.changed"].includes(event.type)) {
+    editor.queue = editor.queue.filter((queued) => queued.kind !== "system" || queued.type !== event.type);
+  }
   editor.queue.push(event);
-  if (editor.queue.length > 100) editor.queue.splice(0, editor.queue.length - 100);
   deliverNext(editor);
 }
 
@@ -377,11 +362,9 @@ function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) 
     return { client, editor: editors.get(session.editorId), session };
   }
   const editor = selectEditor(clientId);
-  const conflict = sessionForEditor(editor.id);
-  if (conflict) throw codedError("EDITOR_BUSY", `Editor ${editor.id} is assigned to ${conflict.owner.name} (${conflict.purpose}). Begin an edit session on another editor.`, { session: publicSession(conflict) });
   const now = Date.now();
   session = {
-    id: randomUUID(), editorId: editor.id, projectId: null, purpose: "Implicit single-agent edit",
+    id: randomUUID(), editorId: editor.id, projectId: null, purpose: "Implicit edit",
     owner: publicClient(client), creatorClientId: client.id, lastClientId: client.id,
     implicit: true, createdAt: now, lastSeen: now,
   };
@@ -394,6 +377,10 @@ function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) 
 }
 
 function callBrowser(clientId, toolName, operation, label, { editSessionId = null, mutating = false } = {}) {
+  const boundSession = editSessionId ? requireEditSession(editSessionId) : null;
+  if (!operation?.projectId && boundSession?.projectId && operation?.type !== "project.create") {
+    operation = { ...operation, projectId: boundSession.projectId };
+  }
   const projectId = operation?.projectId || null;
   const { client, editor, session } = resolveBrowserTarget(clientId, { editSessionId, mutating, projectId });
   if (mutating && session && !session.implicit && !session.projectId && toolName !== "create_project") {
@@ -404,6 +391,7 @@ function callBrowser(clientId, toolName, operation, label, { editSessionId = nul
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       inflight.delete(requestId);
+      editor.queue = editor.queue.filter((event) => event.requestId !== requestId);
       if (operation?.fontMediaId) fontMedia.delete(operation.fontMediaId);
       recordAudit({ action: "tool.result", client, session, editorId: editor.id, projectId, toolName, status: "error", message: "Browser timeout" });
       reject(codedError("BROWSER_TIMEOUT", "The browser did not answer within 90 seconds."));
@@ -518,7 +506,7 @@ async function handleInternalCall(body) {
       selectedEditorId,
       editors: connected.map((editor) => {
         const assigned = sessionForEditor(editor.id);
-        return { id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state, editSession: assigned ? publicSession(assigned) : null };
+        return { id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state, editSession: assigned ? publicSession(assigned) : null, editSessions: activeEditSessions().filter((session) => session.editorId === editor.id).map(publicSession) };
       }),
       editSessions: activeEditSessions().map(publicSession),
     };

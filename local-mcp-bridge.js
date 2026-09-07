@@ -155,8 +155,9 @@ function localMcpAgentIcon(agent) {
 
 function localMcpConnectionMessage() {
   if (!localMcpBridgeState.connected) return localMcpBridgeState.statusMessage;
-  const assignment = localMcpBridgeState.editSessions.find((session) => session.editorId === localMcpBridgeState.editorId);
-  const suffix = assignment ? ` · editing ${assignment.purpose}` : ` · editor ${localMcpBridgeState.editorId.slice(0, 8)}`;
+  const assignments = localMcpBridgeState.editSessions.filter((session) => session.editorId === localMcpBridgeState.editorId);
+  const assignment = assignments[0];
+  const suffix = assignments.length > 1 ? ` · ${assignments.length} editing sessions` : assignment ? ` · editing ${assignment.purpose}` : ` · editor ${localMcpBridgeState.editorId.slice(0, 8)}`;
   if (!localMcpBridgeState.agents.length) return `Local companion connected${suffix}`;
   const labels = [...new Set(localMcpBridgeState.agents.map(localMcpAgentLabel))];
   return `${labels.join(", ")} connected${suffix}`;

@@ -843,6 +843,21 @@ try {
   if (perLineLayer?.role !== "subtitle" || perLineLayer.size !== 76 || perLineLayer.backgroundShape !== "lines") throw new Error(`Role defaults or per-line preference failed: ${JSON.stringify(perLineLayer)}`);
   if (!autoFitText.fittedTextBox?.automatic || !autoFitUpdate.fittedTextBoxes?.[0]?.automatic || autoFitLayer.height <= autoFitBefore.height || autoFitLayer.y + autoFitLayer.height > 1.0001) throw new Error(`Automatic MCP text-height fitting failed: ${JSON.stringify({ autoFitText, autoFitBefore, autoFitUpdate, autoFitLayer })}`);
   if (fullBoxLayer?.role !== "body" || fullBoxLayer.size !== 60 || fullBoxLayer.height >= 0.48 || fitted.fittedTextBoxes?.[0]?.id !== fullBoxText.createdTextId) throw new Error(`Full-box content fitting failed: ${JSON.stringify({ fullBoxLayer, fitted })}`);
+  const parallelSessions = await Promise.all(Array.from({ length: 3 }, (_, index) => tool("begin_edit_session", {
+    editorId: testEditor.id, projectId: temporaryProject.projectId, purpose: `Shared window worker ${index}`,
+  }).then((result) => result.structuredContent)));
+  try {
+    const parallelResults = await Promise.all(parallelSessions.map((session, index) => rpc("tools/call", {
+      name: "add_text", arguments: { editSessionId: session.id, slideId: temporarySlide.createdSlideId, text: `Parallel worker ${index}` },
+    })));
+    if (parallelResults.some((result) => result.isError)) throw new Error(`Shared-window edits failed: ${JSON.stringify(parallelResults)}`);
+    const sharedSlide = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide;
+    for (let index = 0; index < parallelSessions.length; index += 1) {
+      if (!sharedSlide.texts.some((text) => text.text === `Parallel worker ${index}`)) throw new Error(`Shared-window edit ${index} was lost`);
+    }
+  } finally {
+    for (const session of parallelSessions) await tool("end_edit_session", { editSessionId: session.id });
+  }
   const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   if (JSON.stringify(preservedView) !== JSON.stringify(pinnedView)) throw new Error(`Background project edits changed the user's view: ${JSON.stringify({ pinnedView, preservedView })}`);
   await tool("delete_project", { projectId: temporaryProject.projectId });
