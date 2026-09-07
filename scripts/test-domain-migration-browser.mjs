@@ -94,6 +94,8 @@ try {
   await legacyCdp.send("Page.navigate", { url: legacyUrl });
   await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && Boolean(window.carouselBotReady)"), "Legacy editor did not load.");
 
+  await evaluate(legacyCdp, "window.carouselBotReady");
+
   await evaluate(legacyCdp, `new Promise((resolve, reject) => {
     const request = indexedDB.open("slide-studio-db");
     request.onupgradeneeded = () => request.result.createObjectStore("projects", { keyPath: "id" });
@@ -105,13 +107,13 @@ try {
         assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
         slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
       });
-      transaction.oncomplete = () => resolve(true);
+      transaction.oncomplete = () => { request.result.close(); resolve(true); };
       transaction.onerror = () => reject(transaction.error);
     };
   })`);
   await evaluate(legacyCdp, "window.__migrationReloadPending = true");
   await legacyCdp.send("Page.reload");
-  await waitFor(() => evaluate(legacyCdp, "!window.__migrationReloadPending && document.readyState === 'complete' && Boolean(window.carouselBotReady)"), "Legacy editor did not finish reloading.");
+  await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && !window.__migrationReloadPending && Boolean(window.carouselBotReady)"), "Migration page did not reload.");
   await evaluate(legacyCdp, "window.carouselBotReady");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-action=\"migrate-projects\"]')?.textContent.includes('project')"), "Migration prompt did not find the legacy project.");
   const modalState = await evaluate(legacyCdp, `(() => {
@@ -124,7 +126,7 @@ try {
   await waitFor(() => evaluate(legacyCdp, `!document.querySelector('[data-migration-modal]')`), "Migration modal did not close.");
   await evaluate(legacyCdp, "window.__migrationReloadPending = true");
   await legacyCdp.send("Page.reload");
-  await waitFor(() => evaluate(legacyCdp, "!window.__migrationReloadPending && document.readyState === 'complete' && Boolean(window.carouselBotReady)"), "Legacy editor did not finish reloading.");
+  await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && !window.__migrationReloadPending && Boolean(window.carouselBotReady)"), "Migration page did not reload.");
   await evaluate(legacyCdp, "window.carouselBotReady");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-action=\"migrate-projects\"]')?.textContent.includes('project')"), "Migration modal did not return after a fresh page load.");
   await evaluate(legacyCdp, `(() => {
@@ -172,5 +174,5 @@ try {
   chrome.kill("SIGTERM");
   legacyWeb.kill("SIGTERM");
   canonicalWeb.kill("SIGTERM");
-  await rm(profile, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

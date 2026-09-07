@@ -64,7 +64,11 @@ export const fileToDataUrl = editorActions.fileToDataUrl;
 
 export async function init() {
   try {
-    state.db = await openDatabase(DB_NAME);
+    state.db = await openDatabase(DB_NAME, {
+      onBlocked: editorUI.renderStorageBlocked,
+      beforeVersionChange: () => editorProjects.flushPendingSave(),
+      onVersionChange: () => window.location.reload(),
+    });
     state.projects = await getAllProjects();
     normalizeLoadedProjects(state.projects);
   } catch (error) {
