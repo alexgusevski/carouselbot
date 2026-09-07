@@ -14,6 +14,9 @@ import {
   aspectRatioFromDimensions,
   normalizeAspectRatio,
   normalizeFolderPath,
+  folderContains,
+  folderAncestors,
+  folderParentPath,
   normalizeHexColor,
   projectCanvasDimensions,
   slideCanvasDimensions,
@@ -134,16 +137,19 @@ function agentFolderSummaries() {
   const folders = new Map();
   for (const project of state.projects) {
     if (!project.folderPath) continue;
-    const folder = folders.get(project.folderPath) || {
-      path: project.folderPath,
-      projectIds: [],
-      projectCount: 0,
-      updatedAt: 0,
-    };
-    folder.projectIds.push(project.id);
-    folder.projectCount += 1;
-    folder.updatedAt = Math.max(folder.updatedAt, Number(project.updatedAt) || 0);
-    folders.set(project.folderPath, folder);
+    for (const path of folderAncestors(project.folderPath)) {
+      const folder = folders.get(path) || {
+        path,
+        parentPath: folderParentPath(path),
+        projectIds: [],
+        projectCount: 0,
+        updatedAt: 0,
+      };
+      folder.projectIds.push(project.id);
+      folder.projectCount += 1;
+      folder.updatedAt = Math.max(folder.updatedAt, Number(project.updatedAt) || 0);
+      folders.set(path, folder);
+    }
   }
   return [...folders.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path));
 }
@@ -265,7 +271,7 @@ async function agentCommit(project, slide, mutate, message) {
   state.shareAllCache = null;
   if (targetIsVisible) renderEditor();
   else if (!visibleView.projectId) {
-    if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
+    if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
       state.activeFolderPath = null;
       updateBrowserRoute("/", "replace");
     }
@@ -474,7 +480,7 @@ async function executeCarouselBotAgentOperation(operation) {
     const now = Date.now();
     const folderPath = normalizeFolderPath(operation.folderPath);
     if (operation.folderPath != null && String(operation.folderPath).trim() && !folderPath) {
-      throw new Error("Folder paths need a name after the slash and cannot be /. or /..");
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
     }
     const aspectRatio = normalizeAspectRatio(operation.aspectRatio);
     const project = {
@@ -508,13 +514,13 @@ async function executeCarouselBotAgentOperation(operation) {
     const slide = project.slides.find((item) => item.id === state.activeSlideId) || project.slides[0] || null;
     const folderPath = normalizeFolderPath(operation.folderPath);
     if (operation.folderPath != null && String(operation.folderPath).trim() && !folderPath) {
-      throw new Error("Folder paths need a name after the slash and cannot be /. or /..");
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
     }
     const result = await agentCommit(project, slide, () => {
       project.folderPath = folderPath;
       return { folderPath };
     }, folderPath ? `AI agent moved the project to ${folderPath}` : "AI agent moved the project to the home screen");
-    if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
+    if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
       state.activeFolderPath = null;
     }
     return result;
@@ -545,7 +551,7 @@ async function executeCarouselBotAgentOperation(operation) {
     state.projects = state.projects.filter((item) => item.id !== project.id);
     project.slides.forEach((slide) => clearSlideThumbnail(slide.id, project.id));
     clearProjectCover(project.id);
-    if (state.activeFolderPath && !state.projects.some((item) => item.folderPath === state.activeFolderPath)) {
+    if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
       state.activeFolderPath = null;
       updateBrowserRoute("/", "replace");
     }

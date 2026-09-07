@@ -428,6 +428,25 @@ try {
     return value.composedCover ? value : false;
   })()`), "Adding a slide did not update the folder mosaic.");
   if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.composedCover) throw new Error(`Adding a slide changed the dashboard folder view: ${JSON.stringify(dashboardAfterSlide)}`);
+  await tool("move_project", { projectId: createdProject.projectId, folderPath: "/Client/Account" });
+  const nestedInspection = (await tool("inspect_editor")).structuredContent;
+  if (!nestedInspection.folders.some((folder) => folder.path === "/Client" && folder.projectCount === 1)
+    || !nestedInspection.folders.some((folder) => folder.path === "/Client/Account" && folder.parentPath === "/Client")) throw new Error("MCP did not expose the nested hierarchy");
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Client"]').click()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Client/Account"]')) && !document.querySelector('.project-card')`), "Parent folder did not show its account subfolder");
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Client/Account"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Client%2FAccount' && Boolean(document.querySelector('.project-card')) && Boolean(document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]'))`), "Subfolder navigation failed");
+  await evaluate(cdp, `window.__nestedFolderReload = true`);
+  await cdp.send("Page.reload");
+  await waitFor(() => evaluate(cdp, `Boolean(!window.__nestedFolderReload && document.readyState === "complete" && window.carouselBotAgent && document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]'))`), "Nested folder reload failed");
+  await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
+  await evaluate(cdp, `(() => {
+    document.querySelector('.folder-card[data-folder-path="/Client"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.includes('Rename folder')).click();
+    document.querySelector('[data-folder-rename-form] input').value = 'Renamed';
+    document.querySelector('[data-folder-rename-form]').requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Renamed"]')) && window.carouselBotAgent.inspect().projects.some((project) => project.folderPath === '/Renamed/Account')`), "Parent rename did not preserve account nesting");
   const movedBetweenFolders = (await tool("move_project", { projectId: createdProject.projectId, folderPath: "/mcp-other" })).structuredContent;
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/mcp-other"]')) && !document.querySelector('.folder-card[data-folder-path="/mcp-folder"]')`), "Moving a project between folders did not update the dashboard cards.");
 

@@ -3634,8 +3634,7 @@ input[type="range"]::-webkit-slider-thumb {
   }
 
   .project-preview,
-  .folder-preview,
-  .thumb-image {
+  .folder-preview {
     background: #2c2e29;
   }
 

@@ -6,6 +6,10 @@ import {
   projectPath,
   folderRoutePath,
   folderDisplayName,
+  folderContains,
+  folderAncestors,
+  movedFolderPath,
+  normalizeStoredFolderPath,
   routeFromPathname,
   escapeHtml,
   normalizeAspectRatio,
@@ -46,7 +50,7 @@ export function normalizeLoadedProjects(projects) {
     normalizeProjectFonts(project);
     if (!Number.isFinite(Number(project.revision))) project.revision = 0;
     project.aspectRatio = normalizeAspectRatio(project.aspectRatio);
-    project.folderPath = normalizeFolderPath(project.folderPath);
+    project.folderPath = normalizeStoredFolderPath(project.folderPath);
     if (!Array.isArray(project.assets)) project.assets = [];
     if (!Array.isArray(project.slides)) project.slides = [];
     project.slides.forEach((slide) => {
@@ -104,7 +108,7 @@ export function createEditorProjects({
   const dirtySaveProjects = new Map();
 
   function projectsInFolder(folderPath) {
-    return state.projects.filter((project) => project.folderPath === folderPath);
+    return state.projects.filter((project) => folderContains(folderPath, project.folderPath));
   }
 
   function folderExists(folderPath) {
@@ -402,7 +406,7 @@ export function createEditorProjects({
     const project = state.projects[index];
     const folderPath = normalizeFolderPath(requestedFolderPath);
     if (requestedFolderPath != null && String(requestedFolderPath).trim() && !folderPath) {
-      throw new Error("Folder paths need a name after the slash and cannot be /. or /..");
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
     }
     if (project.folderPath === folderPath) return project;
     const baseRevision = Number(project.revision) || 0;
@@ -429,7 +433,7 @@ export function createEditorProjects({
   async function moveFolderProjects(sourceFolderPath, requestedDestinationFolderPath) {
     const destinationFolderPath = normalizeFolderPath(requestedDestinationFolderPath);
     if (requestedDestinationFolderPath != null && String(requestedDestinationFolderPath).trim() && !destinationFolderPath) {
-      throw new Error("Folder paths need a name after the slash and cannot be /. or /..");
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
     }
     if (sourceFolderPath === destinationFolderPath) return [];
     // A project can reach the dashboard before its debounced editor save fires.
@@ -437,9 +441,9 @@ export function createEditorProjects({
     await flushPendingSave();
     const moved = await moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath);
     replaceMovedProjects(moved);
-    if (state.activeFolderPath === sourceFolderPath) {
-      state.activeFolderPath = destinationFolderPath;
-      updateBrowserRoute(destinationFolderPath ? folderRoutePath(destinationFolderPath) : "/", "replace");
+    if (folderContains(sourceFolderPath, state.activeFolderPath)) {
+      state.activeFolderPath = movedFolderPath(state.activeFolderPath, sourceFolderPath, destinationFolderPath);
+      updateBrowserRoute(folderRoutePath(state.activeFolderPath), "replace");
     }
     leaveMissingActiveFolder();
     renderDashboard();
@@ -450,19 +454,19 @@ export function createEditorProjects({
     closeFolderDialog();
     const project = state.projects.find((item) => item.id === projectId);
     if (!project) return;
-    const folderPaths = [...new Set(state.projects.map((item) => item.folderPath).filter(Boolean))]
+    const folderPaths = [...new Set(state.projects.flatMap((item) => folderAncestors(item.folderPath)))]
       .sort((a, b) => a.localeCompare(b));
     const backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop folder-dialog";
     backdrop.innerHTML = `
       <form class="modal" data-folder-move-form role="dialog" aria-modal="true" aria-labelledby="folder-move-title" aria-describedby="folder-move-description">
         <h2 id="folder-move-title">Move project</h2>
-        <p id="folder-move-description">Enter a folder name such as <strong>${icon("folder")} my-folder</strong>. Leave it empty to show the project on the home screen.</p>
+        <p id="folder-move-description">Enter <strong>Client</strong> for a folder or <strong>Client/Account</strong> for a subfolder. Leave it empty to show the project on the home screen.</p>
         <input name="folderPath" value="${escapeHtml(folderDisplayName(project.folderPath))}" placeholder="my-folder" maxlength="160" list="folder-path-options" autocomplete="off" aria-label="Folder name" />
         <datalist id="folder-path-options">
           ${folderPaths.map((folderPath) => `<option value="${escapeHtml(folderDisplayName(folderPath))}"></option>`).join("")}
         </datalist>
-        <p class="folder-path-hint">A new name creates the folder automatically.</p>
+        <p class="folder-path-hint">A new path creates folders automatically. Maximum two levels: Client/Account.</p>
         <div class="modal-actions">
           <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
           <button class="button button--primary" type="submit">Move project</button>
@@ -484,7 +488,7 @@ export function createEditorProjects({
       event.preventDefault();
       const folderPath = normalizeFolderPath(input.value);
       if (input.value.trim() && !folderPath) {
-        input.setCustomValidity("Enter a folder name. A dot or double dot is not a folder name.");
+        input.setCustomValidity("Use Client or Client/Account, with no empty, dot, or double-dot names. Maximum two levels.");
         input.reportValidity();
         return;
       }
@@ -540,7 +544,7 @@ export function createEditorProjects({
       event.preventDefault();
       const folderPath = normalizeFolderPath(input.value);
       if (!folderPath) {
-        input.setCustomValidity("Enter a folder name. A dot or double dot is not a folder name.");
+        input.setCustomValidity("Use Client or Client/Account, with no empty, dot, or double-dot names. Maximum two levels.");
         input.reportValidity();
         return;
       }
@@ -558,7 +562,7 @@ export function createEditorProjects({
         cancelButton.disabled = false;
         submitButton.disabled = false;
         submitButton.textContent = "Rename folder";
-        toast("Couldn’t rename this folder in your browser.");
+        toast(error.message || "Couldn’t rename this folder in your browser.");
       }
     });
     document.body.appendChild(backdrop);
