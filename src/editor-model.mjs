@@ -154,8 +154,13 @@ export function normalizeStoredFolderPath(value) {
   return normalizeFolderPath(parts.length > 2 ? `${parts[0]}/${parts.slice(1).join(" ∕ ")}` : value);
 }
 
-export function folderPreviewItems(projects, folderPath) {
+export function folderPreviewItems(projects, folderPath, folders = []) {
   const children = new Map();
+  for (const folder of folders) {
+    if (folderParentPath(folder.path) === folderPath) {
+      children.set(folder.path, { type: "folder", path: folder.path, projects: [], updatedAt: Number(folder.updatedAt) || 0 });
+    }
+  }
   const direct = [];
   for (const project of projects) {
     if (!folderContains(folderPath, project.folderPath)) continue;

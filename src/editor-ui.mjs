@@ -559,7 +559,7 @@ export function createEditorUI({ projects, actions, output }) {
     };
 
     const renderFolderCard = (folder) => {
-      const items = folderPreviewItems(folder.projects, folder.folderPath);
+      const items = folderPreviewItems(folder.projects, folder.folderPath, state.folders);
       const overflow = Math.max(0, items.length - 8);
       const slots = Array.from({ length: 8 }, (_, index) => {
         const item = items[index];

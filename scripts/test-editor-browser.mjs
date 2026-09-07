@@ -1774,7 +1774,18 @@ try {
   await evaluate(cdp, `window.__emptyFolderReloadSentinel = true`);
   await cdp.send('Page.reload');
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && !window.__emptyFolderReloadSentinel && window.carouselBotAgent && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'Created empty folder'`), 'Empty folder did not survive reload');
+  await evaluate(cdp, `(() => {
+    document.querySelector('[data-action="new-folder"]').click();
+    const form = document.querySelector('[data-folder-create-form]');
+    form.elements.folderName.value = 'Empty child';
+    form.requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Created empty folder/Empty child"]'))`), 'Empty subfolder was not created');
   await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
+  await waitFor(() => evaluate(cdp, `(() => {
+    const tile = document.querySelector('.folder-card[data-folder-path="/Created empty folder"] .folder-preview-subfolder');
+    return tile?.title === 'Empty child' && tile.querySelectorAll('.folder-preview-mini').length === 4 && Boolean(tile.querySelector('.folder-preview-folder-mark svg'));
+  })()`), 'Empty subfolder did not appear in its parent preview');
 
   const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
   const folderUiSlide = await callPageFunction(cdp, `function(projectId) {

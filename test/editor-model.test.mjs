@@ -493,4 +493,8 @@ test("folder previews represent direct children without flattening subfolder pro
   assert.deepEqual(items[0].projects.map(project => project.id), ["a2", "a1"]);
   assert.deepEqual(folderPreviewItems(projects, "/Client/A").map(item => item.project.id), ["a2", "a1"]);
   assert.equal(projects[1].id, "a1");
+  const empty = folderPreviewItems([], "/Client", [{ path: "/Client/Empty", updatedAt: 4 }, { path: "/Other/Empty", updatedAt: 5 }]);
+  assert.equal(empty.length, 1);
+  assert.equal(empty[0].path, "/Client/Empty");
+  assert.deepEqual(empty[0].projects, []);
 });

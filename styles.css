@@ -1235,8 +1235,9 @@ button:disabled {
 .folder-preview-folder-mark > span {
   width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   text-align: center;
   font-size: 10px;
   font-weight: 750;
