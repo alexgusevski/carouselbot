@@ -1412,7 +1412,7 @@ try {
     const activation = {};
     Object.defineProperty(activation, 'isActive', { get: () => output.activation });
     Object.defineProperty(navigator, 'userActivation', { configurable: true, value: activation });
-    const labels = Object.fromEntries(['export', 'share', 'share-all'].map((action) => {
+    const labels = Object.fromEntries(['export', 'export-all', 'share', 'share-all'].map((action) => {
       const button = document.querySelector('[data-action="' + action + '"]');
       return [action, button.innerHTML];
     }));
@@ -1422,6 +1422,20 @@ try {
   await waitFor(
     () => evaluate(cdp, `window.__browserOutput.downloads[0]?.width === 1080 && !document.querySelector('[data-action="export"]').disabled`),
     "Downloading from the native toolbar did not finish.",
+  );
+  const allDownloadButton = await evaluate(cdp, `(() => {
+    const button = document.querySelector('[data-action="export-all"]');
+    const result = { label: button.textContent.trim(), icon: Boolean(button.querySelector('svg')), previous: button.previousElementSibling?.dataset.action };
+    button.click();
+    button.click();
+    return result;
+  })()`);
+  if (allDownloadButton.label !== 'All' || !allDownloadButton.icon || allDownloadButton.previous !== 'export') {
+    throw new Error('The All download button must follow PNG and include the download icon.');
+  }
+  await waitFor(
+    () => evaluate(cdp, `window.__browserOutput.downloads.length === 3 && window.__browserOutput.downloads.every((item) => item.width) && !document.querySelector('[data-action="export-all"]').disabled`),
+    "Downloading all slides did not finish exactly once.",
   );
   await evaluate(cdp, `document.querySelector('[data-action="share"]').click()`);
   await waitFor(
@@ -1442,7 +1456,7 @@ try {
   const nativeOutput = await waitFor(
     () => evaluate(cdp, `window.__browserOutput.shares.length === 2 ? ({
       ...window.__browserOutput,
-      buttons: Object.fromEntries(['export', 'share', 'share-all'].map((action) => {
+      buttons: Object.fromEntries(['export', 'export-all', 'share', 'share-all'].map((action) => {
         const button = document.querySelector('[data-action="' + action + '"]');
         return [action, { disabled: button.disabled, html: button.innerHTML }];
       })),
@@ -1461,6 +1475,8 @@ try {
     || !nativeOutput.downloads[0].href.startsWith("blob:")
     || nativeOutput.downloads[0].width !== 1080
     || nativeOutput.downloads[0].height !== 1080
+    || JSON.stringify(nativeOutput.downloads.slice(1).map((item) => item.download)) !== JSON.stringify(['browser-regression-project-slide-01.png', 'browser-regression-project-slide-02.png'])
+    || JSON.stringify(nativeOutput.downloads.slice(1).map((item) => [item.width, item.height])) !== JSON.stringify([[1080, 1080], [1080, 1620]])
     || nativeOutput.shares[0].title !== "Browser regression project"
     || nativeOutput.shares[0].files.length !== 1
     || nativeOutput.shares[0].files[0].name !== expectedSingleName
@@ -1893,6 +1909,24 @@ try {
   })()`);
   if (parentLinkSize.fontSize < 18 || parentLinkSize.height < 48 || parentLinkSize.iconWidth < 24) {
     throw new Error('The folder link must remain large and easy to click: ' + JSON.stringify(parentLinkSize));
+  }
+  const wrappedFolderNames = await evaluate(cdp, `(() => {
+    const link = document.querySelector('.slide-rail-back');
+    const label = link.querySelector('span');
+    const original = label.textContent;
+    const singleLineHeight = label.getBoundingClientRect().height;
+    const results = ['Newly/AI Slide Projects with a long folder name', 'A'.repeat(100)].map((name) => {
+      label.textContent = name;
+      const bounds = label.getBoundingClientRect();
+      const linkBounds = link.getBoundingClientRect();
+      return bounds.height > singleLineHeight && label.scrollWidth <= label.clientWidth + 1
+        && bounds.right <= linkBounds.right && bounds.bottom <= linkBounds.bottom;
+    });
+    label.textContent = original;
+    return results;
+  })()`);
+  if (!wrappedFolderNames.every(Boolean)) {
+    throw new Error('Long folder names must wrap fully inside the slide sidebar link.');
   }
   await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
   await waitFor(

@@ -101,6 +101,7 @@ export function createEditorUI({ projects, actions, output }) {
     refreshDashboardSlideThumbnails,
     disconnectDashboardSlideThumbnails,
     exportActiveSlide,
+    exportAllSlides,
     shareActiveSlide,
     shareAllSlides,
   } = output;
@@ -781,6 +782,7 @@ export function createEditorUI({ projects, actions, output }) {
     app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
     app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
     app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
+    app.querySelector('[data-action="export-all"]')?.addEventListener("click", exportAllSlides);
     app.querySelector('[data-action="share"]')?.addEventListener("click", shareActiveSlide);
     app.querySelector('[data-action="share-all"]')?.addEventListener("click", shareAllSlides);
     app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {

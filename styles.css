@@ -1418,6 +1418,7 @@ button:disabled {
 
 .slide-rail-back {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -1447,9 +1448,9 @@ button:disabled {
 }
 
 .slide-rail-back span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .slide-rail-back + .rail-heading {
