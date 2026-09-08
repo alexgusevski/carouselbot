@@ -349,6 +349,44 @@ export function createEditorOutput({ toast }) {
     }
   }
 
+  let exportingAll = false;
+
+  async function exportAllSlides() {
+    if (exportingAll || !activeProject()?.slides.length) return;
+    const project = structuredClone(activeProject());
+    const button = app.querySelector('[data-action="export-all"]');
+    const oldLabel = button?.innerHTML;
+    exportingAll = true;
+    if (button) button.disabled = true;
+    try {
+      const digits = Math.max(2, String(project.slides.length).length);
+      for (const [index, slide] of project.slides.entries()) {
+        if (button) button.textContent = `Rendering ${index + 1}/${project.slides.length}…`;
+        const blob = await renderSlideBlob(slide, project);
+        if (!blob) throw new Error(`Could not create PNG for slide ${index + 1}`);
+        const url = URL.createObjectURL(blob);
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = `${safeFilename(project.name)}-slide-${String(index + 1).padStart(digits, "0")}.png`;
+          anchor.click();
+        } finally {
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+      }
+      toast("All PNG downloads started in slide order");
+    } catch (error) {
+      console.error(error);
+      toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Couldn’t download all slides. Please try again.");
+    } finally {
+      exportingAll = false;
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = oldLabel;
+      }
+    }
+  }
+
   async function shareActiveSlide() {
     const slide = activeSlide();
     if (!slide) return;
@@ -448,6 +486,7 @@ export function createEditorOutput({ toast }) {
     clearSlideThumbnail,
     pruneSlideThumbnails,
     exportActiveSlide,
+    exportAllSlides,
     shareActiveSlide,
     shareAllSlides,
   };
