@@ -1363,7 +1363,6 @@ button:disabled {
 .new-project-card button:hover { background: var(--panel); }
 .new-project-card button:focus-visible { outline: 2px solid var(--ink); outline-offset: -5px; }
 .new-project-card svg { width: 21px; height: 21px; }
-.new-project-action span { font-size: 26px; font-weight: 400; }
 .new-folder-modal { position: relative; }
 .new-folder-modal h2 { padding-right: 35px; }
 .folder-modal-close { position: absolute; top: 16px; right: 16px; }

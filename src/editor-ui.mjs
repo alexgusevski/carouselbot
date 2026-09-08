@@ -632,7 +632,7 @@ export function createEditorUI({ projects, actions, output }) {
           </div>
           <div class="project-grid">
             <div class="new-project-card">
-              <button class="new-project-action" type="button" data-action="new-project"><span aria-hidden="true">⊕</span> New project</button>
+              <button class="new-project-action" type="button" data-action="new-project">${icon("plus")} New project</button>
               <button class="new-folder-action" type="button" data-action="new-folder">${icon("folder")} New folder</button>
             </div>
             ${cards}

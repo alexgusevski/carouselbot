@@ -653,11 +653,11 @@ export function createEditorProjects({
     backdrop.className = "modal-backdrop folder-dialog";
     backdrop.innerHTML = `
       <section class="modal modal--confirm" role="alertdialog" aria-modal="true" aria-labelledby="unfile-folder-title" aria-describedby="unfile-folder-description">
-        <h2 id="unfile-folder-title">Move projects out?</h2>
-        <p id="unfile-folder-description">${projectCount} ${projectCount === 1 ? "project" : "projects"} will return to the home screen. No projects or slides will be deleted.</p>
+        <h2 id="unfile-folder-title">Move projects out and delete folder?</h2>
+        <p id="unfile-folder-description">${projectCount} ${projectCount === 1 ? "project" : "projects"} will return to the home screen, and the folder will be deleted. No projects or slides will be deleted.</p>
         <div class="modal-actions">
           <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
-          <button class="button button--primary" type="button" data-action="confirm-folder-unfile">Move projects out</button>
+          <button class="button button--primary" type="button" data-action="confirm-folder-unfile">Delete folder</button>
         </div>
       </section>
     `;
@@ -682,7 +682,7 @@ export function createEditorProjects({
         console.error(error);
         cancelButton.disabled = false;
         confirmButton.disabled = false;
-        confirmButton.textContent = "Move projects out";
+        confirmButton.textContent = "Delete folder";
         toast("Couldn’t move these projects in your browser.");
       }
     });
@@ -766,7 +766,7 @@ export function createEditorProjects({
     unfileButton.type = "button";
     unfileButton.className = "layer-menu-item";
     unfileButton.setAttribute("role", "menuitem");
-    unfileButton.innerHTML = `${icon("back")}<span>Move projects out…</span>`;
+    unfileButton.innerHTML = `${icon("trash")}<span>Move projects out and delete folder…</span>`;
     unfileButton.addEventListener("click", (clickEvent) => {
       clickEvent.stopPropagation();
       closeLayerMenu();
