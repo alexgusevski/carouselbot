@@ -1894,6 +1894,24 @@ try {
   if (parentLinkSize.fontSize < 18 || parentLinkSize.height < 48 || parentLinkSize.iconWidth < 24) {
     throw new Error('The folder link must remain large and easy to click: ' + JSON.stringify(parentLinkSize));
   }
+  const wrappedFolderNames = await evaluate(cdp, `(() => {
+    const link = document.querySelector('.slide-rail-back');
+    const label = link.querySelector('span');
+    const original = label.textContent;
+    const singleLineHeight = label.getBoundingClientRect().height;
+    const results = ['Newly/AI Slide Projects with a long folder name', 'A'.repeat(100)].map((name) => {
+      label.textContent = name;
+      const bounds = label.getBoundingClientRect();
+      const linkBounds = link.getBoundingClientRect();
+      return bounds.height > singleLineHeight && label.scrollWidth <= label.clientWidth + 1
+        && bounds.right <= linkBounds.right && bounds.bottom <= linkBounds.bottom;
+    });
+    label.textContent = original;
+    return results;
+  })()`);
+  if (!wrappedFolderNames.every(Boolean)) {
+    throw new Error('Long folder names must wrap fully inside the slide sidebar link.');
+  }
   await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
   await waitFor(
     () => evaluate(cdp, `location.pathname === '/folders/native-folder' && Boolean(document.querySelector('.folder-dashboard-title'))`),
