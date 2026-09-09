@@ -23,7 +23,7 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Use rotation sparingly. Small intentional angles can add energy; arbitrary angles make carousels feel inconsistent.
 - Reuse a small palette and consistent type scale across the project.
 - For an installed Mac font, select an exact face with `list_local_fonts`, import its opaque ID with `import_font`, and apply only the returned project `fontId`. Reuse project faces through `list_project_fonts`; never guess family strings.
-- Use `fontWeight` (or the matching `wght` axis) for variable weight. Do not newly apply `wdth`, `opsz`, `slnt`, or custom axes until exported-canvas parity is available.
+- Use numeric `fontWeight`, including 550 or 725, for variable weight. Built-in TikTok Sans supports 100–900; imported variable faces use their wght range. Static fonts select an exact matching imported family face or report FONT_FACE_MISMATCH; they cannot interpolate arbitrary weights. `inspect_editor` reports effectiveFontWeight and supportedWeights for each text layer. Check every title and body layer separately. Do not newly apply `wdth`, `opsz`, `slnt`, or custom axes until exported-canvas parity is available.
 - Keep ordinary typography as editable text layers, including typography that uses an imported font. Never generate or import a text-only PNG/SVG and place it with `add_image` just to imitate a font. If the requested face cannot be imported, keep the copy editable in an available face and report the substitution instead of baking the words into pixels.
 
 ## Working method

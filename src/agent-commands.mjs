@@ -59,12 +59,15 @@ import {
   DEFAULT_FONT_FAMILY,
   DEFAULT_FONT_WEIGHT,
   applyProjectFontToText,
+  applyTextWeight,
   createProjectFont,
   ensureProjectFontsLoaded,
   projectFontForText,
   publicProjectFont,
   textCanvasFont,
   textFontVariationCss,
+  textFontWeight,
+  textWeightOptions,
 } from "./project-fonts.mjs";
 import { reconcileAgentFontWeightPatch } from "./agent-font-patch.mjs";
 import { canonicalSolidBackgroundColor, solidBackgroundDataUrl } from "./slide-background.mjs";
@@ -200,7 +203,7 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
     } : null,
     slide: slide ? {
       ...agentSlideSummary(slide, project.slides.indexOf(slide), project),
-      texts: slide.texts.map((text) => ({ ...text })),
+      texts: slide.texts.map((text) => ({ ...text, effectiveFontWeight: textFontWeight(project, text), supportedWeights: textWeightOptions(project, text) })),
       images: (slide.overlays || []).map((overlay) => ({ ...overlay })),
     } : null,
   };
@@ -321,14 +324,11 @@ function agentApplyTextPatch(text, patch = {}, project = null) {
     if (!project) throw new Error("A project is required when changing a text font.");
     applyProjectFontToText(project, text, patch.fontId);
   }
-  const projectFont = projectFontForText(project, text);
+  let projectFont = projectFontForText(project, text);
   if (patch.fontWeight != null) {
     const requestedWeight = clamp(Math.round(Number(patch.fontWeight) || DEFAULT_FONT_WEIGHT), 1, 1000);
-    const weightAxis = projectFont?.variableAxes?.find((axis) => axis.tag === "wght");
-    if (projectFont && !weightAxis && requestedWeight !== projectFont.weight) {
-      throw agentFontError("FONT_FACE_MISMATCH", `${projectFont.fullName} is weight ${projectFont.weight}. Import and use the exact installed face for weight ${requestedWeight}.`);
-    }
-    text.fontWeight = weightAxis ? clamp(requestedWeight, weightAxis.min, weightAxis.max) : requestedWeight;
+    applyTextWeight(project, text, requestedWeight);
+    projectFont = projectFontForText(project, text);
   }
   if (patch.fontStyle != null) {
     const requestedStyle = patch.fontStyle === "italic" ? "italic" : "normal";

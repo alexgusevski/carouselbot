@@ -232,6 +232,44 @@ export function textFontWeight(project, text) {
     : normalizedFontWeight(font.weight, 400);
 }
 
+// Variable fonts expose a continuous range; static families expose real faces.
+export function textWeightOptions(project, text) {
+  const font = projectFontForText(project, text);
+  if (!font) return { min: 100, max: 900, weights: null };
+  const axis = font.variableAxes?.find((item) => item.tag === "wght");
+  if (axis) return { min: axis.min, max: axis.max, weights: null };
+  const weights = [...new Set((project.fonts || []).filter((item) =>
+    item.family === font.family && Boolean(item.italic) === Boolean(font.italic)
+    && !item.variableAxes?.length
+    && item.subfamily?.replace(/extralight|ultralight|extrabold|ultrabold|semibold|demibold|thin|light|regular|medium|bold|black|heavy/gi, "").trim()
+      === font.subfamily?.replace(/extralight|ultralight|extrabold|ultrabold|semibold|demibold|thin|light|regular|medium|bold|black|heavy/gi, "").trim()
+  ).map((item) => item.weight))].sort((a, b) => a - b);
+  return { min: weights[0] ?? font.weight, max: weights.at(-1) ?? font.weight, weights };
+}
+
+export function applyTextWeight(project, text, value) {
+  const options = textWeightOptions(project, text);
+  const requested = normalizedFontWeight(value);
+  const font = projectFontForText(project, text);
+  if (options.weights) {
+    if (!options.weights.includes(requested)) {
+      const error = new Error(`[FONT_FACE_MISMATCH] ${font.family} supports imported weights ${options.weights.join(", ")}. Import the requested face or a variable font for intermediate weights.`);
+      error.code = "FONT_FACE_MISMATCH";
+      throw error;
+    }
+    const match = project.fonts.find((item) => item.family === font.family
+      && Boolean(item.italic) === Boolean(font.italic) && item.weight === requested
+      && textWeightOptions({ fonts: [font, item] }, text).weights?.includes(requested));
+    applyProjectFontToText(project, text, match.id);
+  } else {
+    text.fontWeight = clamp(requested, options.min, options.max);
+    if (text.fontVariationSettings?.wght != null) {
+      text.fontVariationSettings = { ...text.fontVariationSettings, wght: text.fontWeight };
+    }
+  }
+  return text;
+}
+
 export function textFontStyle(project, text) {
   const font = projectFontForText(project, text);
   return font

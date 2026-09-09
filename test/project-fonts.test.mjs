@@ -6,6 +6,8 @@ import {
   DEFAULT_FONT_STYLE,
   DEFAULT_FONT_WEIGHT,
   applyProjectFontToText,
+  applyTextWeight,
+  textWeightOptions,
   createProjectFont,
   ensureProjectFontsLoaded,
   isTextFontAvailable,
@@ -26,6 +28,31 @@ import {
 } from "../src/project-fonts.mjs";
 
 const FONT_DATA = "data:font/otf;base64,AAECA/8=";
+
+test("weight selection switches real static faces and preserves intermediate variable weights", () => {
+  const regular = createProjectFont(localFace(), FONT_DATA, { id: "regular" });
+  const bold = createProjectFont(localFace({ weight: 700, subfamily: "Bold" }), FONT_DATA, { id: "bold" });
+  const project = { fonts: [regular, bold], slides: [] };
+  const text = { fontId: regular.id, fontWeight: 400 };
+  assert.deepEqual(textWeightOptions(project, text).weights, [400, 700]);
+  applyTextWeight(project, text, 700);
+  assert.equal(text.fontId, bold.id);
+  assert.equal(textFontWeight(project, text), 700);
+  assert.throws(() => applyTextWeight(project, text, 550), /FONT_FACE_MISMATCH/);
+  const variable = createProjectFont(localFace({ variableAxes: [{ tag: "wght", min: 100, max: 900, default: 400 }] }), FONT_DATA, { id: "variable" });
+  project.fonts.push(variable);
+  text.fontId = variable.id;
+  text.fontVariationSettings = { wght: 400 };
+  for (const weight of [550, 725]) {
+    applyTextWeight(project, text, weight);
+    normalizeProjectFonts({ ...project, slides: [{ texts: [text] }] });
+    assert.equal(textFontWeight(project, text), weight);
+    assert.match(textCanvasFont(project, text, 52), new RegExp(` ${weight} 52px `));
+    assert.equal(textFontVariationValues(project, text).wght, weight);
+  }
+  applyTextWeight(project, text, 1000);
+  assert.equal(textFontWeight(project, text), 900);
+});
 
 function localFace(overrides = {}) {
   return {

@@ -60,6 +60,7 @@ import {
 import { createLayerInteractions } from "./layer-interactions.mjs";
 import {
   applyProjectFontToText,
+  applyTextWeight,
   createProjectFont,
   ensureProjectFontsLoaded,
 } from "./project-fonts.mjs";
@@ -985,6 +986,33 @@ export function createEditorUI({ projects, actions, output }) {
       ensureBoxedTextContrast(text);
     }, { fit: true });
     bindTextButtons("[data-text-align]", (text, button) => { text.align = button.dataset.textAlign; });
+
+    const weightNumber = app.querySelector("#font-weight-number");
+    const weightRange = app.querySelector("#font-weight");
+    const setWeight = async (value) => {
+      if (value === "" || !Number.isFinite(Number(value))) return;
+      const project = activeProject();
+      const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
+      const selection = selectedLayerKeys().join("|");
+      try {
+        const candidates = targets.map((item) => applyTextWeight(project, { ...item }, value));
+        await ensureProjectFontsLoaded(project, candidates);
+        if (activeProject() !== project || selectedLayerKeys().join("|") !== selection) return;
+        recordHistory(project);
+        targets.forEach((item, index) => {
+          Object.assign(item, candidates[index]);
+          updateTextBox(item);
+          ensureTextFits(item, { force: true });
+        });
+        refreshSelection();
+        scheduleSave();
+      } catch (error) {
+        window.alert(error.message);
+      }
+    };
+    weightNumber?.addEventListener("change", () => void setWeight(weightNumber.value));
+    weightRange?.addEventListener("input", () => { if (weightNumber) weightNumber.value = weightRange.value; });
+    weightRange?.addEventListener("change", () => void setWeight(weightRange.value));
 
     const range = app.querySelector("#font-size");
     const number = app.querySelector("#font-size-number");
