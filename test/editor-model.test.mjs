@@ -498,3 +498,13 @@ test("folder previews represent direct children without flattening subfolder pro
   assert.equal(empty[0].path, "/Client/Empty");
   assert.deepEqual(empty[0].projects, []);
 });
+
+
+test("folder previews sort by last change regardless of creation order", () => {
+  const projects = [
+    { id: "newer", folderPath: "/Client/Account", createdAt: 20, updatedAt: 20 },
+    { id: "older-edited", folderPath: "/Client/Account", createdAt: 10, updatedAt: 30 },
+  ];
+  assert.deepEqual(folderPreviewItems(projects, "/Client/Account").map(item => item.project.id), ["older-edited", "newer"]);
+  assert.deepEqual(folderPreviewItems(projects, "/Client")[0].projects.map(project => project.id), ["older-edited", "newer"]);
+});
