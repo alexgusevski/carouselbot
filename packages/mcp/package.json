@@ -1,6 +1,6 @@
 {
   "name": "carouselbot",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Local-first MCP companion for the hosted CarouselBot editor",
   "type": "module",
   "license": "MIT",

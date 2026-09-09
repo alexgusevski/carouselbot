@@ -41,7 +41,7 @@ const textFields = {
   color: color.optional(), background: z.enum(["white", "black"]).optional(),
   backgroundShape: z.enum(["lines", "full"]).optional(), align: z.enum(["left", "center", "right"]).optional(),
   fontId,
-  fontWeight: z.number().int().min(1).max(1000).optional(),
+  fontWeight: z.number().int().min(1).max(1000).optional().describe("Numeric weight, including intermediate values such as 550 or 725. Variable fonts clamp to their wght range; built-in TikTok Sans supports 100–900. Static fonts automatically select a matching imported family face; unavailable weights return FONT_FACE_MISMATCH. Changing body text does not change separate title layers."),
   fontStyle: z.enum(["normal", "italic"]).optional(),
   fontVariationSettings: z.record(z.string().regex(/^[A-Za-z0-9]{4}$/), z.number()).optional()
     .describe("Variable-font axis settings. Only wght currently has guaranteed DOM, fitting, and exported-canvas parity; preserve but do not newly apply other axes."),

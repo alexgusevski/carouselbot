@@ -494,6 +494,24 @@ try {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "speed limit",
     x: 0.1, y: 0.3, width: 0.8, height: 0.16, size: 104, style: "plain", align: "center", color: "#FFFFFF",
   })).structuredContent;
+  const weightRenders = [];
+  for (const fontWeight of [550, 725]) {
+    await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId,
+      updates: [{ id: fontProbe.createdTextId, fontWeight }] });
+    const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+    if (geometry.weight !== String(fontWeight)) throw new Error(`DOM ignored weight ${fontWeight}: ${JSON.stringify(geometry)}`);
+    const rendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    weightRenders.push(rendered.content.find((item) => item.type === "image").data);
+  }
+  const weightPixels = await renderedPixelDifference(cdp, ...weightRenders);
+  if (weightPixels.changedPixels < 100) throw new Error(`Intermediate weights produced identical pixels: ${JSON.stringify(weightPixels)}`);
+  await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => evaluate(cdp, `document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Weight probe did not reconnect.");
+  const restoredWeight = await waitFor(() => textGlyphGeometry(cdp, fontProbe.createdTextId), "Weight probe did not repaint after reload.");
+  if (restoredWeight.weight !== "725") throw new Error(`Weight did not persist: ${JSON.stringify(restoredWeight)}`);
+  await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId,
+    updates: [{ id: fontProbe.createdTextId, fontWeight: 500 }] });
   let fontPermissionError = null;
   try {
     await tool("list_local_fonts", { query: "Didot", limit: 20, sort: "alphabetical" });

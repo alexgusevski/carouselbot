@@ -881,6 +881,15 @@ try {
       font.value = ''; font.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 50));
       assert(selected().every((text) => !text.fontId), 'Shared default font must apply to all texts');
+      for (const weight of [550, 725]) {
+        const control = document.querySelector('#font-weight-number');
+        assert(control && control.min === '100' && control.max === '900', 'Variable weight control must expose the supported range');
+        control.value = String(weight);
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        assert(selected().every((text) => text.fontWeight === weight), 'Intermediate weight must apply to all selected text layers');
+        for (const id of [a, b]) assert(box(id).style.getPropertyValue('--text-font-weight') === String(weight), 'DOM must paint the selected numeric weight');
+      }
       const before = selected();
       for (const id of [a, b]) assert(getComputedStyle(box(id).querySelector('[data-corner="se"]')).display !== 'none', 'Each selected layer needs resize handles');
       box(a).querySelector('[data-corner="se"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 303, clientX: 100, clientY: 100 }));

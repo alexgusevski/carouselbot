@@ -55,6 +55,7 @@ import {
   textFontStyle,
   textFontVariationCss,
   textFontWeight,
+  textWeightOptions,
 } from "./project-fonts.mjs";
 
 export function formatDate(timestamp) {
@@ -481,6 +482,12 @@ export function renderInspector() {
               <option value="__add_local_font__">Add font from Mac…</option>
             </select>
             ${text.fontId && !isTextFontAvailable(activeProject(), text) ? `<p class="font-warning">${escapeHtml(textFontLabel(activeProject(), text))} is unavailable on this device.</p>` : ""}
+          </div>
+          <div class="control-group">
+            <label class="control-label" for="font-weight-number">Weight</label>
+            ${textWeightOptions(activeProject(), text).weights
+              ? `<select id="font-weight-number" class="font-select" aria-label="Font weight">${textWeightOptions(activeProject(), text).weights.map((weight) => `<option value="${weight}" ${weight === textFontWeight(activeProject(), text) ? "selected" : ""}>${weight}</option>`).join("")}</select><small>Import another face to add more weights.</small>`
+              : `<div class="range-wrap"><input id="font-weight" type="range" min="${textWeightOptions(activeProject(), text).min}" max="${textWeightOptions(activeProject(), text).max}" step="1" value="${textFontWeight(activeProject(), text)}" aria-label="Font weight slider" /><input id="font-weight-number" class="number-input" type="number" min="${textWeightOptions(activeProject(), text).min}" max="${textWeightOptions(activeProject(), text).max}" step="1" value="${textFontWeight(activeProject(), text)}" aria-label="Font weight" /></div>`}
           </div>
           <div class="control-group">
             <div class="control-label">Style</div>
