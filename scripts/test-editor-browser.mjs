@@ -1800,6 +1800,15 @@ try {
   const folderCreation = await evaluate(cdp, `(() => {
     const trigger = document.querySelector('[data-action="new-folder"]');
     const projectButton = document.querySelector('.new-project-action');
+    const projectIcon = projectButton.querySelector('svg');
+    const folderIcon = trigger.querySelector('svg');
+    if (!projectIcon || projectButton.textContent.includes('⊕') || projectIcon.querySelector('circle')) throw new Error('New project must use a plain plus icon');
+    for (const property of ['width', 'height']) {
+      if (getComputedStyle(projectIcon)[property] !== getComputedStyle(folderIcon)[property]) throw new Error('Creation icons must have matching ' + property);
+    }
+    for (const property of ['fontSize', 'fontWeight']) {
+      if (getComputedStyle(projectButton)[property] !== getComputedStyle(trigger)[property]) throw new Error('Creation labels must have matching ' + property);
+    }
     const ratio = projectButton.offsetHeight / trigger.offsetHeight;
     for (const method of ['cancel', 'close', 'outside', 'escape']) {
       trigger.click();
@@ -1887,6 +1896,15 @@ try {
     || nativeFolderCard.padding !== 8
     || nativeFolderCard.slotRadii.some((radius) => radius !== 7)
   ) throw new Error(`Folder card metadata or preview styling was incorrect: ${JSON.stringify(nativeFolderCard)}`);
+  await evaluate(cdp, `(() => {
+    const card = document.querySelector('.folder-card[data-folder-path="/native-folder"]');
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 100, clientY: 200 }));
+    const action = [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent === 'Move projects out and delete folder…');
+    if (!action?.querySelector('svg path[d="M4 7h16"]')) throw new Error('Folder removal must explain deletion and show a trash icon');
+    action.click();
+    if (document.querySelector('#unfile-folder-title')?.textContent !== 'Move projects out and delete folder?' || !document.querySelector('#unfile-folder-description')?.textContent.includes('the folder will be deleted')) throw new Error('Folder confirmation must explain deletion');
+    document.querySelector('[data-action="cancel-folder-dialog"]').click();
+  })()`);
   await waitFor(
     () => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/native-folder"] [data-project-cover-id="${folderUiProject.projectId}"] img[data-composite-cover="true"]'))`),
     "The folder card did not compose the first slide into its mosaic.",
