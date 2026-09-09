@@ -1942,12 +1942,27 @@ try {
     () => evaluate(cdp, `location.pathname === '/folders/native-folder' && Boolean(document.querySelector('.folder-dashboard-title'))`),
     "The slide sidebar link did not return to the folder.",
   );
+  // Creation order must not win over edits, including after a persisted reload.
+  const newerFolderProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Newer folder project', folderPath: '/native-folder' })`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-card')?.dataset.projectId === '${newerFolderProject.projectId}'`),
+    "A newly created folder project should appear first.",
+  );
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.update', projectId: '${folderUiProject.projectId}', name: 'Folder UI project' })`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-card')?.dataset.projectId === '${folderUiProject.projectId}'`),
+    "Editing an older folder project must move it ahead of a newer project.",
+  );
   await evaluate(cdp, "window.__carouselBotFolderReloadSentinel = true");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(
     () => evaluate(cdp, `document.readyState === 'complete' && !window.__carouselBotFolderReloadSentinel && window.carouselBotAgent && location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'native-folder' && [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
     "The folder deep route did not survive a reload.",
   );
+  if (!await evaluate(cdp, `document.querySelector('.project-card')?.dataset.projectId === '${folderUiProject.projectId}'`)) {
+    throw new Error("Folder projects must retain last-changed order after reload.");
+  }
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: '${newerFolderProject.projectId}' })`);
   await evaluate(cdp, `(() => {
     const card = [...document.querySelectorAll('.project-card')].find((item) => item.querySelector('.project-meta strong')?.textContent === 'Folder UI project');
     const rect = card.getBoundingClientRect();
