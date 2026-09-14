@@ -619,6 +619,7 @@ async function executeCarouselBotAgentOperation(operation) {
     const media = await agentMedia(operation.mediaId);
     return agentCommit(project, slide, () => {
       if (operation.name != null) slide.name = String(operation.name || "Slide").slice(0, 160);
+      if (media || operation.backgroundColor) { delete slide.videoData; delete slide.duration; }
       if (operation.aspectRatio != null) {
         const sourceCanvas = slideCanvasDimensions(project, slide);
         const solidBackgroundColor = canonicalSolidBackgroundColor(slide, project);

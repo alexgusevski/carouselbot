@@ -1,4 +1,5 @@
-import { safeFilename, scaleCanvasDimensions, slideCanvasDimensions } from "./editor-model.mjs";
+import { safeFilename, slideVideoDuration, scaleCanvasDimensions, slideCanvasDimensions } from "./editor-model.mjs";
+import { renderSlideMp4 } from "./video-export.mjs";
 import {
   state,
   app,
@@ -29,6 +30,7 @@ export function createEditorOutput({ toast }) {
     else activeThumbnailRenders = Math.max(0, activeThumbnailRenders - 1);
   }
 
+  let videoExportBusy = false;
   function projectCoverSignature(project) {
     const slide = project.slides[0];
     return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide, project)}` : "";
@@ -310,13 +312,20 @@ export function createEditorOutput({ toast }) {
 
   async function renderSlideBlob(slide = activeSlide(), project = activeProject()) {
     if (!slide) return null;
+    if (slideVideoDuration(slide, project)) {
+      if (videoExportBusy) throw new Error("A video export is already running.");
+      videoExportBusy = true;
+      const snapshot = structuredClone(project);
+      try { return await renderSlideMp4(snapshot.slides.find((item) => item.id === slide.id), snapshot); }
+      finally { videoExportBusy = false; }
+    }
     const canvas = await renderSlideCanvas(slide, undefined, undefined, project);
     return new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
   }
 
   function slideExportName(slide = activeSlide(), index = null) {
     const order = index == null ? "" : `${String(index + 1).padStart(2, "0")}-`;
-    return `${order}${safeFilename(activeProject().name)}-${safeFilename(slide.name)}.png`;
+    return `${order}${safeFilename(activeProject().name)}-${safeFilename(slide.name)}.${slideVideoDuration(slide, activeProject()) ? "mp4" : "png"}`;
   }
 
   async function exportActiveSlide() {
@@ -329,18 +338,18 @@ export function createEditorOutput({ toast }) {
       exportButton.textContent = "Rendering…";
     }
     try {
-      const blob = await renderSlideBlob();
+      const blob = await renderSlideBlob(slide);
       if (!blob) throw new Error("Could not create PNG");
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = slideExportName();
+      anchor.download = slideExportName(slide);
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast("PNG downloaded at full resolution");
+      toast(`${slideVideoDuration(slide, activeProject()) ? "MP4" : "PNG"} downloaded at full resolution`);
     } catch (error) {
       console.error(error);
-      toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "The image couldn’t be downloaded.");
+      toast(error.message?.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") || "The slide couldn’t be downloaded.");
     } finally {
       if (exportButton) {
         exportButton.disabled = false;
@@ -368,13 +377,13 @@ export function createEditorOutput({ toast }) {
         try {
           const anchor = document.createElement("a");
           anchor.href = url;
-          anchor.download = `${safeFilename(project.name)}-slide-${String(index + 1).padStart(digits, "0")}.png`;
+          anchor.download = `${safeFilename(project.name)}-slide-${String(index + 1).padStart(digits, "0")}.${slideVideoDuration(slide, project) ? "mp4" : "png"}`;
           anchor.click();
         } finally {
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
       }
-      toast("All PNG downloads started in slide order");
+      toast("All downloads started in slide order");
     } catch (error) {
       console.error(error);
       toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Couldn’t download all slides. Please try again.");
@@ -397,9 +406,9 @@ export function createEditorOutput({ toast }) {
       shareButton.textContent = "Preparing…";
     }
     try {
-      const blob = await renderSlideBlob();
+      const blob = await renderSlideBlob(slide);
       if (!blob) throw new Error("Could not create PNG");
-      const file = new File([blob], slideExportName(), { type: "image/png" });
+      const file = new File([blob], slideExportName(slide), { type: blob.type });
       if (navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file], title: activeProject().name });
       } else if (navigator.share) {
@@ -410,7 +419,7 @@ export function createEditorOutput({ toast }) {
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
       } else {
-        toast("Sharing isn’t available in this browser. Use Download PNG.");
+        toast("Sharing isn’t available in this browser. Use Download.");
       }
     } catch (error) {
       if (error?.name === "AbortError") return;
@@ -442,7 +451,7 @@ export function createEditorOutput({ toast }) {
           if (shareButton) shareButton.textContent = `Preparing ${index + 1}/${project.slides.length}…`;
           const blob = await renderSlideBlob(slide, project);
           if (!blob) throw new Error(`Could not create PNG for slide ${index + 1}`);
-          files.push(new File([blob], slideExportName(slide, index), { type: "image/png" }));
+          files.push(new File([blob], slideExportName(slide, index), { type: blob.type }));
         }
         state.shareAllCache = {
           projectId: project.id,
@@ -459,7 +468,7 @@ export function createEditorOutput({ toast }) {
         state.shareAllCache = null;
       } else {
         state.shareAllCache = null;
-        toast("This browser can’t share multiple images at once.");
+        toast("This browser can’t share multiple files at once.");
       }
     } catch (error) {
       if (error?.name === "AbortError") return;

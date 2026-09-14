@@ -1,3 +1,5 @@
+let disposeVideoPlayback = () => {};
+import { mountVideoPlayback } from "./video-playback.mjs";
 import {
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
@@ -88,6 +90,7 @@ export function createEditorUI({ projects, actions, output }) {
     addDroppedAssetsToSlide,
     addOverlayFromAsset,
     handleAssetUpload,
+    addVideoSample,
     deleteProjectAsset,
     deleteSelectedOverlay,
     deleteSelectedLayers,
@@ -498,6 +501,7 @@ export function createEditorUI({ projects, actions, output }) {
   }
 
   function renderDashboard() {
+    disposeVideoPlayback();
     hideAssetPreview();
     state.activeProjectId = null;
     state.activeSlideId = null;
@@ -654,6 +658,7 @@ export function createEditorUI({ projects, actions, output }) {
 
   function renderEditor() {
     disconnectDashboardSlideThumbnails();
+    disposeVideoPlayback();
     const project = activeProject();
     if (!project) return renderDashboard();
     document.title = `${project.name} · CarouselBot`;
@@ -676,11 +681,13 @@ export function createEditorUI({ projects, actions, output }) {
         </section>
         ${renderInspector()}
       </main>
-      <input id="photo-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
+      <input id="photo-upload" class="hidden-input" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple />
       <input id="slide-background-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" />
-      <input id="asset-upload" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif" multiple />
+      <input id="asset-upload" class="hidden-input" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple />
     `;
     bindEditorEvents();
+    app.querySelector('[data-action="video-sample"]')?.addEventListener("click", addVideoSample);
+    disposeVideoPlayback = mountVideoPlayback(app, activeSlide(), project);
     const slideList = app.querySelector(".slide-list");
     if (slideList) {
       slideList.scrollTop = state.slideRailScrollPositions.get(project.id) || 0;
@@ -1250,7 +1257,7 @@ export function createEditorUI({ projects, actions, output }) {
     const horizontalPadding = (parseFloat(innerStyle.paddingLeft) || 0) + (parseFloat(innerStyle.paddingRight) || 0);
     const verticalPadding = (parseFloat(innerStyle.paddingTop) || 0) + (parseFloat(innerStyle.paddingBottom) || 0);
     const availableWidth = Math.max(1, workspace.clientWidth - horizontalPadding);
-    const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding);
+    const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding - (app.querySelector(".video-controls") ? 112 : 0));
     const actions = inner.querySelector(".canvas-actions");
     const composition = inner.querySelector(".canvas-composition");
     const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;

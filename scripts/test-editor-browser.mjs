@@ -1,3 +1,4 @@
+import { verifyVideoSlides } from "./video-browser-scenario.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -2037,6 +2038,8 @@ try {
     })`),
     "Confirming native project deletion did not remove it from IndexedDB and the dashboard.",
   );
+
+  await verifyVideoSlides({ cdp, evaluate, waitFor, outputDirectory: process.env.CAROUSELBOT_VIDEO_OUTPUT });
 
   const failedResources = await evaluate(cdp, `performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/') && entry.responseStatus >= 400).map((entry) => ({ name: entry.name, status: entry.responseStatus }))`);
   if (failedResources.length) throw new Error(`Some source modules failed to load: ${JSON.stringify(failedResources)}`);

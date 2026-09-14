@@ -796,3 +796,12 @@ export function isImageFile(file) {
   if (!file) return false;
   return file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name || "");
 }
+
+export function isVideoFile(file) {
+  return Boolean(file && (file.type?.startsWith("video/") || /\.(mp4|mov|m4v|webm)$/i.test(file.name || "")));
+}
+
+export function slideVideoDuration(slide, project) {
+  const media = [slide, ...(slide?.overlays || []).map((layer) => project?.assets?.find((asset) => asset.id === layer.assetId))];
+  return Math.max(0, ...media.filter((asset) => asset?.videoData).map((asset) => Number.isFinite(asset.duration) && asset.duration > 0 ? asset.duration : 0));
+}
