@@ -209,8 +209,9 @@ export function renderAssetRail(project) {
       <div class="rail-heading"><h2>Assets</h2><span>${assets.length}</span></div>
       <div class="asset-grid" aria-label="Uploaded assets">
         ${assets.length ? assets.map((asset) => `
-          <div class="asset-item" tabindex="0" aria-label="Preview ${escapeHtml(asset.name)}" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)}">
+          <div class="asset-item" tabindex="0" aria-label="${asset.videoData ? "Play video" : "Preview"} ${escapeHtml(asset.name)}" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)}">
             <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
+            ${asset.videoData ? `<span class="asset-video-badge" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z"/></svg><span>${Math.round(asset.duration)}s</span></span>` : ""}
           </div>
         `).join("") : `<p class="asset-empty">Upload photos, videos, logos, or stickers. Drag them onto a photo to place them.</p>`}
       </div>
@@ -289,9 +290,22 @@ export function renderStage(slide, project = activeProject()) {
         </span>
       </div>
       ${renderCanvasActions(project, slide)}
-      ${slideVideoDuration(slide, activeProject()) ? `<div class="video-controls" role="group" aria-label="Video playback"><button type="button" data-video-play aria-label="Pause video">❚❚</button><div class="video-timeline"><input type="range" data-video-time aria-label="Video timeline" min="0" max="${slideVideoDuration(slide, activeProject())}" step="0.01" value="0"/><div class="video-ticks">${Array.from({length: 6}, (_, i) => `<span>${(slideVideoDuration(slide, activeProject()) * i / 5).toFixed(1)}s</span>`).join("")}</div></div><output data-video-clock></output></div>` : ""}
+      ${slideVideoDuration(slide, project) ? renderVideoControls(slideVideoDuration(slide, project)) : ""}
     </div>
   `;
+}
+
+function renderVideoControls(duration) {
+  return `<div class="video-controls" role="group" aria-label="Video playback">
+    <button type="button" data-video-play aria-label="Pause video" title="Play / pause (Space)" aria-pressed="true">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path class="video-play-icon" d="M6 3.5v13l10-6.5z"/><path class="video-pause-icon" d="M5 4h3v12H5zm7 0h3v12h-3z"/></svg>
+    </button>
+    <div class="video-timeline">
+      <input type="range" data-video-time aria-label="Video timeline" min="0" max="${duration}" step="0.01" value="0"/>
+      <div class="video-ticks" aria-hidden="true">${Array.from({ length: 5 }, (_, i) => `<span>${Number((duration * i / 4).toFixed(1))}s</span>`).join("")}</div>
+    </div>
+    <output data-video-clock aria-live="off"></output>
+  </div>`;
 }
 
 export function renderCanvasActions(project = activeProject(), slide = activeSlide()) {

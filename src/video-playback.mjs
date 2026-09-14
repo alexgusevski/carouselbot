@@ -25,16 +25,27 @@ export function mountVideoPlayback(root, slide, project) {
     }
     range.value = time;
     clock.textContent = `${time.toFixed(1)} / ${duration.toFixed(1)}s`;
-    button.textContent = playing ? "❚❚" : "▶";
+    range.style.setProperty("--video-progress", `${time / duration * 100}%`);
     button.setAttribute("aria-label", playing ? "Pause video" : "Play video");
     button.setAttribute("aria-pressed", String(playing));
   };
   const toggle = () => { playing = !playing; last = performance.now(); sync(); };
+  // Capture Space before focused assets/buttons can activate themselves.
+  let spaceHandled = false;
   const keydown = (event) => {
-    if (event.code !== "Space" || event.repeat || event.metaKey || event.ctrlKey || event.altKey
-      || event.target.closest("input:not([type=range]), textarea, select, button, [contenteditable=true]")) return;
+    if ((event.code !== "Space" && event.key !== " ") || event.metaKey || event.ctrlKey || event.altKey
+      || event.target.isContentEditable
+      || event.target.closest('input:not([type="range"]), textarea, select, [role="textbox"], dialog[open]')) return;
     event.preventDefault();
-    toggle();
+    event.stopImmediatePropagation();
+    spaceHandled = true;
+    if (!event.repeat) toggle();
+  };
+  const keyup = (event) => {
+    if (!spaceHandled || (event.code !== "Space" && event.key !== " ")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    spaceHandled = false;
   };
   button.onclick = toggle;
   range.oninput = () => { time = Number(range.value); last = performance.now(); sync(true); };
@@ -44,13 +55,15 @@ export function mountVideoPlayback(root, slide, project) {
     sync();
     frame = requestAnimationFrame(tick);
   };
-  document.addEventListener("keydown", keydown);
+  document.addEventListener("keydown", keydown, true);
+  document.addEventListener("keyup", keyup, true);
   frame = requestAnimationFrame(tick);
   sync();
   return () => {
     previous = { slideId: slide.id, playing, time };
     cancelAnimationFrame(frame);
-    document.removeEventListener("keydown", keydown);
+    document.removeEventListener("keydown", keydown, true);
+    document.removeEventListener("keyup", keyup, true);
     videos.forEach(releaseVideo);
   };
 }
