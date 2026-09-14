@@ -81,27 +81,27 @@ export async function renderSlideCanvas(slide, width, height, project = activePr
   return canvas;
 }
 
-export async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject()) {
+export async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject(), media = null) {
   for (const { kind, item } of slideItems(slide)) {
-    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project, slide);
+    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project, slide, media);
     else drawTextLayer(context, item, canvasWidth, canvasHeight, project);
   }
 }
 
-export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject(), slide = null) {
+export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject(), slide = null, media = null) {
   const asset = project?.assets?.find((item) => item.id === overlay.assetId);
   if (!asset) return;
-  const image = await loadImage(asset.imageData);
+  const image = media?.get(asset.id) || await loadImage(asset.imageData);
   const metrics = getOverlayMetrics(overlay, asset, { project, slide });
   const width = metrics.width * canvasWidth;
   const height = metrics.height * canvasHeight;
   const x = overlay.x * canvasWidth;
   const y = overlay.y * canvasHeight;
   const crop = overlayCrop(overlay);
-  const sx = crop.x * image.naturalWidth;
-  const sy = crop.y * image.naturalHeight;
-  const sw = Math.max(1, crop.w * image.naturalWidth);
-  const sh = Math.max(1, crop.h * image.naturalHeight);
+  const sx = crop.x * (image.videoWidth || image.naturalWidth);
+  const sy = crop.y * (image.videoHeight || image.naturalHeight);
+  const sw = Math.max(1, crop.w * (image.videoWidth || image.naturalWidth));
+  const sh = Math.max(1, crop.h * (image.videoHeight || image.naturalHeight));
   context.save();
   context.translate(x + width / 2, y + height / 2);
   context.rotate(((overlay.rotation || 0) * Math.PI) / 180);

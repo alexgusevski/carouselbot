@@ -1,3 +1,6 @@
+import { createSampleClip } from "./video-sample.mjs";
+import { isVideoFile } from "./editor-model.mjs";
+import { readVideoAsset } from "./video-media.mjs";
 import {
   DEFAULT_OUTLINE_WIDTH,
   CLIPBOARD_LAYER_TYPE,
@@ -217,6 +220,8 @@ export function createEditorActions({
       const imageData = await fileToDataUrl(file);
       const dimensions = await getImageDimensions(imageData);
       recordHistory();
+      delete slide.videoData;
+      delete slide.duration;
       slide.imageData = imageData;
       slide.width = dimensions.width;
       slide.height = dimensions.height;
@@ -309,6 +314,7 @@ export function createEditorActions({
 
   async function addDroppedAssetsToSlide(files, event) {
     const slide = activeSlide();
+    if (!slide && files.some(isVideoFile)) return addSlidesFromFiles(files);
     if (!slide) {
       toast("Create a slide before adding an asset to the canvas.");
       return;
@@ -381,6 +387,47 @@ export function createEditorActions({
     return overlay;
   }
 
+  async function addVideoSample() {
+    const project = activeProject();
+    if (!project) return;
+    const button = app.querySelector('[data-action="video-sample"]');
+    if (button) { button.disabled = true; button.textContent = "Creating 10s demo…"; }
+    try {
+      const blob = await createSampleClip();
+      const videoData = await fileToDataUrl(blob);
+      const media = await readVideoAsset(videoData);
+      const canvas = document.createElement("canvas");
+      canvas.width = 1080; canvas.height = 1920;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#eeeae0"; context.fillRect(0, 0, 1080, 1920);
+      if (activeProject() !== project) return;
+      recordHistory();
+      const asset = { id: uid(), name: "Focus app walkthrough · 10s", ...media };
+      project.assets.push(asset);
+      const text = (value, x, y, width, height, size, color) => ({
+        id: uid(), text: value, x, y, width, height, size, color,
+        style: "plain", align: "left", rotation: 0, z: 2,
+      });
+      const slide = { id: uid(), name: "Prompt to app · video demo", aspectRatio: "9:16", imageData: canvas.toDataURL(),
+        width: 1080, height: 1920, imageScale: 1, imageX: 0, imageY: 0,
+        overlays: [{ id: uid(), assetId: asset.id, x: 0.51, y: 0.29, width: 0.44, rotation: 0, z: 1 }],
+        texts: [
+          text("FROM PROMPT TO PRODUCT", 0.06, 0.10, 0.88, 0.05, 28, "#53604b"),
+          text("Small habits.\nMade tangible.", 0.06, 0.16, 0.88, 0.12, 86, "#203929"),
+          text("THE PROMPT", 0.06, 0.34, 0.40, 0.05, 26, "#53604b"),
+          text("Build a calm\nhabit tracker.\n\nThree daily rituals.\nOne clear view\nof your progress.", 0.06, 0.40, 0.40, 0.26, 46, "#203929"),
+          text("10 SECONDS · APP WALKTHROUGH", 0.06, 0.86, 0.88, 0.05, 26, "#53604b"),
+        ] };
+      project.slides.push(slide);
+      state.activeSlideId = slide.id;
+      clearLayerSelection();
+      scheduleSave();
+      renderEditor();
+      toast("Video sample added — all text and video layers are editable.");
+    } catch (error) { toast(error.message); }
+    finally { if (button) { button.disabled = false; button.textContent = "Try video sample"; } }
+  }
+
   async function handleAssetUpload(event) {
     const files = [...event.target.files];
     event.target.value = "";
@@ -398,15 +445,16 @@ export function createEditorActions({
     try {
       for (const file of files) {
         try {
-          if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|svg|avif)$/i.test(file.name)) continue;
+          if (!isImageFile(file) && !isVideoFile(file)) continue;
           const imageData = await fileToDataUrl(file);
-          const dimensions = await getImageDimensions(imageData);
+          const dimensions = isVideoFile(file) ? await readVideoAsset(imageData) : await getImageDimensions(imageData);
           project.assets.push({
             id: uid(),
             name: file.name.replace(/\.[^.]+$/, "") || "Asset",
             imageData,
             width: dimensions.width,
             height: dimensions.height,
+            ...(dimensions.videoData ? dimensions : {}),
           });
           added += 1;
         } catch (error) {
@@ -414,7 +462,7 @@ export function createEditorActions({
         }
       }
       if (!added) {
-        toast("Those files aren’t usable images.");
+        toast("Those files aren’t usable images or videos.");
         renderEditor();
         return;
       }
@@ -472,9 +520,9 @@ export function createEditorActions({
   }
 
   async function addSlidesFromFiles(files, { activateFirstNew = false } = {}) {
-    const imageFiles = files.filter(isImageFile);
+    const imageFiles = files.filter((file) => isImageFile(file) || isVideoFile(file));
     if (!imageFiles.length) {
-      if (files.length) toast("Drop an image file here.");
+      if (files.length) toast("Drop an image or video file here.");
       return;
     }
     const project = activeProject();
@@ -490,7 +538,7 @@ export function createEditorActions({
       for (const file of imageFiles) {
         try {
           const imageData = await fileToDataUrl(file);
-          const dimensions = await getImageDimensions(imageData);
+          const dimensions = isVideoFile(file) ? await readVideoAsset(imageData) : await getImageDimensions(imageData);
           const slide = {
             id: uid(),
             name: file.name.replace(/\.[^.]+$/, "") || "Slide",
@@ -498,6 +546,7 @@ export function createEditorActions({
             imageData,
             width: dimensions.width,
             height: dimensions.height,
+            ...(dimensions.videoData ? dimensions : {}),
             imageScale: 1,
             imageX: 0,
             imageY: 0,
@@ -666,24 +715,24 @@ export function createEditorActions({
 
   function clipboardImageFiles(clipboardData) {
     if (!clipboardData) return [];
-    const listed = clipboardData.files ? [...clipboardData.files].filter(isImageFile) : [];
+    const listed = clipboardData.files ? [...clipboardData.files].filter((file) => isImageFile(file) || isVideoFile(file)) : [];
     if (listed.length) return listed;
     if (!clipboardData.items) return [];
     return [...clipboardData.items]
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
-      .filter(isImageFile);
+      .filter((file) => isImageFile(file) || isVideoFile(file));
   }
 
   function imageFilesFromTransfer(dataTransfer) {
     if (!dataTransfer) return [];
-    const listed = dataTransfer.files ? [...dataTransfer.files].filter(isImageFile) : [];
+    const listed = dataTransfer.files ? [...dataTransfer.files].filter((file) => isImageFile(file) || isVideoFile(file)) : [];
     if (listed.length) return listed;
     if (!dataTransfer.items) return [];
     return [...dataTransfer.items]
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
-      .filter(isImageFile);
+      .filter((file) => isImageFile(file) || isVideoFile(file));
   }
 
   async function createAssetFromFile(file, fallbackName = "Pasted image") {
@@ -697,13 +746,14 @@ export function createEditorActions({
       if (!existing.fingerprint) existing.fingerprint = fingerprint;
       return existing;
     }
-    const dimensions = await getImageDimensions(imageData);
+    const dimensions = isVideoFile(file) ? await readVideoAsset(imageData) : await getImageDimensions(imageData);
     const asset = {
       id: uid(),
       name: String(file.name || fallbackName).replace(/\.[^.]+$/, "") || fallbackName,
       imageData,
       width: dimensions.width,
       height: dimensions.height,
+      ...(dimensions.videoData ? dimensions : {}),
       fingerprint,
     };
     project.assets.push(asset);
@@ -722,9 +772,13 @@ export function createEditorActions({
     if (!files.length) return;
     event.preventDefault();
     state.pasteBusy = true;
-    recordHistory();
     const assets = [];
     try {
+      if (!activeSlide() && files.some(isVideoFile)) {
+        await addSlidesFromFiles(files);
+        return;
+      }
+      recordHistory();
       for (const [index, file] of files.entries()) {
         try {
           const asset = await createAssetFromFile(file, files.length > 1 ? `Pasted image ${index + 1}` : "Pasted image");
@@ -734,7 +788,7 @@ export function createEditorActions({
         }
       }
       if (!assets.length) {
-        toast("That clipboard image couldn’t be added.");
+        toast("That clipboard media couldn’t be added.");
         return;
       }
       const slide = activeSlide();
@@ -769,6 +823,7 @@ export function createEditorActions({
     addDroppedAssetsToSlide,
     addOverlayFromAsset,
     handleAssetUpload,
+    addVideoSample,
     deleteProjectAsset,
     deleteSelectedOverlay,
     deleteSelectedLayers,

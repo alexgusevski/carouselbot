@@ -128,3 +128,24 @@ Avoid committed pixel snapshots. Canvas output can vary across browser and platf
 - DOM rendering, binding, inspector, selection, or canvas interaction: `editor-ui.mjs`.
 - Cross-controller wiring or document-level startup lifecycle: `editor.mjs`.
 - Public automation command: `agent-commands.mjs`, normally backed by an existing model/controller operation.
+
+
+## Video slides
+
+Placed videos remain `overlays` backed by project assets. A video asset (or video
+background slide) adds `videoData` and a finite `duration`; `imageData` stays a
+poster image so existing thumbnails and protocol image previews remain compatible.
+All imported media is embedded in the same IndexedDB project record.
+
+`slideVideoDuration` derives video mode from placed clips and chooses the longest
+clip. `video-media.mjs` owns temporary decoding resources, `video-playback.mjs`
+owns the preview clock and its cleanup, and `video-export.mjs` records the shared
+canvas renderer to MP4 with source audio. Each clip loops to fill the slide.
+Preview is muted; exports include audio. Export requires native MP4 MediaRecorder
+support and runs in real time. Unsupported browsers get a clear error rather than
+a mislabeled WebM file. Still-image slides continue to export PNG.
+
+`video-sample.mjs` generates a local ten-second habit-app walkthrough. The Assets
+rail's “Try video sample” action creates an editable prompt-and-app composition.
+The browser smoke test covers sample creation, playback, scrubbing, video imports,
+MP4 decoding and dimensions, and IndexedDB persistence.
