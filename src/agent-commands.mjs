@@ -432,6 +432,7 @@ async function executeCarouselBotAgentOperation(operation) {
     const media = await agentMedia(operation.mediaId);
     return agentCommit(project, slide, () => {
       if (operation.name != null) slide.name = String(operation.name || "Slide").slice(0, 160);
+      if (media || operation.backgroundColor) { delete slide.videoData; delete slide.duration; }
       if (media) Object.assign(slide, { imageData: media.imageData, width: media.width, height: media.height, backgroundRevision: uid() });
       if (operation.backgroundColor) Object.assign(slide, { imageData: agentSolidBackground(operation.backgroundColor), width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT, backgroundRevision: uid() });
       if (operation.imageScale != null) slide.imageScale = clamp(Number(operation.imageScale), 1, 3);

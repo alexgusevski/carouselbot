@@ -1,3 +1,4 @@
+import { slideVideoDuration } from "./editor-model.mjs";
 import {
   DESIGN_WIDTH,
   OUTPUT_WIDTH,
@@ -110,8 +111,8 @@ export function renderHeader({ editor = false } = {}) {
             ${icon("airdrop")} <span>AirDrop all</span>
           </button>
           ${agentConnectButton}
-          <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide as PNG" title="Download PNG" ${activeSlide() ? "" : "disabled"}>
-            ${icon("download")} <span>PNG</span>
+          <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide" title="Download ${slideVideoDuration(activeSlide(), activeProject()) ? "MP4" : "PNG"}" ${activeSlide() ? "" : "disabled"}>
+            ${icon("download")} <span>${slideVideoDuration(activeSlide(), activeProject()) ? "MP4" : "PNG"}</span>
           </button>
         ` : `${agentConnectButton}<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
         <a class="icon-button github-link" href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer" aria-label="Open CarouselBot on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
@@ -186,13 +187,14 @@ export function renderAssetRail(project) {
             <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
             <button class="asset-remove" type="button" data-action="delete-asset" data-asset-id="${asset.id}" aria-label="Remove ${escapeHtml(asset.name)}">×</button>
           </div>
-        `).join("") : `<p class="asset-empty">Upload logos, stickers, or extra photos. Drag them onto a photo to place them.</p>`}
+        `).join("") : `<p class="asset-empty">Upload photos, videos, logos, or stickers. Drag them onto a photo to place them.</p>`}
       </div>
       <div class="asset-trash" data-asset-trash>
         ${icon("trash")}
         <span>Drag here to delete</span>
       </div>
       <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload-assets">${icon("plus")}<span>Upload assets</span></button></div>
+      <div class="rail-upload"><button class="button button--quiet" type="button" data-action="video-sample">Try video sample</button></div>
     </aside>
   `;
 }
@@ -217,7 +219,7 @@ export function renderStage(slide) {
         <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
           <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
           <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
-            <img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />
+            ${slide.videoData ? `<video class="stage-image" src="${slide.videoData}" muted playsinline preload="auto" data-slide-video></video>` : `<img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />`}
             ${renderTikTokOverlay()}
           </div>
           <div class="layer-stack">
@@ -234,6 +236,7 @@ export function renderStage(slide) {
         </span>
       </div>
       ${renderCanvasActions()}
+      ${slideVideoDuration(slide, activeProject()) ? `<div class="video-controls" role="group" aria-label="Video playback"><button type="button" data-video-play aria-label="Pause video">❚❚</button><div class="video-timeline"><input type="range" data-video-time aria-label="Video timeline" min="0" max="${slideVideoDuration(slide, activeProject())}" step="0.01" value="0"/><div class="video-ticks">${Array.from({length: 6}, (_, i) => `<span>${(slideVideoDuration(slide, activeProject()) * i / 5).toFixed(1)}s</span>`).join("")}</div></div><output data-video-clock></output></div>` : ""}
     </div>
   `;
 }
@@ -294,8 +297,8 @@ export function renderOverlayBox(overlay) {
       tabindex="0"
       aria-label="Photo overlay: ${escapeHtml(asset.name)}"
     >
-      <div class="overlay-image-clip overlay-image-clip--outside"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
-      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}"><img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" /></div>
+      <div class="overlay-image-clip overlay-image-clip--outside">${asset.videoData ? `<video src="${asset.videoData}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" />`}</div>
+      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}">${asset.videoData ? `<video src="${asset.videoData}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" />`}</div>
       ${cropping ? `
         <div class="crop-rect" style="left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.w * 100}%;height:${crop.h * 100}%;">
           <span class="crop-handle" data-crop="nw"></span>
@@ -640,7 +643,7 @@ export function updateOverlayBox(overlay) {
   box.style.width = `${metrics.width * 100}%`;
   box.style.height = `${metrics.height * 100}%`;
   box.style.transform = `rotate(${overlay.rotation || 0}deg)`;
-  const images = box.querySelectorAll(".overlay-image-clip img");
+  const images = box.querySelectorAll(".overlay-image-clip img, .overlay-image-clip video");
   images.forEach((image) => {
     if (cropping) {
       image.style.width = "100%";

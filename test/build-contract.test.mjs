@@ -24,6 +24,10 @@ test("every local module import resolves to a committed source file", async () =
     "main.mjs",
     "project-store.mjs",
     "slide-renderer.mjs",
+    "video-export.mjs",
+    "video-media.mjs",
+    "video-playback.mjs",
+    "video-sample.mjs",
   ]);
 
   for (const name of moduleNames) {
