@@ -4075,7 +4075,8 @@ input[type="range"]::-webkit-slider-thumb {
   background: rgba(25, 25, 25, 0.78);
 }
 
-.asset-preview-modal > img {
+.asset-preview-modal > img,
+.asset-preview-modal > video {
   display: block;
   max-width: 100%;
   max-height: 100%;
@@ -4133,29 +4134,89 @@ input[type="range"]::-webkit-slider-thumb {
 @keyframes agent-silver-cloud { 0%,100%{transform:translate(4%,-27%) rotate(-15deg) scale(.6,1.2)}26%{transform:translate(29%,10%) rotate(40deg) scale(.8,.8)}53%{transform:translate(-6%,29%) rotate(-30deg) scale(.95,.65)}79%{transform:translate(-31%,-13%) rotate(25deg) scale(.65,1.15)} }
 @media (max-width: 900px) { .agent-callout { display: none; } }
 @media (prefers-reduced-motion: reduce) { .agent-color-clouds i { animation: none; } .agent-color-clouds i:first-child { transform: translateX(-25%); } .agent-color-clouds i:nth-child(2) { transform: translateX(25%); } }
-/* Video controls stay outside the exported stage and its transform handles. */
-.canvas-composition:has(.video-controls) { position: relative; padding-bottom: 112px; }
+/* A compact transport bar, visually separate from the canvas inspector. */
+.canvas-composition:has(.video-controls) { position: relative; padding-bottom: 96px; }
 .video-controls {
   position: absolute;
   left: 50%;
+  bottom: 8px;
   transform: translateX(-50%);
-  bottom: 0;
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 16px;
-  width: min(520px, calc(100vw - 48px));
-  margin: 16px auto;
-  padding: 14px 18px;
-  border: 1px solid #ffffff26;
-  border-radius: 22px;
-  background: #202124f2;
-  color: white;
-  box-shadow: 0 8px 30px #0003;
+  gap: 14px;
+  width: min(440px, calc(100vw - 48px));
+  padding: 12px 16px;
+  border: 1px solid var(--soft-line);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 4px 16px #0000000d, 0 1px 3px #00000008;
 }
-.video-controls button { border: 0; background: transparent; color: inherit; cursor: pointer; width: 28px; font-size: 18px; }
+.video-controls button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.video-controls button:hover { background: var(--soft-line); }
+.video-controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.video-controls button svg { width: 18px; height: 18px; fill: currentColor; }
+.video-controls [aria-pressed="true"] .video-play-icon,
+.video-controls [aria-pressed="false"] .video-pause-icon { display: none; }
 .video-timeline { flex: 1; min-width: 0; }
-.video-timeline input { width: 100%; accent-color: #fff; cursor: ew-resize; }
-.video-ticks { display: flex; justify-content: space-between; font-size: 9px; color: #ccc; }
-.video-controls output { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.video-timeline input[type="range"] {
+  display: block;
+  width: 100%;
+  height: 3px;
+  margin: 5px 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--ink) var(--video-progress, 0%), var(--line) var(--video-progress, 0%));
+  cursor: pointer;
+}
+.video-timeline input[type="range"]::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 3px var(--panel);
+  cursor: pointer;
+}
+.video-timeline input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 3px var(--panel);
+  cursor: pointer;
+}
+.video-timeline input:focus-visible { outline: 2px solid var(--muted); outline-offset: 5px; }
+.video-ticks { display: flex; justify-content: space-between; font-size: 9px; line-height: 1; color: var(--muted); }
+.video-controls output { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+.asset-video-badge {
+  position: absolute;
+  bottom: 5px;
+  left: 5px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 5px;
+  border-radius: 6px;
+  background: #151515d9;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+}
+.asset-video-badge svg { width: 12px; height: 12px; fill: currentColor; }
+.asset-item:has(.asset-video-badge) { cursor: pointer; }
 .overlay-image-clip video { position: absolute; max-width: none; pointer-events: none; }

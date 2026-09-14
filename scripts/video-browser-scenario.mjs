@@ -28,6 +28,34 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
   await evaluate(cdp, `document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }))`);
   await waitFor(() => evaluate(cdp, `Number(document.querySelector('[data-video-time]').value) > 6.2`), "Space did not resume playback");
   await evaluate(cdp, `document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }))`);
+  // Space must win over the last-clicked asset and native button activation.
+  const pressSpace = async () => {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+  };
+  await evaluate(cdp, `document.querySelector('.asset-item').focus()`);
+  await pressSpace();
+  const assetSpace = await evaluate(cdp, `({ playing: document.querySelector('[data-video-play]').getAttribute('aria-pressed'), modal: Boolean(document.querySelector('.asset-preview-modal')), badge: Boolean(document.querySelector('.asset-video-badge')), cursor: getComputedStyle(document.querySelector('[data-video-time]'), '::-webkit-slider-thumb').cursor })`);
+  if (assetSpace.playing !== 'true' || assetSpace.modal || !assetSpace.badge || assetSpace.cursor !== 'pointer') throw new Error(`Asset Space or video styling regression: ${JSON.stringify(assetSpace)}`);
+  await evaluate(cdp, `document.querySelector('[data-action="export"]').focus()`);
+  await pressSpace();
+  if (!await evaluate(cdp, `document.querySelector('[data-video-play]').getAttribute('aria-pressed') === 'false' && !document.querySelector('[data-action="export"]').disabled`)) throw new Error('Space activated the focused download button');
+  const typing = await evaluate(cdp, `(() => {
+    const input = document.querySelector('.project-title-input');
+    const key = new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true, cancelable: true });
+    input.dispatchEvent(key);
+    return !key.defaultPrevented && document.querySelector('[data-video-play]').getAttribute('aria-pressed') === 'false';
+  })()`);
+  if (!typing) throw new Error('Space was intercepted in a text field');
+  await evaluate(cdp, `document.querySelector('.asset-item').click()`, { userGesture: true });
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.asset-preview-modal video')?.currentTime > 0.1)`), 'Clicking the video asset did not play its preview');
+  await pressSpace();
+  if (!await evaluate(cdp, `document.querySelector('.asset-preview-modal video').paused && document.querySelector('[data-video-play]').getAttribute('aria-pressed') === 'false'`)) throw new Error('Space in the video preview changed the slide playback');
+  await evaluate(cdp, `(() => {
+    window.__closedPreviewVideo = document.querySelector('.asset-preview-modal video');
+    document.querySelector('.asset-preview-close').click();
+  })()`);
+  await waitFor(() => evaluate(cdp, `!document.querySelector('.asset-preview-modal') && !window.__closedPreviewVideo.hasAttribute('src')`), 'Video preview did not release its decoder on close');
   await evaluate(cdp, `(() => {
     window.__videoOriginalAnchorClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {

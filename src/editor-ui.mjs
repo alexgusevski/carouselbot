@@ -1,3 +1,4 @@
+import { releaseVideo } from "./video-media.mjs";
 let disposeVideoPlayback = () => {};
 import { mountVideoPlayback } from "./video-playback.mjs";
 import {
@@ -1257,7 +1258,7 @@ export function createEditorUI({ projects, actions, output }) {
     const horizontalPadding = (parseFloat(innerStyle.paddingLeft) || 0) + (parseFloat(innerStyle.paddingRight) || 0);
     const verticalPadding = (parseFloat(innerStyle.paddingTop) || 0) + (parseFloat(innerStyle.paddingBottom) || 0);
     const availableWidth = Math.max(1, workspace.clientWidth - horizontalPadding);
-    const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding - (app.querySelector(".video-controls") ? 112 : 0));
+    const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding - (app.querySelector(".video-controls") ? 96 : 0));
     const actions = inner.querySelector(".canvas-actions");
     const composition = inner.querySelector(".canvas-composition");
     const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;
@@ -1483,9 +1484,15 @@ export function createEditorUI({ projects, actions, output }) {
     const modal = document.createElement("dialog");
     modal.className = "asset-preview-modal";
     modal.setAttribute("aria-label", `Preview ${asset.name}`);
-    const image = document.createElement("img");
-    image.src = asset.imageData;
-    image.alt = asset.name;
+    const image = document.createElement(asset.videoData ? "video" : "img");
+    image.src = asset.videoData || asset.imageData;
+    if (asset.videoData) {
+      image.controls = true;
+      image.loop = true;
+      image.playsInline = true;
+      image.setAttribute("aria-label", asset.name);
+      image.addEventListener("click", (event) => event.stopPropagation());
+    } else image.alt = asset.name;
     const close = document.createElement("button");
     close.type = "button";
     close.className = "asset-preview-close";
@@ -1495,11 +1502,30 @@ export function createEditorUI({ projects, actions, output }) {
     modal.addEventListener("click", (event) => {
       if (event.target === modal) modal.close();
     });
-    modal.addEventListener("keydown", (event) => event.stopPropagation());
-    modal.addEventListener("close", () => modal.remove(), { once: true });
+    modal.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (asset.videoData && (event.code === "Space" || event.key === " ")) {
+        event.preventDefault();
+        if (!event.repeat) {
+          if (image.paused) void image.play().catch(() => {});
+          else image.pause();
+        }
+      }
+    }, true);
+    modal.addEventListener("keyup", (event) => {
+      if (asset.videoData && (event.code === "Space" || event.key === " ")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+    modal.addEventListener("close", () => {
+      if (asset.videoData) releaseVideo(image);
+      modal.remove();
+    }, { once: true });
     modal.append(image, close);
     document.body.appendChild(modal);
     modal.showModal();
+    if (asset.videoData) void image.play().catch(() => {});
   }
 
   function showAssetPreview(src, clientX, clientY) {
