@@ -338,9 +338,13 @@ try {
   const protocol = await waitForJson("/json/protocol");
   const localPermissions = (protocol.domains.find((domain) => domain.domain === "Browser")?.types.find((type) => type.id === "PermissionType")?.enum || []).filter((value) => /local|loopback/i.test(value));
   const pages = await waitForJson("/json/list");
-  cdp = connectCdp(pages[0].webSocketDebuggerUrl);
+  // Chrome can list internal browser UI and extension targets before the tab.
+  const editorPage = pages.find((page) => page.type === "page" && page.url === "about:blank");
+  if (!editorPage) throw new Error("Chrome did not expose the blank test page.");
+  cdp = connectCdp(editorPage.webSocketDebuggerUrl);
   await cdp.ready;
   await cdp.send("Runtime.enable");
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1800, deviceScaleFactor: 1, mobile: false });
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
   await cdp.send("Page.navigate", { url: browserPageUrl });
   await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent) && Boolean(document.querySelector('[data-action=\"connect-agent\"]'))"), "Editor scripts did not load.");
@@ -709,7 +713,10 @@ try {
 
   const visible = await evaluate(cdp, `({
     title: document.querySelector('.project-title-input')?.value,
-    texts: [...document.querySelectorAll('.text-content')].map((item) => item.textContent),
+    texts: [...document.querySelectorAll('.text-content')].map((item) => {
+      const lines = [...item.querySelectorAll('.text-line')];
+      return lines.length ? lines.map((line) => line.textContent).join(' ') : item.textContent;
+    }),
     connected: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus,
     imageCount: document.querySelectorAll('.overlay-box').length
   })`);
