@@ -1,3 +1,4 @@
+import { allSlideTexts } from "./editor-model.mjs";
 import {
   DEFAULT_OUTLINE_WIDTH,
   TEXT_LINE_HEIGHT,
@@ -483,6 +484,11 @@ async function executeCarouselBotAgentOperation(operation) {
     const project = agentProject(operation.projectId);
     const actual = Number(project.revision) || 0;
     if (actual !== Number(operation.expectedRevision)) throw new Error(`Project revision changed: expected ${operation.expectedRevision}, current ${actual}. Inspect the editor and retry with current IDs and state.`);
+  }
+
+  if (operation.type === "project.copyAllTexts") {
+    const project = agentProject(operation.projectId);
+    return { projectId: project.id, text: allSlideTexts(project.slides) };
   }
 
   if (operation.type === "project.create") {

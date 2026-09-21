@@ -9,6 +9,7 @@ import {
   OUTLINE_RATIO,
   SUPPORTED_ASPECT_RATIOS,
   aspectRatioFromDimensions,
+  allSlideTexts,
   adjacentSlideId,
   applyCropValues,
   cloneProject,
@@ -508,4 +509,17 @@ test("folder previews sort by last change regardless of creation order", () => {
   ];
   assert.deepEqual(folderPreviewItems(projects, "/Client/Account").map(item => item.project.id), ["older-edited", "newer"]);
   assert.deepEqual(folderPreviewItems(projects, "/Client")[0].projects.map(project => project.id), ["older-edited", "newer"]);
+});
+
+test("all slide texts use one row per layer and one blank row between nonempty slides", () => {
+  const slides = [
+    { texts: [{ text: " First\nline " }, { text: "Second\r\n\nline" }, { text: " " }] },
+    { texts: [] }, {},
+    { texts: [{ text: "Third 🦊" }, { text: "Fourth\u2028line" }] },
+  ];
+  const before = structuredClone(slides);
+  assert.equal(allSlideTexts(slides), "First line\nSecond line\n\nThird 🦊\nFourth line");
+  assert.deepEqual(slides, before);
+  assert.equal(allSlideTexts(), "");
+  assert.equal(allSlideTexts([{ texts: [{ text: "\n" }] }]), "");
 });

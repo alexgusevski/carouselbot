@@ -711,6 +711,11 @@ try {
   ] });
   const supportingTextId = batch.structuredContent.results[0].createdTextId;
 
+  const copiedTexts = (await tool("copy_all_texts", { projectId: createdProject.projectId })).structuredContent;
+  if (copiedTexts.text !== "Built live through MCP\nClaude · Codex · Hermes · OpenCode · OpenClaw" || copiedTexts.projectId !== createdProject.projectId) {
+    throw new Error(`MCP copy all texts failed: ${JSON.stringify(copiedTexts)}`);
+  }
+
   const visible = await evaluate(cdp, `({
     title: document.querySelector('.project-title-input')?.value,
     texts: [...document.querySelectorAll('.text-content')].map((item) => {

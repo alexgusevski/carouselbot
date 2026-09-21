@@ -102,3 +102,14 @@ Browser writes use revision-checked IndexedDB transactions and cross-tab synchro
 Paths support exactly two folder levels: `/Client/Account` appears as Home → Client → Account. Use this when the user asks to organize multiple accounts for a client; do not reorganize projects without being asked. Create or move projects with `folderPath: "/Client/Account"`; the parent and subfolder appear automatically. `/Client/Account/Campaign` is rejected. `inspect_editor` includes parent folders and `parentPath`; folder project counts include descendants. Renaming a parent in the UI preserves its subfolders.
 
 `duplicate_project` copies a complete carousel into an optional destination `folderPath` in one local operation. Images, fonts, slides and editable layers are preserved with independent IDs. It returns `createdProjectId`; the source `projectId` and edit session remain unchanged. Batch two variants together with `apply_operations`, then start sessions on their new IDs to restyle them.
+
+### Copy all slide text
+
+Call `copy_all_texts` with an optional `projectId` (defaults to the active project).
+The result contains `{ projectId, text }`: one row per text layer in slide and
+text-layer order, with one blank row between slides. Line breaks inside a layer
+become spaces; empty layers and slides are skipped. This read-only tool returns
+the text without changing the system clipboard or requiring design guidance.
+The browser agent exposes the same result through
+`window.carouselBotAgent.execute({ type: "project.copyAllTexts", projectId })`.
+The floating **Copy all texts** button writes this text to the clipboard.
