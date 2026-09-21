@@ -803,3 +803,11 @@ export function slideVideoDuration(slide, project) {
   const media = [slide, ...(slide?.overlays || []).map((layer) => project?.assets?.find((asset) => asset.id === layer.assetId))];
   return Math.max(0, ...media.filter((asset) => asset?.videoData).map((asset) => Number.isFinite(asset.duration) && asset.duration > 0 ? asset.duration : 0));
 }
+
+// Keep each text layer on one row, and separate nonempty slides by one blank row.
+export function allSlideTexts(slides = []) {
+  return slides.map((slide) => (slide.texts || [])
+    .map((item) => String(item.text ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim())
+    .filter(Boolean).join("\n"))
+    .filter(Boolean).join("\n\n");
+}

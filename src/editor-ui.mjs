@@ -1,3 +1,4 @@
+import { allSlideTexts } from "./editor-model.mjs";
 import { releaseVideo } from "./video-media.mjs";
 let disposeVideoPlayback = () => {};
 import { mountVideoPlayback } from "./video-playback.mjs";
@@ -129,7 +130,7 @@ export function createEditorUI({ projects, actions, output }) {
     deleteSelectedLayers,
   });
 
-  async function copyText(value) {
+  async function copyText(value, message = `Copied ${value}`) {
     try {
       await navigator.clipboard.writeText(value);
     } catch (error) {
@@ -139,10 +140,14 @@ export function createEditorUI({ projects, actions, output }) {
       input.style.opacity = "0";
       document.body.appendChild(input);
       input.select();
-      document.execCommand("copy");
+      const copied = document.execCommand("copy");
       input.remove();
+      if (!copied) {
+        toast("Could not copy text. Please try again.");
+        return;
+      }
     }
-    toast(`Copied ${value}`);
+    toast(message);
   }
 
 
@@ -777,6 +782,12 @@ export function createEditorUI({ projects, actions, output }) {
       button.addEventListener("click", () => app.querySelector("#asset-upload").click());
     });
     app.querySelector("#asset-upload")?.addEventListener("change", handleAssetUpload);
+    app.querySelector('[data-action="copy-all-texts"]')?.addEventListener("click", () => {
+      endTextEditing();
+      const text = allSlideTexts(activeProject()?.slides);
+      if (!text) return toast("No text to copy.");
+      void copyText(text, "Copied all texts");
+    });
 
     app.querySelectorAll("[data-slide-id]").forEach((button) => {
       button.addEventListener("click", () => {

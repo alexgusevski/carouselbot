@@ -507,6 +507,36 @@ try {
     throw new Error(`A stale solid color overrode its replacement image: ${JSON.stringify(backgroundReconciliation)}`);
   }
 
+  const copyAllTexts = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const project = await agent.execute({ type: 'project.create', name: 'Copy text regression' });
+    const first = await agent.execute({ type: 'slide.add', projectId: project.projectId });
+    await agent.execute({ type: 'text.add', projectId: project.projectId, slideId: first.createdSlideId, text: 'First\\nline' });
+    await agent.execute({ type: 'text.add', projectId: project.projectId, slideId: first.createdSlideId, text: 'Second' });
+    const second = await agent.execute({ type: 'slide.add', projectId: project.projectId });
+    await agent.execute({ type: 'text.add', projectId: project.projectId, slideId: second.createdSlideId, text: 'Third' });
+    await agent.execute({ type: 'project.open', projectId: project.projectId });
+    const before = agent.inspect({ includeAllProjects: false }).project.revision;
+    const result = await agent.execute({ type: 'project.copyAllTexts', projectId: project.projectId });
+    const original = navigator.clipboard.writeText;
+    let copied = null;
+    navigator.clipboard.writeText = async (value) => { copied = value; };
+    try {
+      const button = document.querySelector('[data-action="copy-all-texts"]');
+      if (button?.textContent.trim() !== 'Copy all texts' || !button.querySelector('svg')) throw new Error('Copy toolbar button missing');
+      button.click();
+      await Promise.resolve();
+      return { text: result.text, copied, unchanged: before === agent.inspect({ includeAllProjects: false }).project.revision };
+    } finally {
+      navigator.clipboard.writeText = original;
+      await agent.execute({ type: 'project.delete', projectId: project.projectId });
+      await agent.execute({ type: 'project.open', projectId: ${JSON.stringify(projectId)} });
+    }
+  })()`);
+  if (copyAllTexts.text !== "First line\nSecond\n\nThird" || copyAllTexts.copied !== copyAllTexts.text || !copyAllTexts.unchanged) {
+    throw new Error(`Copy all texts regression: ${JSON.stringify(copyAllTexts)}`);
+  }
+
   const agentMatrix = await evaluate(cdp, `(async () => {
     const agent = window.carouselBotAgent;
     const visibleBefore = agent.inspect({ includeAllProjects: false }).activeProjectId;
