@@ -402,6 +402,7 @@ test("rotates pointer deltas into layer-local axes", () => {
 test("wraps paragraphs, explicit blank lines, and overlong words", () => {
   const context = { measureText: (value) => ({ width: [...value].length * 10 }) };
   assert.deepEqual(wrapText(context, "one two\n\nabcdef", 35), ["one", "two", "", "abc", "def"]);
+  assert.deepEqual(wrapText(context, "one abcdef", 35), ["one", "abc", "def"]);
 });
 
 test("normalizes filenames and text alignment", () => {

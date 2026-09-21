@@ -110,14 +110,20 @@ export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight
 }
 
 export function drawTextLayer(context, text, imageWidth, imageHeight, project = activeProject()) {
+  // Lay out and draw in design pixels, then scale the canvas. Measuring a
+  // smaller font can select a different optical master and add extra lines.
+  const renderScale = imageWidth / DESIGN_WIDTH;
+  context.save();
+  context.scale(renderScale, renderScale);
+  imageHeight /= renderScale;
+  imageWidth = DESIGN_WIDTH;
   const width = text.width * imageWidth;
   const height = text.height * imageHeight;
   const centerX = (text.x + text.width / 2) * imageWidth;
   const centerY = (text.y + text.height / 2) * imageHeight;
   const x = -width / 2;
   const y = -height / 2;
-  const exportScale = imageWidth / DESIGN_WIDTH;
-  const fontSize = text.size * exportScale;
+  const fontSize = text.size;
   const align = textAlignment(text);
   const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
@@ -125,7 +131,6 @@ export function drawTextLayer(context, text, imageWidth, imageHeight, project = 
   const edgePadding = perLineBox ? fontSize * TEXT_BOX_EDGE_PADDING : 0;
   const verticalPadding = fontSize * 0.1;
   const color = textColor(text);
-  context.save();
   context.translate(centerX, centerY);
   context.rotate(((text.rotation || 0) * Math.PI) / 180);
   context.font = textCanvasFont(project, text, fontSize);

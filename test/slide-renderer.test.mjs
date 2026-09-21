@@ -28,6 +28,7 @@ function recordedOutlines(size, outlineWidth = undefined, canvasWidth = 1080) {
   const outlines = [];
   const context = {
     save() {},
+    scale(value) { this.renderScale = value; },
     translate() {},
     rotate() {},
     restore() {},
@@ -35,7 +36,7 @@ function recordedOutlines(size, outlineWidth = undefined, canvasWidth = 1080) {
       return { width: String(value).length * 10 };
     },
     strokeText() {
-      outlines.push({ color: this.strokeStyle, width: this.lineWidth });
+      outlines.push({ color: this.strokeStyle, width: this.lineWidth * this.renderScale });
     },
     fillText() {},
   };

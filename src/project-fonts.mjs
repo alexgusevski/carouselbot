@@ -297,6 +297,10 @@ export function textFontVariationSettings(projectOrText, maybeText = undefined) 
 
 export function textFontVariationCss(projectOrText, maybeText = undefined) {
   const settings = textFontVariationValues(projectOrText, maybeText);
+  const text = maybeText === undefined ? projectOrText : maybeText;
+  // Keep optical sizing tied to the document size, not the zoomed CSS size.
+  // Fonts without an optical-size axis ignore this setting.
+  if (settings.opsz == null && Number.isFinite(text?.size)) settings.opsz = text.size;
   const entries = Object.entries(settings);
   return entries.length
     ? entries.map(([tag, value]) => `${quoteCssFontFamily(tag)} ${value}`).join(", ")

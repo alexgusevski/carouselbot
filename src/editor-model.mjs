@@ -676,10 +676,8 @@ export function wrapText(context, value, maxWidth) {
       const test = line ? `${line} ${word}` : word;
       if (context.measureText(test).width <= maxWidth) {
         line = test;
-      } else if (line) {
-        lines.push(line);
-        line = word;
       } else {
+        if (line) lines.push(line);
         const characters = [...word];
         let chunk = "";
         characters.forEach((character) => {

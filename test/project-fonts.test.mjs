@@ -395,3 +395,8 @@ test("re-registers a repaired face with the same project font ID", async () => {
     environment.restore();
   }
 });
+
+test("optical sizing stays at the document size and preserves explicit axes", () => {
+  assert.equal(textFontVariationCss({ size: 58 }), '\"opsz\" 58');
+  assert.equal(textFontVariationCss({ size: 58, fontVariationSettings: { opsz: 20, wght: 600 } }), '\"opsz\" 20, \"wght\" 600');
+});

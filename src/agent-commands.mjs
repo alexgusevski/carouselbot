@@ -369,7 +369,7 @@ function agentFitTextBox(text, mode = "both", project = agentProject(), slide = 
   const fullBox = text.style === "boxed" && text.backgroundShape === "full";
   const horizontalInset = perLineBox
     ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
-    : fullBox ? fontSize * 0.76 : fontSize * 0.32;
+    : fontSize * 0.32;
   const currentWidth = text.width * canvas.width;
   const longestParagraph = Math.max(...String(text.text || " ").split("\n").map((line) => context.measureText(line || " ").width));
   const fittedWidth = mode === "height"
@@ -401,17 +401,26 @@ function agentFitTextBox(text, mode = "both", project = agentProject(), slide = 
   };
 }
 
-function agentAutoFitTextBox(text, project = agentProject(), slide = null) {
+function agentAutoFitTextBox(text, project = agentProject(), slide = null, mode = "height") {
   text.width = clamp(text.width, 0.1, 1);
   text.x = clamp(text.x, 0, 1 - text.width);
   const requestedTop = text.y;
-  const result = agentFitTextBox(text, "height", project, slide);
+  const previous = { x: text.x, y: text.y, width: text.width, height: text.height };
+  const requestedSize = text.size;
+  let result = agentFitTextBox(text, mode, project, slide);
+  while (text.height > 1 && text.size > FONT_SIZE_MIN) {
+    text.size = Math.max(FONT_SIZE_MIN, text.size - 1);
+    result = agentFitTextBox(text, mode, project, slide);
+  }
   if (text.height > 1) {
-    throw new Error(`Text requires ${result.lineCount} lines and cannot fit on one slide at this width and font size. Shorten it, widen it, reduce it within the role range, or split it across slides.`);
+    throw new Error(`Text still requires ${result.lineCount} lines at the minimum font size (${FONT_SIZE_MIN}px). Shorten it, widen it, or split it across slides.`);
   }
   text.y = clamp(requestedTop, 0, 1 - text.height);
   result.fitted = { x: text.x, y: text.y, width: text.width, height: text.height };
+  result.previous = previous;
   result.automatic = true;
+  result.requestedSize = requestedSize;
+  result.size = text.size;
   return result;
 }
 
@@ -804,12 +813,9 @@ async function executeCarouselBotAgentOperation(operation) {
       };
     });
     await ensureProjectFontsLoaded(project, candidates.map(({ next }) => next));
+    const fittedTextBoxes = candidates.map(({ next }) => agentAutoFitTextBox(next, project, slide));
     const result = await agentCommit(project, slide, () => {
-      const fittedTextBoxes = candidates.map(({ text, next }) => {
-        const fitted = agentAutoFitTextBox(next, project, slide);
-        Object.assign(text, next);
-        return fitted;
-      });
+      candidates.forEach(({ text, next }) => Object.assign(text, next));
       const updated = fittedTextBoxes.map(({ id }) => id);
       if (updated.length === 1) selectOnlyLayer("text", updated[0]);
       return { updatedTextIds: updated, fittedTextBoxes };
@@ -827,13 +833,12 @@ async function executeCarouselBotAgentOperation(operation) {
       return text;
     });
     await ensureProjectFontsLoaded(project, textLayers);
-    return agentCommit(project, slide, () => ({
-      fittedTextBoxes: operation.textIds.map((id) => {
-        const text = slide.texts.find((item) => item.id === id);
-        if (!text) throw new Error(`Text layer not found: ${id}`);
-        return agentFitTextBox(text, operation.mode, project, slide);
-      }),
-    }), "AI agent fitted text boxes to their content");
+    const candidates = textLayers.map((text) => ({ ...text }));
+    const fittedTextBoxes = candidates.map((text) => agentAutoFitTextBox(text, project, slide, operation.mode || "both"));
+    return agentCommit(project, slide, () => {
+      textLayers.forEach((text, index) => Object.assign(text, candidates[index]));
+      return { fittedTextBoxes };
+    }, "AI agent fitted text boxes to their content");
   }
 
   if (operation.type === "asset.import") {
