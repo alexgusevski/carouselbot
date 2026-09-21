@@ -256,6 +256,67 @@ try {
     throw new Error(`The browser did not load the expected module graph: ${JSON.stringify(initial.sourceModules)}`);
   }
 
+  await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const { drawTextLayer } = await import('/src/slide-renderer.mjs');
+    const project = await agent.execute({ type: 'project.create', name: 'Text fitting regression', aspectRatio: '4:5' });
+    const slide = await agent.execute({ type: 'slide.add', projectId: project.projectId, aspectRatio: '4:5' });
+    const target = { projectId: project.projectId, slideId: slide.createdSlideId };
+    await agent.execute({ type: 'project.open', ...target });
+    const added = await agent.execute({ type: 'text.add', ...target,
+      text: 'Use Claude to turn your notes into one user, one problem and one useful outcome.',
+      size: 58, fontWeight: 600, width: .79, x: .1, y: .51, style: 'boxed', background: 'white' });
+    const verify = async (id, lineCount) => {
+      let expected;
+      for (const canvasZoom of [.2, .55, 1, 2]) {
+        await agent.execute({ type: 'view.update', ...target, canvasZoom });
+        const box = document.querySelector('[data-text-id="' + id + '"]');
+        const content = box.querySelector('.text-visual--inside .text-content');
+        const lines = [...content.querySelectorAll('.text-line')];
+        const bounds = box.getBoundingClientRect();
+        for (const node of [...lines, ...content.querySelectorAll('.text-background')]) {
+          const rect = node.getBoundingClientRect();
+          if (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1 || rect.left < bounds.left - 1 || rect.right > bounds.right + 1) {
+            throw new Error('Auto-fitted text exceeds its box at zoom ' + canvasZoom + ': ' + node.textContent + JSON.stringify({rect:rect.toJSON(),bounds:bounds.toJSON()}));
+          }
+        }
+        const actual = lines.map(node => node.textContent);
+        expected ||= actual;
+        if (actual.length !== lineCount || JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Preview wrapping differs from fitting');
+      }
+      const layer = agent.inspect().slide.texts.find(text => text.id === id);
+      for (const width of [180, 540, 1080]) {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        const drawn = [];
+        context.fillText = value => drawn.push(value);
+        drawTextLayer(context, layer, width, width * 1350 / 1080, { fonts: [] });
+        if (JSON.stringify(drawn) !== JSON.stringify(expected)) throw new Error('Export drops or rewraps text at width ' + width);
+      }
+    };
+    await verify(added.createdTextId, added.fittedTextBox.lineCount);
+    const updated = await agent.execute({ type: 'text.update', ...target, updates: [{ id: added.createdTextId,
+      text: 'Use Claude to turn your notes into one user, one problem and one useful outcome. Then test it.', width: .6, fontWeight: 800 }] });
+    await verify(added.createdTextId, updated.fittedTextBoxes[0].lineCount);
+    const fitted = await agent.execute({ type: 'text.fit', ...target, textIds: [added.createdTextId], mode: 'both' });
+    await verify(added.createdTextId, fitted.fittedTextBoxes[0].lineCount);
+    const longText = await agent.execute({ type: 'text.add', ...target, text: 'All of this text must remain visible. '.repeat(30), size: 180, width: .79, style: 'boxed' });
+    if (longText.fittedTextBox.size >= 180) throw new Error('Oversized text was not reduced');
+    await verify(longText.createdTextId, longText.fittedTextBox.lineCount);
+    const before = JSON.stringify(agent.inspect().slide.texts);
+    let rejected = false;
+    try {
+      await agent.execute({ type: 'text.update', ...target, updates: [
+        { id: added.createdTextId, text: 'Must not be partially applied' },
+        { id: longText.createdTextId, text: 'x\\n'.repeat(1000), width: .1 },
+      ] });
+    } catch { rejected = true; }
+    if (!rejected || JSON.stringify(agent.inspect().slide.texts) !== before) throw new Error('Unfittable batch partially mutated the slide');
+    await agent.execute({ type: 'view.update', ...target, canvasZoom: 1 });
+    await agent.execute({ type: 'project.delete', projectId: project.projectId });
+    return true;
+  })()`);
+
   await evaluate(cdp, `(() => {
     document.querySelector('[data-action="new-project"]').click();
     return true;

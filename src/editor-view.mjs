@@ -648,6 +648,8 @@ export function updateTextBox(text) {
   if (insideVisual) insideVisual.style.clipPath = layerClipCss(text.x, text.y, text.width, text.height);
   box.querySelectorAll(".text-content-wrap").forEach((contentWrap) => {
     contentWrap.style.textAlign = textAlignment(text);
+    contentWrap.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
+    contentWrap.style.paddingInline = text.style === "boxed" && text.backgroundShape !== "full" ? "0.3em" : "0.16em";
   });
   box.querySelectorAll(".text-content").forEach((content) => {
     content.style.textAlign = textAlignment(text);
@@ -668,18 +670,19 @@ export const measureCanvas = typeof document === "undefined" ? null : document.c
 export function measureFont(text) {
   const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
   const context = measureCanvas.getContext("2d");
-  context.font = textCanvasFont(activeProject(), text, fontSize);
+  // Measure at design size: optical font sizing must not change line breaks with zoom.
+  context.font = textCanvasFont(activeProject(), text, text.size);
   if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(activeProject(), text);
   return { context, fontSize };
 }
 
 export function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const boxWidth = box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width;
+  const boxWidth = DESIGN_WIDTH * text.width;
   const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
   const horizontalInset = perLineBox
-    ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
-    : fontSize * 0.32;
+    ? text.size * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
+    : text.size * 0.32;
   const maxWidth = Math.max(1, boxWidth - horizontalInset);
   return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
 }
@@ -751,7 +754,7 @@ export function paintTextContent(text, content, box) {
     const renderedWidth = lineNode.getBoundingClientRect().width;
     return renderedWidth > 0
       ? renderedWidth
-      : context.measureText(lines[index] || " ").width + padX * 2;
+      : context.measureText(lines[index] || " ").width * fontSize / text.size + padX * 2;
   });
   content.prepend(createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth));
 }
