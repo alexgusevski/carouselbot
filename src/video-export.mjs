@@ -1,3 +1,4 @@
+import { prepareExportAudio } from "./video-audio.mjs";
 import { ensureProjectFontsLoaded } from "./project-fonts.mjs";
 import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 import { slideCanvasDimensions, getImageLayout, slideVideoDuration } from "./editor-model.mjs";
@@ -15,10 +16,6 @@ export async function renderSlideMp4(slide, project) {
   let recorder;
   let timer;
   try {
-    // Create/resume synchronously with the export gesture, before loading assets.
-    audio = new AudioContext();
-    await audio.resume();
-    const destination = audio.createMediaStreamDestination();
     const assets = [...new Set((slide.overlays || []).map((layer) => layer.assetId))]
       .map((id) => project.assets.find((asset) => asset.id === id)).filter(Boolean);
     for (const asset of [slide, ...assets]) {
@@ -27,10 +24,9 @@ export async function renderSlideMp4(slide, project) {
       if (asset.videoData) {
         videos.push(source);
         source.loop = true;
-        source.muted = false;
-        audio.createMediaElementSource(source).connect(destination);
       }
     }
+    audio = await prepareExportAudio(videos, slideVideoDuration(slide, project));
     await ensureProjectFontsLoaded(project, slide.texts || []);
     const canvas = document.createElement("canvas");
     const dimensions = slideCanvasDimensions(project, slide);
@@ -49,7 +45,7 @@ export async function renderSlideMp4(slide, project) {
     };
     await draw();
     stream = canvas.captureStream(30);
-    destination.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
+    audio?.tracks.forEach((track) => stream.addTrack(track));
     recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8000000 });
     const chunks = [];
     const finished = new Promise((resolve, reject) => {
@@ -57,7 +53,7 @@ export async function renderSlideMp4(slide, project) {
       recorder.onerror = (event) => reject(event.error || new Error("MP4 encoding failed"));
       recorder.onstop = () => resolve(new Blob(chunks, { type: "video/mp4" }));
     });
-    await Promise.all(videos.map((video) => video.play()));
+    await Promise.all([...videos, ...(audio?.player ? [audio.player] : [])].map((video) => video.play()));
     recorder.start(250);
     const started = performance.now();
     const duration = slideVideoDuration(slide, project) * 1000;
@@ -77,6 +73,6 @@ export async function renderSlideMp4(slide, project) {
     if (recorder?.state === "recording") recorder.stop();
     stream?.getTracks().forEach((track) => track.stop());
     videos.forEach(releaseVideo);
-    if (audio) await audio.close();
+    audio?.release();
   }
 }

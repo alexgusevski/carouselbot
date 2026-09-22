@@ -92,8 +92,8 @@ function operationLabel(toolName) {
     create_project: "Creating a project…", duplicate_project: "Duplicating a project…", update_project: "Updating the project…", move_project: "Moving the project…", delete_project: "Deleting a project…",
     open_project: "Opening a project…", add_slide: "Adding a slide…", update_slide: "Updating a slide…",
     duplicate_slide: "Duplicating a slide…", reorder_slides: "Reordering slides…", delete_slide: "Deleting a slide…",
-    add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_font: "Adding a local font…", import_asset: "Importing a local image…",
-    update_asset: "Updating an image asset…", delete_asset: "Deleting an image asset…", add_image: "Placing an image…",
+    add_text: "Adding text…", update_text: "Updating text…", fit_text_boxes: "Fitting text boxes…", import_font: "Adding a local font…", import_asset: "Importing local media…",
+    update_asset: "Updating an image asset…", delete_asset: "Deleting an image asset…", add_image: "Placing media…",
     update_image: "Updating an image…", delete_layers: "Deleting layers…", duplicate_layers: "Duplicating layers…",
     reorder_layers: "Reordering layers…", undo: "Undoing the last edit…", redo: "Redoing the last edit…",
     set_view: "Updating the editor view…", render_slide: "Rendering the slide…",
@@ -111,11 +111,19 @@ async function prepareOperation(companion, toolName, args, editSessionId = null)
   const operation = { ...args };
   if (operation.backgroundPath) {
     const prepared = await companion.call("prepare_media", { path: absolutePath(operation.backgroundPath) });
+    if (prepared.mimeType?.startsWith("video/")) {
+      const inspected = await companion.call("browser", { toolName: "inspect_editor", operation: { type: "editor.inspect", projectId: operation.projectId, includeAllProjects: false }, editSessionId, mutating: false });
+      if (!inspected.capabilities?.videoImport) throw new Error("This editor tab predates agent video support. Reload the existing CarouselBot tab, wait for automatic reconnection, then retry.");
+    }
     operation.mediaId = prepared.mediaId;
     delete operation.backgroundPath;
   }
   if (toolName === "import_asset") {
     const prepared = await companion.call("prepare_media", { path: absolutePath(operation.path) });
+    if (prepared.mimeType?.startsWith("video/")) {
+      const inspected = await companion.call("browser", { toolName: "inspect_editor", operation: { type: "editor.inspect", projectId: operation.projectId, includeAllProjects: false }, editSessionId, mutating: false });
+      if (!inspected.capabilities?.videoImport) throw new Error("This editor tab predates agent video support. Reload the existing CarouselBot tab, wait for automatic reconnection, then retry.");
+    }
     operation.mediaId = prepared.mediaId;
     delete operation.path;
   }
@@ -129,7 +137,7 @@ async function prepareOperation(companion, toolName, args, editSessionId = null)
     add_slide: "slide.add", update_slide: "slide.update", duplicate_slide: "slide.duplicate", reorder_slides: "slide.reorder", delete_slide: "slide.delete",
     add_text: "text.add", update_text: "text.update", fit_text_boxes: "text.fit", import_font: "font.import", list_project_fonts: "font.list", import_asset: "asset.import", update_asset: "asset.update", delete_asset: "asset.delete",
     add_image: "image.add", update_image: "image.update", delete_layers: "layer.delete", duplicate_layers: "layer.duplicate", reorder_layers: "layer.reorder",
-    undo: "history.undo", redo: "history.redo", set_view: "view.update", render_slide: "slide.render", inspect_editor: "editor.inspect",
+    undo: "history.undo", redo: "history.redo", set_view: "view.update", render_slide: "slide.render", export_slide: "slide.export", set_video_playback: "video.playback", inspect_editor: "editor.inspect",
   })[toolName];
   if (!type) throw new Error(`Unsupported operation tool: ${toolName}`);
   return { type, ...operation };
@@ -204,8 +212,8 @@ export async function createCarouselBotMcpServer(companion) {
   register("move_project", "Move a project into a folder by canonical slash path (/Client or /Client/Account, maximum two levels), move it between folders, or move it back to the dashboard root with folderPath=null. Folder cards are derived from project membership, so empty folders disappear.", z.object({ ...targetProject, projectId: id, folderPath: folderPath.nullable() }).strict(), (args) => browserOperation(companion, "move_project", args), { destructiveHint: true });
   register("delete_project", "Delete a project from browser storage.", z.object({ ...targetProject, projectId: id }).strict(), (args) => browserOperation(companion, "delete_project", args), { destructiveHint: true });
 
-  register("add_slide", "Add a slide using a solid backgroundColor or local backgroundPath. A backgroundPath with no aspectRatio adopts the source image's exact reduced ratio, scales it to the 1080-pixel canvas width, and exports only that canvas. A solid slide with no aspectRatio uses the project's default; omit both background sources to use #EEEDE7. Pass aspectRatio to override either default. The browser follows it only when that project is already visible.", backgroundSourceSchema({ ...targetProject, name: z.string().max(160).optional(), index: z.number().int().min(0).optional(), aspectRatio: aspectRatio.optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional() }), (args) => browserOperation(companion, "add_slide", args), { destructiveHint: false });
-  register("update_slide", "Rename a slide, change only that slide's optional aspectRatio, replace its background with either a solid backgroundColor or local backgroundPath, or change background pan/zoom. Ratio changes preserve layer proportions and centers. The two background sources are mutually exclusive. The browser follows it only when that project is already visible.", backgroundSourceSchema({ ...targetSlide, name: z.string().max(160).optional(), aspectRatio: aspectRatio.optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional(), imageScale: z.number().min(1).max(3).optional(), imageX: unit.optional(), imageY: unit.optional() }), (args) => browserOperation(companion, "update_slide", args), { destructiveHint: true });
+  register("add_slide", "Add a slide using a solid backgroundColor or local image/video backgroundPath. Videos automatically enable video mode. A backgroundPath with no aspectRatio adopts the source image's exact reduced ratio, scales it to the 1080-pixel canvas width, and exports only that canvas. A solid slide with no aspectRatio uses the project's default; omit both background sources to use #EEEDE7. Pass aspectRatio to override either default. The browser follows it only when that project is already visible.", backgroundSourceSchema({ ...targetProject, name: z.string().max(160).optional(), index: z.number().int().min(0).optional(), aspectRatio: aspectRatio.optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional() }), (args) => browserOperation(companion, "add_slide", args), { destructiveHint: false });
+  register("update_slide", "Rename a slide, change only that slide's optional aspectRatio, replace its background with either a solid backgroundColor or local image/video backgroundPath, or change background pan/zoom. Ratio changes preserve layer proportions and centers. The two background sources are mutually exclusive. The browser follows it only when that project is already visible.", backgroundSourceSchema({ ...targetSlide, name: z.string().max(160).optional(), aspectRatio: aspectRatio.optional(), backgroundColor: color.optional(), backgroundPath: z.string().min(1).optional(), imageScale: z.number().min(1).max(3).optional(), imageX: unit.optional(), imageY: unit.optional() }), (args) => browserOperation(companion, "update_slide", args), { destructiveHint: true });
   register("duplicate_slide", "Duplicate a slide with all layers. The browser follows the copy only when that project is already visible.", z.object({ ...targetSlide, name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "duplicate_slide", args), { destructiveHint: false });
   register("reorder_slides", "Set the complete slide order using every slide ID exactly once.", z.object({ ...targetProject, slideIds: z.array(id).min(1) }).strict(), (args) => browserOperation(companion, "reorder_slides", args), { destructiveHint: true });
   register("delete_slide", "Delete one slide.", z.object({ ...targetSlide, slideId: id }).strict(), (args) => browserOperation(companion, "delete_slide", args), { destructiveHint: true });
@@ -215,11 +223,11 @@ export async function createCarouselBotMcpServer(companion) {
   register("fit_text_boxes", "Explicitly resize text boxes to their rendered content. add_text and update_text already fit height automatically; use mode=both only when you also want to shrink width.", z.object({ ...targetSlide, textIds: z.array(id).min(1).max(100), mode: z.enum(["height", "both"]).default("both") }).strict(), (args) => browserOperation(companion, "fit_text_boxes", args), { destructiveHint: true });
   register("import_font", "Add one installed font face to a project using a localFontId returned by list_local_fonts. Exact face bytes remain on this computer and duplicate imports are reused.", z.object({ ...targetProject, projectId: id, localFontId: id }).strict(), (args) => browserOperation(companion, "import_font", args), { destructiveHint: false });
 
-  register("import_asset", "Import a local image file into the active project's reusable asset library. Image bytes stay local.", z.object({ ...targetSlide, path: z.string().min(1), name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "import_asset", args), { destructiveHint: false });
+  register("import_asset", "Import a local image or video (MP4, MOV, WebM; browser-decodable codecs) into the project asset library, up to 100 MB. Bytes stay local. Returns assetId, type and video duration; use add_image to place either media type.", z.object({ ...targetSlide, path: z.string().min(1), name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "import_asset", args), { destructiveHint: false });
   register("update_asset", "Rename a reusable image asset.", z.object({ ...targetProject, assetId: id, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_asset", args), { destructiveHint: true });
   register("delete_asset", "Delete an asset and every placed instance that references it.", z.object({ ...targetProject, assetId: id }).strict(), (args) => browserOperation(companion, "delete_asset", args), { destructiveHint: true });
-  register("add_image", "Place an imported asset as an image layer and optionally set geometry, crop, rotation, and stacking.", z.object({ ...targetSlide, assetId: id, ...imageFields }).strict(), (args) => browserOperation(companion, "add_image", args), { destructiveHint: false });
-  register("update_image", "Update one or more placed image layers, including geometry, crop, rotation, and stacking.", z.object({ ...targetSlide, updates: z.array(z.object({ id, ...imageFields }).strict()).min(1).max(100) }).strict(), (args) => browserOperation(companion, "update_image", args), { destructiveHint: true });
+  register("add_image", "Place an imported image or video asset as an editable layer (videos automatically enable looping video mode) and optionally set geometry, crop, rotation, and stacking.", z.object({ ...targetSlide, assetId: id, ...imageFields }).strict(), (args) => browserOperation(companion, "add_image", args), { destructiveHint: false });
+  register("update_image", "Update one or more placed image or video layers, including geometry, crop, rotation, and stacking.", z.object({ ...targetSlide, updates: z.array(z.object({ id, ...imageFields }).strict()).min(1).max(100) }).strict(), (args) => browserOperation(companion, "update_image", args), { destructiveHint: true });
 
   register("delete_layers", "Delete text and/or image layers by ID.", z.object({ ...targetSlide, layerIds: z.array(id).min(1).max(200) }).strict(), (args) => browserOperation(companion, "delete_layers", args), { destructiveHint: true });
   register("duplicate_layers", "Duplicate text and/or image layers with an optional normalized offset.", z.object({ ...targetSlide, layerIds: z.array(id).min(1).max(100), offsetX: z.number().min(-1).max(1).optional(), offsetY: z.number().min(-1).max(1).optional() }).strict(), (args) => browserOperation(companion, "duplicate_layers", args), { destructiveHint: false });
@@ -228,7 +236,9 @@ export async function createCarouselBotMcpServer(companion) {
   register("redo", "Redo the latest undone project edit.", z.object(targetSlide).strict(), (args) => browserOperation(companion, "redo", args), { destructiveHint: true });
   register("set_view", "Open a project/slide and control editor-only canvas zoom or TikTok safe-area overlay.", z.object({ ...targetSlide, canvasZoom: z.number().min(0.2).max(3).optional(), showTikTokOverlay: z.boolean().optional() }).strict(), (args) => browserOperation(companion, "set_view", args), { destructiveHint: false, idempotentHint: true });
 
-  register("render_slide", "Render and return the actual slide image for visual inspection. This does not persist the rendered file.", z.object({ ...targetSlide, width: z.number().int().min(180).max(1080).default(540), format: z.enum(["png", "jpeg"]).default("png"), quality: z.number().min(0.4).max(1).default(0.9) }).strict(), async (args) => {
+  register("set_video_playback", "Read or set playback on the currently visible video slide: playing=true/false and/or time in seconds. Does not navigate, change content, or affect exports. Use render_slide(time) for frames on a background project.", z.object({ ...targetSlide, playing: z.boolean().optional(), time: z.number().min(0).max(86400).optional() }).strict(), (args) => browserOperation(companion, "set_video_playback", args), { destructiveHint: false, idempotentHint: true });
+
+  register("render_slide", "Render actual slide pixels for inspection. For video slides, time selects a frame in seconds (default 0), with shorter clips looping. Does not change playback or persist a file.", z.object({ ...targetSlide, width: z.number().int().min(180).max(1080).default(540), format: z.enum(["png", "jpeg"]).default("png"), quality: z.number().min(0.4).max(1).default(0.9), time: z.number().min(0).max(86400).default(0) }).strict(), async (args) => {
     const rendered = await browserOperation(companion, "render_slide", args);
     return {
       content: [{ type: "image", data: rendered.data, mimeType: rendered.mimeType }, { type: "text", text: JSON.stringify({ slideId: args.slideId || null, width: rendered.width, height: rendered.height, temporary: true }) }],
@@ -237,21 +247,27 @@ export async function createCarouselBotMcpServer(companion) {
     };
   }, { readOnlyHint: true });
 
-  register("export_slide", "Render a full-resolution PNG and write it to a local path. Existing files are protected unless overwrite=true.", z.object({ ...targetSlide, outputPath: z.string().min(1), overwrite: z.boolean().default(false) }).strict(), async ({ outputPath, overwrite, ...target }) => {
-    const rendered = await browserOperation(companion, "render_slide", { ...target, width: 1080, format: "png", quality: 1 });
+  register("export_slide", "Export full-resolution media locally: auto produces MP4 for video slides and PNG otherwise; format=png captures a frame at time. MP4 includes audio and runs in real time, up to 120 seconds. Use a matching .mp4/.png outputPath. Existing files are protected unless overwrite=true.", z.object({ ...targetSlide, outputPath: z.string().min(1), format: z.enum(["auto", "png", "mp4"]).default("auto"), time: z.number().min(0).max(86400).default(0), overwrite: z.boolean().default(false) }).strict(), async ({ outputPath, overwrite, ...target }) => {
     const path = absolutePath(outputPath);
+    if (!overwrite && await pathExists(path)) throw new Error(`Export already exists: ${path}. Set overwrite=true only when intended.`);
+    const inspected = await browserOperation(companion, "inspect_editor", { editSessionId: target.editSessionId, projectId: target.projectId, slideId: target.slideId, includeAllProjects: false });
+    if (!inspected.slide) throw new Error("No slide selected for export.");
+    if (!inspected.capabilities?.videoExport) throw new Error("Reload the existing CarouselBot tab to enable the updated agent export tools, then retry after it reconnects.");
+    const format = target.format === "auto" ? (inspected.slide.mode === "video" ? "mp4" : "png") : target.format;
+    if (!path.toLowerCase().endsWith(`.${format}`)) throw new Error(`This export requires a .${format} outputPath.`);
+    const rendered = await browserOperation(companion, "export_slide", { ...target, format });
     await mkdir(dirname(path), { recursive: true });
-    return companion.call("write_export", { path, data: rendered.data, overwrite });
+    return { ...await companion.call("write_export", { path, data: rendered.data, overwrite }), mimeType: rendered.mimeType, duration: rendered.duration };
   }, { destructiveHint: true });
 
-  register("export_project", "Render every slide at full resolution into a local directory. Existing files are protected unless overwrite=true.", z.object({ ...targetProject, outputDirectory: z.string().min(1), overwrite: z.boolean().default(false) }).strict(), async ({ outputDirectory, overwrite, ...target }) => {
+  register("export_project", "Export every slide at full resolution into a local directory: video slides become MP4 (with audio, up to 120 seconds, real-time encoding), still slides become PNG. Existing files are protected unless overwrite=true.", z.object({ ...targetProject, outputDirectory: z.string().min(1), overwrite: z.boolean().default(false) }).strict(), async ({ outputDirectory, overwrite, ...target }) => {
     const inspected = await browserOperation(companion, "inspect_editor", { ...target, includeAllProjects: false });
     if (!inspected.project?.slides?.length) throw new Error("The project has no slides to export.");
     const directory = absolutePath(outputDirectory);
     await mkdir(directory, { recursive: true });
     const files = [];
     for (const slide of inspected.project.slides) {
-      const rendered = await browserOperation(companion, "render_slide", { projectId: inspected.project.id, slideId: slide.id, width: 1080, format: "png", quality: 1 });
+      const rendered = await browserOperation(companion, "export_slide", { editSessionId: target.editSessionId, projectId: inspected.project.id, slideId: slide.id, format: "auto" });
       const path = join(directory, `${String(slide.index + 1).padStart(2, "0")}-${rendered.filename}`);
       if (!overwrite && await pathExists(path)) throw new Error(`Export already exists: ${path}. Set overwrite=true only when intended.`);
       files.push(await companion.call("write_export", { path, data: rendered.data, overwrite }));

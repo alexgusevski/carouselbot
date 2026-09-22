@@ -1,3 +1,8 @@
+import { readVideoAsset } from "./video-media.mjs";
+import { renderVideoFrame } from "./video-frame.mjs";
+import { renderSlideMp4 } from "./video-export.mjs";
+import { controlVideoPlayback } from "./video-playback.mjs";
+import { slideVideoDuration } from "./editor-model.mjs";
 import { allSlideTexts } from "./editor-model.mjs";
 import {
   DEFAULT_OUTLINE_WIDTH,
@@ -160,6 +165,7 @@ function agentFolderSummaries() {
 }
 
 function agentSlideBackgroundSummary(slide, project) {
+  if (slide.videoData) return { type: "video", duration: slide.duration };
   const color = canonicalSolidBackgroundColor(slide, project);
   return color
     ? { type: "solid", color }
@@ -183,6 +189,9 @@ function agentSlideSummary(slide, index, project) {
     imageY: slide.imageY || 0,
     textCount: slide.texts.length,
     imageCount: (slide.overlays || []).length,
+    mode: slideVideoDuration(slide, project) ? "video" : "image",
+    duration: slideVideoDuration(slide, project),
+    loop: true,
   };
 }
 
@@ -191,6 +200,7 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
   const slide = project?.slides.find((item) => item.id === (slideId || state.activeSlideId)) || null;
   return {
     protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
+    capabilities: { videoImport: true, videoFrames: true, videoPlayback: true, videoExport: true, maxVideoExportDuration: 120 },
     activeProjectId: state.activeProjectId,
     activeSlideId: state.activeSlideId,
     activeFolderPath: state.activeFolderPath,
@@ -199,13 +209,13 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
     project: project ? {
       ...agentProjectSummary(project),
       slides: project.slides.map((projectSlide, index) => agentSlideSummary(projectSlide, index, project)),
-      assets: (project.assets || []).map(({ id, name, width, height }) => ({ id, name, width, height })),
+      assets: (project.assets || []).map(({ id, name, width, height, videoData, duration }) => ({ id, name, width, height, type: videoData ? "video" : "image", ...(videoData ? { duration } : {}) })),
       fonts: (project.fonts || []).map((font) => publicProjectFont(project, font)),
     } : null,
     slide: slide ? {
       ...agentSlideSummary(slide, project.slides.indexOf(slide), project),
       texts: slide.texts.map((text) => ({ ...text, effectiveFontWeight: textFontWeight(project, text), supportedWeights: textWeightOptions(project, text) })),
-      images: (slide.overlays || []).map((overlay) => ({ ...overlay })),
+      images: (slide.overlays || []).map((overlay) => ({ ...overlay, type: project.assets?.find((asset) => asset.id === overlay.assetId)?.videoData ? "video" : "image" })),
     } : null,
   };
 }
@@ -229,6 +239,7 @@ async function agentMedia(mediaId) {
   if (!mediaId) return null;
   const media = await window.carouselBotLocalMcpBridge.fetchMedia(mediaId);
   const imageData = await fileToDataUrl(media.file);
+  if (media.file.type.startsWith("video/")) return { ...await readVideoAsset(imageData), name: media.name };
   const dimensions = await getImageDimensions(imageData);
   return { imageData, ...dimensions, name: media.name };
 }
@@ -443,11 +454,13 @@ function agentFindLayer(slide, layerId) {
   throw new Error(`Layer not found: ${layerId}`);
 }
 
-async function agentRender(project, slide, { width = 540, format = "png", quality = 0.9 } = {}) {
+async function agentRender(project, slide, { width = 540, format = "png", quality = 0.9, time = 0 } = {}) {
   const dimensions = slideCanvasDimensions(project, slide);
   const safeWidth = Math.round(clamp(Number(width) || 540, 180, dimensions.width));
   const safeHeight = scaleCanvasDimensions(project, safeWidth, slide).height;
-  const canvas = await renderSlideCanvas(slide, safeWidth, safeHeight, project);
+  const canvas = slideVideoDuration(slide, project)
+    ? await renderVideoFrame(slide, project, safeWidth, safeHeight, time)
+    : await renderSlideCanvas(slide, safeWidth, safeHeight, project);
   const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
   const dataUrl = canvas.toDataURL(mimeType, clamp(Number(quality) || 0.9, 0.4, 1));
   return {
@@ -616,6 +629,7 @@ async function executeCarouselBotAgentOperation(operation) {
       imageData: media?.imageData || "",
       width: media?.width || 0, height: media?.height || 0,
       ...(backgroundColor ? { backgroundColor } : {}),
+      ...(media?.videoData ? { videoData: media.videoData, duration: media.duration } : {}),
       imageScale: 1, imageX: 0, imageY: 0, texts: [], overlays: [],
     };
     const canvas = slideCanvasDimensions(project, slide);
@@ -657,7 +671,7 @@ async function executeCarouselBotAgentOperation(operation) {
         }
       }
       if (media) {
-        Object.assign(slide, { imageData: media.imageData, width: media.width, height: media.height, backgroundRevision: uid() });
+        Object.assign(slide, { imageData: media.imageData, width: media.width, height: media.height, ...(media.videoData ? { videoData: media.videoData, duration: media.duration } : {}), backgroundRevision: uid() });
         delete slide.backgroundColor;
       }
       if (operation.backgroundColor != null) {
@@ -851,16 +865,16 @@ async function executeCarouselBotAgentOperation(operation) {
     const project = agentProject(operation.projectId);
     const current = project.slides.find((item) => item.id === (operation.slideId || state.activeSlideId)) || project.slides[0] || null;
     const media = await agentMedia(operation.mediaId);
-    if (!media) throw new Error("An image path is required.");
-    const fingerprint = await fingerprintData(media.imageData);
+    if (!media) throw new Error("A local image or video path is required.");
+    const fingerprint = await fingerprintData(media.videoData || media.imageData);
     const existing = (project.assets || []).find((item) => item.fingerprint === fingerprint);
-    if (existing) return { projectId: project.id, assetId: existing.id, existing: true };
-    const asset = { id: uid(), name: String(operation.name || media.name || "Image").replace(/\.[^.]+$/, ""), imageData: media.imageData, width: media.width, height: media.height, fingerprint };
+    if (existing) return { projectId: project.id, assetId: existing.id, existing: true, type: existing.videoData ? "video" : "image", width: existing.width, height: existing.height, ...(existing.videoData ? { duration: existing.duration } : {}) };
+    const asset = { id: uid(), name: String(operation.name || media.name || "Image").replace(/\.[^.]+$/, ""), imageData: media.imageData, width: media.width, height: media.height, fingerprint, ...(media.videoData ? { videoData: media.videoData, duration: media.duration } : {}) };
     return agentCommit(project, current, () => {
       if (!project.assets) project.assets = [];
       project.assets.push(asset);
-      return { assetId: asset.id, width: asset.width, height: asset.height };
-    }, "AI agent imported an image");
+      return { assetId: asset.id, width: asset.width, height: asset.height, type: asset.videoData ? "video" : "image", ...(asset.videoData ? { duration: asset.duration } : {}) };
+    }, "AI agent imported media");
   }
 
   if (operation.type === "asset.update") {
@@ -896,7 +910,7 @@ async function executeCarouselBotAgentOperation(operation) {
       slide.overlays.push(image);
       selectOnlyLayer("overlay", image.id);
       return { createdImageId: image.id, assetId: asset.id };
-    }, "AI agent placed an image");
+    }, "AI agent placed media");
   }
 
   if (operation.type === "image.update") {
@@ -978,6 +992,26 @@ async function executeCarouselBotAgentOperation(operation) {
     return { projectId: project?.id || null, slideId: slide?.id || null, canvasZoom: state.canvasZoom, showTikTokOverlay: state.showTikTokOverlay };
   }
 
+  if (operation.type === "video.playback") {
+    const project = agentProject(operation.projectId);
+    const slide = agentSlide(project, operation.slideId);
+    if (state.activeProjectId !== project.id || state.activeSlideId !== slide.id) throw new Error("Playback controls require the visible slide. Use open_project only when the user wants to see it; render_slide(time) previews any slide without navigation.");
+    return controlVideoPlayback(slide.id, operation);
+  }
+
+  if (operation.type === "slide.export") {
+    const project = agentProject(operation.projectId);
+    const slide = agentSlide(project, operation.slideId);
+    const duration = slideVideoDuration(slide, project);
+    const format = operation.format === "auto" || !operation.format ? (duration ? "mp4" : "png") : operation.format;
+    if (format === "png") return agentRender(project, slide, { width: 1080, format: "png", time: operation.time || 0 });
+    if (!duration) throw new Error("MP4 export requires a video background or placed video asset.");
+    if (duration > 120) throw new Error("Agent MP4 export supports slides up to 120 seconds. Shorten the source video before importing it.");
+    const blob = await renderSlideMp4(slide, project);
+    const dataUrl = await fileToDataUrl(blob);
+    return { mimeType: "video/mp4", data: dataUrl.slice(dataUrl.indexOf(",") + 1), filename: `${safeFilename(slide.name)}.mp4`, duration, ...slideCanvasDimensions(project, slide) };
+  }
+
   if (operation.type === "slide.render") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
@@ -990,6 +1024,7 @@ async function executeCarouselBotAgentOperation(operation) {
 export function installAgentGlobals() {
   const agent = {
     protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
+    capabilities: { videoImport: true, videoFrames: true, videoPlayback: true, videoExport: true, maxVideoExportDuration: 120 },
     execute: executeCarouselBotAgentOperation,
     inspect: agentInspect,
   };

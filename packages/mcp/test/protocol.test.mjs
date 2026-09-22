@@ -200,7 +200,7 @@ test("protects internal routes, origins, and protocol versions", async () => {
     const internalHealth = await fetch(`${base}/internal/health`, {
       headers: { Authorization: `Bearer ${state.secret}` },
     }).then((response) => response.json());
-    assert.equal(internalHealth.daemonApiVersion, 1);
+    assert.equal(internalHealth.daemonApiVersion, 2);
     assert.ok(internalHealth.capabilities.internalActions.includes("list_local_fonts"));
     assert.ok(internalHealth.capabilities.internalActions.includes("browser"));
     assert.equal((await fetch(`${base}/health`, { headers: { Origin: "https://attacker.example" } })).status, 403);

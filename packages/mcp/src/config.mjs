@@ -12,7 +12,7 @@ export const PROTOCOL_VERSION = 3;
 // longer communicate. Internal MCP-to-daemon actions evolve independently, so
 // advertise them explicitly instead of treating a matching browser protocol as
 // proof that two installed package versions are compatible.
-export const DAEMON_API_VERSION = 1;
+export const DAEMON_API_VERSION = 2;
 export const DAEMON_INTERNAL_ACTIONS = Object.freeze([
   "batch",
   "begin_edit_session",

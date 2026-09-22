@@ -53,7 +53,7 @@ export function loadImage(src) {
   });
 }
 
-export async function renderSlideCanvas(slide, width, height, project = activeProject()) {
+export async function renderSlideCanvas(slide, width, height, project = activeProject(), media = null) {
   await ensureProjectFontsLoaded(project, slide.texts || []);
   const dimensions = slideCanvasDimensions(project, slide);
   const canvasWidth = Number.isFinite(Number(width)) && Number(width) > 0
@@ -69,15 +69,15 @@ export async function renderSlideCanvas(slide, width, height, project = activePr
   canvas.height = canvasHeight;
   const context = canvas.getContext("2d");
   const backgroundColor = canonicalSolidBackgroundColor(slide, project);
-  if (backgroundColor) {
+  if (backgroundColor && !slide.videoData) {
     context.fillStyle = backgroundColor;
     context.fillRect(0, 0, canvasWidth, canvasHeight);
   } else {
-    const image = await loadImage(slide.imageData);
+    const image = media?.get(slide.id) || await loadImage(slide.imageData);
     const imageLayout = getImageLayout(slide, canvasWidth, canvasHeight);
     context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
   }
-  await drawSlideLayers(context, slide, canvasWidth, canvasHeight, project);
+  await drawSlideLayers(context, slide, canvasWidth, canvasHeight, project, media);
   return canvas;
 }
 

@@ -2,6 +2,12 @@ import { slideVideoDuration } from "./editor-model.mjs";
 import { releaseVideo } from "./video-media.mjs";
 
 let previous = null;
+let controller = null;
+
+export function controlVideoPlayback(slideId, options = {}) {
+  if (!controller || controller.slideId !== slideId) throw new Error("The visible slide has no video playback controls.");
+  return controller.update(options);
+}
 
 export function mountVideoPlayback(root, slide, project) {
   const duration = slideVideoDuration(slide, project);
@@ -47,6 +53,13 @@ export function mountVideoPlayback(root, slide, project) {
     event.stopImmediatePropagation();
     spaceHandled = false;
   };
+  controller = { slideId: slide.id, update(options) {
+    if (options.time != null) time = Math.max(0, Math.min(duration, options.time));
+    if (options.playing != null) playing = options.playing;
+    last = performance.now();
+    sync(true);
+    return { slideId: slide.id, time, playing, duration, loop: true };
+  } };
   button.onclick = toggle;
   range.oninput = () => { time = Number(range.value); last = performance.now(); sync(true); };
   const tick = (now) => {
@@ -60,6 +73,7 @@ export function mountVideoPlayback(root, slide, project) {
   frame = requestAnimationFrame(tick);
   sync();
   return () => {
+    controller = null;
     previous = { slideId: slide.id, playing, time };
     cancelAnimationFrame(frame);
     document.removeEventListener("keydown", keydown, true);

@@ -10,8 +10,8 @@ import {
 } from "./config.mjs";
 import { createLocalFontService } from "./local-fonts.mjs";
 
-const MAX_JSON_BYTES = 40 * 1024 * 1024;
-const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const MAX_JSON_BYTES = 256 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 const EDITOR_TTL_MS = Number(process.env.CAROUSELBOT_EDITOR_TTL_MS || process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
@@ -387,6 +387,7 @@ function callBrowser(clientId, toolName, operation, label, { editSessionId = nul
     throw codedError("PROJECT_ID_REQUIRED", "This edit session is not bound to a project yet. Pass projectId, or create a project first so the daemon can bind it atomically.");
   }
   const requestId = randomUUID();
+  const timeoutMs = operation?.type === "slide.export" ? 210_000 : COMMAND_TIMEOUT_MS;
   recordAudit({ action: "tool.call", client, session, editorId: editor.id, projectId, toolName, status: "started" });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -394,8 +395,8 @@ function callBrowser(clientId, toolName, operation, label, { editSessionId = nul
       editor.queue = editor.queue.filter((event) => event.requestId !== requestId);
       if (operation?.fontMediaId) fontMedia.delete(operation.fontMediaId);
       recordAudit({ action: "tool.result", client, session, editorId: editor.id, projectId, toolName, status: "error", message: "Browser timeout" });
-      reject(codedError("BROWSER_TIMEOUT", "The browser did not answer within 90 seconds."));
-    }, COMMAND_TIMEOUT_MS);
+      reject(codedError("BROWSER_TIMEOUT", `The browser did not answer within ${timeoutMs / 1000} seconds.`));
+    }, timeoutMs);
     inflight.set(requestId, {
       resolve,
       reject,
@@ -418,6 +419,8 @@ function detectedMime(buffer, filename) {
   if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
   const header = buffer.subarray(0, 64).toString("ascii");
   if (/ftyp(?:avif|avis)/.test(header)) return "image/avif";
+  if (buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4";
+  if (buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
   const text = buffer.subarray(0, 1024).toString("utf8").trimStart();
   if (/^(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text)) return "image/svg+xml";
   const extension = extname(filename).toLowerCase();
@@ -427,11 +430,11 @@ function detectedMime(buffer, filename) {
 
 async function prepareMedia(filePath) {
   const metadata = await stat(filePath);
-  if (!metadata.isFile()) throw new Error("Image path must point to a regular file.");
-  if (metadata.size > MAX_MEDIA_BYTES) throw new Error("Image is larger than the 25 MB local-transfer limit.");
+  if (!metadata.isFile()) throw new Error("Media path must point to a regular file.");
+  if (metadata.size > MAX_MEDIA_BYTES) throw new Error("Media is larger than the 100 MB local-transfer limit.");
   const buffer = await readFile(filePath);
   const mimeType = detectedMime(buffer, filePath);
-  if (!mimeType) throw new Error("Unsupported image. Use PNG, JPEG, WebP, GIF, SVG, or AVIF.");
+  if (!mimeType) throw new Error("Unsupported media. Use PNG, JPEG, WebP, GIF, SVG, AVIF, MP4, MOV, or WebM (browser-decodable codecs).");
   const id = randomUUID();
   media.set(id, { id, buffer, mimeType, filename: basename(filePath), expiresAt: Date.now() + MEDIA_TTL_MS });
   return { mediaId: id, filename: basename(filePath), mimeType, size: buffer.length };
