@@ -149,3 +149,16 @@ a mislabeled WebM file. Still-image slides continue to export PNG.
 rail's “Try video sample” action creates an editable prompt-and-app composition.
 The browser smoke test covers sample creation, playback, scrubbing, video imports,
 MP4 decoding and dimensions, and IndexedDB persistence.
+
+The agent protocol keeps version 3 and the established image-layer tool names.
+`video-frame.mjs` uses isolated decoders for exact-time composited previews;
+`slide.export` selects PNG or MP4 independently of the visible slide. The companion
+retains explicit session targets across mixed project exports. Daemon API 2 adds
+video MIME transfers and extended export deadlines so an old image-only daemon
+is automatically replaced. Import bytes are bounded at 100 MB; agent MP4 exports
+are bounded at 120 seconds and JSON responses at 256 MB.
+
+`video-audio.mjs` mixes source audio offline, then captures muted playback, avoiding
+Web Audio autoplay restrictions during agent exports in Chrome. Browsers without
+media-element capture use the existing live audio mix with a bounded activation
+error instead of hanging. All tracks and temporary media URLs are released.

@@ -113,3 +113,16 @@ the text without changing the system clipboard or requiring design guidance.
 The browser agent exposes the same result through
 `window.carouselBotAgent.execute({ type: "project.copyAllTexts", projectId })`.
 The floating **Copy all texts** button writes this text to the clipboard.
+
+
+## Video workflow
+
+Videos are supported end to end by the companion; do not fall back to browser clicks or say only images are supported. Use `inspect_editor` with `includeAllProjects: false` and the assigned project/slide IDs. `capabilities` reports video support; slides expose `mode`, `duration`, and `loop`, and assets and placed `images` expose `type: "video"`. The `images` field and image tool names remain compatible and include placed videos.
+
+1. `import_asset({ path: "/absolute/path/demo.mp4", projectId, editSessionId })` imports MP4/MOV/WebM (browser-decodable codecs, H.264 MP4 recommended), up to 100 MB. Keep the returned `assetId`.
+2. `add_image({ assetId, projectId, slideId, x: 0.52, y: 0.15, width: 0.42, editSessionId })` places the video. `update_image` controls the same move, resize, crop, rotation, and stacking fields as images. Keep all accompanying copy in editable text layers. `add_slide`/`update_slide` also accept a video `backgroundPath`.
+3. Video mode is automatic. The longest placed/background clip defines duration; shorter clips loop. `render_slide({ projectId, slideId, time: 3, editSessionId })` returns real composited pixels at three seconds without moving the user's playback or navigating. Inspect multiple times for motion and layout.
+4. For a video slide already visible, `set_video_playback({ projectId, slideId, playing: false, time: 3, editSessionId })` pauses/seeks; `playing: true` resumes. Omit both to read playback. This never navigates; only use `open_project` when asked to show a project.
+5. `export_slide({ projectId, slideId, outputPath: "/absolute/path/slide.mp4", editSessionId })` automatically produces MP4 with source audio for video slides. Image slides remain PNG. `format: "png", time: 3` explicitly exports a still frame to a `.png` path. `export_project` chooses MP4/PNG for each slide in mixed projects. Existing files are protected unless `overwrite: true` is authorized.
+
+MP4 export uses the browser's encoder and runs in real time. Agent exports support up to 120 seconds per slide and need a browser with native MP4 recording (current Chrome recommended). Allow enough tool time for encoding; the CLI fallback supports long export calls. Media stays on this computer. For an older editor without video capabilities, reload its existing real-browser tab and retry after automatic reconnection. For an older installed companion use `npx -y carouselbot@latest call ...`; newly added tool names are available immediately through this fallback without restarting an agent session.

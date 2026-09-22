@@ -75,7 +75,7 @@ function createRpc(child) {
     request(method, params = {}) {
       const requestId = ++id;
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`Timed out waiting for ${method}.`)); }, 120_000);
+        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`Timed out waiting for ${method}.`)); }, params.name === "export_project" ? 1_800_000 : params.name === "export_slide" ? 240_000 : 120_000);
         pending.set(requestId, { resolve, reject, timer });
         child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`);
       });
