@@ -133,7 +133,7 @@ export function renderHeader({ editor = false } = {}) {
             ${icon("airdrop")} <span>AirDrop</span>
           </button>
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
-            ${icon("airdrop")} <span>AirDrop all</span>
+            ${icon("airdrop")} <span>All</span>
           </button>
           ${agentConnectButton}
           <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide" title="Download ${slideVideoDuration(activeSlide(), activeProject()) ? "MP4" : "PNG"}" ${activeSlide() ? "" : "disabled"}>

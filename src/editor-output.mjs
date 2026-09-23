@@ -461,7 +461,7 @@ export function createEditorOutput({ toast }) {
       }
       if (navigator.canShare?.({ files })) {
         if (navigator.userActivation && !navigator.userActivation.isActive) {
-          toast("Slides are ready — tap AirDrop all again.");
+          toast("Slides are ready — tap All beside AirDrop again.");
           return;
         }
         await navigator.share({ files });
@@ -473,7 +473,7 @@ export function createEditorOutput({ toast }) {
     } catch (error) {
       if (error?.name === "AbortError") return;
       if (error?.name === "NotAllowedError" && state.shareAllCache) {
-        toast("Slides are ready — tap AirDrop all again.");
+        toast("Slides are ready — tap All beside AirDrop again.");
         return;
       }
       state.shareAllCache = null;
