@@ -104,6 +104,7 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   }));
   const contentSecurityPolicy = blocks.get("/*")?.find((rule) => rule.startsWith("Content-Security-Policy:"));
   assert.match(contentSecurityPolicy, /style-src 'self'; style-src-attr 'unsafe-inline'/);
+  assert.match(contentSecurityPolicy, /connect-src 'self' http:\/\/127\.0\.0\.1:43117/);
   assert.ok(blocks.get("/src/*")?.includes("Cache-Control: no-cache"));
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
 });
