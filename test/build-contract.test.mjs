@@ -24,6 +24,7 @@ test("every local module import resolves to a committed source file", async () =
     "layer-interactions.mjs",
     "main.mjs",
     "project-fonts.mjs",
+    "project-share-codec.mjs",
     "project-store.mjs",
     "slide-background.mjs",
     "slide-renderer.mjs",

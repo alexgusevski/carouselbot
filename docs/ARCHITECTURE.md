@@ -1,6 +1,6 @@
 # Editor architecture
 
-CarouselBot is a static, local-first browser application. There is no application backend: projects and imported images remain in IndexedDB, while the optional MCP companion communicates with the open browser over loopback.
+CarouselBot is a local-first browser application. Projects and imported images remain in IndexedDB unless the user explicitly creates a 24-hour share link. Two Pages Functions store and retrieve compressed, immutable snapshots from Workers KV; the recipient imports an independent IndexedDB project. The optional MCP companion communicates with the open browser over loopback.
 
 The editor deliberately uses a small ES-module graph rather than a framework or bundler. Each module represents a stable responsibility, while `editor.mjs` remains the composition root and compatibility facade.
 
@@ -100,7 +100,7 @@ An import resolves one selected face inside the companion and transfers its byte
 - Imported font bytes remain local, and font metadata returned to agents never contains a filesystem path or stored bytes.
 - A text layer using a project font is measured and rendered only after that exact face has loaded.
 - TikTok placement chrome is preview-only and is never exported.
-- Project images stay embedded in the local project record; they are not uploaded by the application.
+- Project images stay embedded in the local project record except when the user explicitly shares the entire project through a temporary link.
 - Layer geometry is applied with dynamic style attributes. The deployment CSP permits style attributes while keeping stylesheet and script sources restricted to the application origin.
 
 ## Testing strategy

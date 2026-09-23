@@ -143,6 +143,10 @@ export function projectPath(projectId) {
   return `/projects/${encodeURIComponent(projectId)}`;
 }
 
+export function sharePath(shareId) {
+  return `/share/${encodeURIComponent(shareId)}`;
+}
+
 export function folderDisplayName(value) {
   return String(value ?? "").replace(/^\/+/, "");
 }
@@ -308,6 +312,17 @@ export function folderRoutePath(value) {
 
 export function routeFromPathname(pathname = window.location.pathname) {
   if (pathname === "/" || pathname === "/index.html") return { view: "dashboard" };
+  const shareMatch = pathname.match(/^\/share\/([^/]+)\/?$/);
+  if (shareMatch) {
+    try {
+      const shareId = decodeURIComponent(shareMatch[1]);
+      return /^[0-9a-z]{8}-[0-9a-f]{32}$/.test(shareId)
+        ? { view: "share", shareId }
+        : { view: "not-found" };
+    } catch {
+      return { view: "not-found" };
+    }
+  }
   const projectMatch = pathname.match(/^\/projects\/([^/]+)\/?$/);
   if (projectMatch) {
     try {

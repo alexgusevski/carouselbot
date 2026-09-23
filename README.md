@@ -4,7 +4,7 @@ A focused, local-first editor for creating social carousel images.
 
 **Canonical site:** [carousel.bot](https://carousel.bot)
 
-Everything runs in the browser. Photos and projects stay in IndexedDB on the user's device; nothing is uploaded to an application backend.
+Editing runs in the browser. Photos and projects stay in IndexedDB on the user's device unless the user explicitly creates a temporary project share link.
 
 ## AI agent control
 
@@ -29,6 +29,7 @@ The npm package is only a distribution surface. Its source, skill, guidance, and
 - Supports editable text with installed Mac fonts, text color, configurable outlines, per-line backgrounds, and full-box backgrounds
 - Provides a TikTok placement preview that is never exported
 - Shares or downloads full-resolution, 1080-pixel-wide PNGs at each slide's chosen aspect ratio
+- Creates 24-hour links to editable project snapshots that import into the recipient's local **Shared** folder
 - Allows local AI agents to create projects in folders and move them through a loopback-only MCP companion
 
 ## Run locally
@@ -58,7 +59,9 @@ The browser editor is organized as a small ES-module graph under `src/`. Pure mo
 
 ## Deploy to Cloudflare
 
-This project uses Cloudflare Pages Direct Upload. The deployment contains only the browser-ready files in `dist/`; there is no backend function.
+This project uses Cloudflare Pages Direct Upload. The static editor lives in `dist/`; Pages Functions under `functions/api/shares/` use a Workers KV namespace for optional 24-hour links. The KV namespace must be bound to the Pages project as `SHARES` before the share button is available. Keep the account on the Workers Free plan if shares must stop when its free usage limits are reached. KV's Free plan limits include 1 GB of stored data, 1,000 writes/day, and 100,000 reads/day; a single compressed share is capped at 24 MiB by this app.
+
+For local share testing, use `npm run build` followed by `npx wrangler pages dev dist --kv=SHARES`. The ordinary `npm start` server serves the editor and share routes but does not emulate KV.
 
 ```bash
 npm run deploy

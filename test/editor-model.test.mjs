@@ -49,6 +49,7 @@ import {
   projectCanvasDimensions,
   remapLayerGeometryBetweenCanvases,
   projectPath,
+  sharePath,
   rgbToHex,
   rotateDelta,
   perLineBackgroundSvgPath,
@@ -196,6 +197,10 @@ test("routes dashboard and encoded project URLs", () => {
   assert.deepEqual(routeFromPathname("/projects/%E0%A4%A"), { view: "not-found" });
   assert.deepEqual(routeFromPathname("/unknown"), { view: "not-found" });
   assert.equal(projectPath("a b/c"), "/projects/a%20b%2Fc");
+  const shareId = "mpt5n1hd-0123456789abcdef0123456789abcdef";
+  assert.equal(sharePath(shareId), `/share/${shareId}`);
+  assert.deepEqual(routeFromPathname(`/share/${shareId}`), { view: "share", shareId });
+  assert.deepEqual(routeFromPathname("/share/not-a-share"), { view: "not-found" });
 });
 
 test("normalizes virtual folder paths with one leading slash and a bounded length", () => {

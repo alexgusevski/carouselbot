@@ -805,6 +805,7 @@ export function createEditorUI({ projects, actions, output }) {
     app.querySelector('[data-action="export-all"]')?.addEventListener("click", exportAllSlides);
     app.querySelector('[data-action="share"]')?.addEventListener("click", shareActiveSlide);
     app.querySelector('[data-action="share-all"]')?.addEventListener("click", shareAllSlides);
+    app.querySelector('[data-action="share-project-link"]')?.addEventListener("click", projects.shareProject);
     app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
       state.mobileInspectorOpen = !state.mobileInspectorOpen;
       app.querySelector(".inspector")?.classList.toggle("is-mobile-open", state.mobileInspectorOpen);
