@@ -4,6 +4,8 @@ import {
   cloneProject,
   uid,
   projectPath,
+  sharePath,
+  duplicateProjectData,
   folderRoutePath,
   folderDisplayName,
   folderContains,
@@ -30,6 +32,11 @@ import {
   setLayerSelection,
 } from "./editor-state.mjs";
 import { icon } from "./editor-view.mjs";
+import {
+  decodeSharedProject,
+  encodeSharedProject,
+  SHARED_FOLDER_PATH,
+} from "./project-share-codec.mjs";
 import {
   STORE_NAME,
   PROJECT_SYNC_STORAGE_KEY,
@@ -108,6 +115,140 @@ export function createEditorProjects({
   let pendingSaveProject = null;
   let saveInFlight = null;
   const dirtySaveProjects = new Map();
+  let shareRouteGeneration = 0;
+
+  function showShareLink(link, expiresAt, returnFocus) {
+    document.querySelector(".share-link-dialog")?.remove();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop share-link-dialog";
+    backdrop.innerHTML = `
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="share-link-title" aria-describedby="share-link-description">
+        <h2 id="share-link-title">Project link ready</h2>
+        <p id="share-link-description">This is a snapshot of your project. The link expires ${escapeHtml(new Date(expiresAt).toLocaleString())}. Making another link will not change this one.</p>
+        <input type="text" readonly aria-label="Share link" />
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-action="close-share-link">Done</button>
+          <button class="button button--primary" type="button" data-action="copy-share-link">Copy link</button>
+        </div>
+      </section>`;
+    const input = backdrop.querySelector("input");
+    input.value = link;
+    const close = () => {
+      backdrop.remove();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    backdrop.querySelector('[data-action="close-share-link"]').addEventListener("click", close);
+    backdrop.querySelector('[data-action="copy-share-link"]').addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(link);
+        toast("Share link copied");
+      } catch {
+        input.select();
+        toast("Select and copy the link above");
+      }
+    });
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-action="copy-share-link"]').focus();
+  }
+
+  async function shareProject(event) {
+    const button = event.currentTarget;
+    const projectId = activeProject()?.id;
+    if (!projectId || button.disabled) return;
+    const oldLabel = button.innerHTML;
+    button.disabled = true;
+    button.textContent = "Creating link…";
+    try {
+      await flushPendingSave();
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) throw new Error("This project is no longer available.");
+      const { payload, format } = await encodeSharedProject(structuredClone(project));
+      const response = await fetch("/api/shares", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": format },
+        body: payload,
+        cache: "no-store",
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Couldn’t create a share link.");
+      const origin = domainMigration.isLegacyOrigin ? domainMigration.config.canonicalOrigin : window.location.origin;
+      const link = new URL(sharePath(result.id), origin).href;
+      showShareLink(link, result.expiresAt, button);
+    } catch (error) {
+      console.error("Could not share project", error);
+      toast(error.message || "Couldn’t create a share link.");
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        button.innerHTML = oldLabel;
+      }
+    }
+  }
+
+  function showShareRouteStatus(title, message) {
+    app.innerHTML = `
+      <header class="app-header"><a class="brand" href="/" aria-label="Go to projects"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span></a></header>
+      <main class="dashboard share-import-page"><section class="modal" role="status">
+        <h1>${escapeHtml(title)}</h1><p data-share-status>${escapeHtml(message)}</p>
+        <a class="button button--quiet" href="/">Go to projects</a>
+      </section></main>`;
+    document.title = `${title} · CarouselBot`;
+  }
+
+  async function openSharedProject(shareId) {
+    const generation = ++shareRouteGeneration;
+    const route = sharePath(shareId);
+    const stillHere = () => generation === shareRouteGeneration && window.location.pathname.replace(/\/$/, "") === route;
+    showShareRouteStatus("Opening shared project", "Getting the editable copy…");
+    try {
+      const savedProjects = await getAllProjects();
+      const existing = savedProjects.find((project) => project.shareSourceId === shareId);
+      if (!stillHere()) return;
+      if (existing) {
+        if (!state.projects.some((project) => project.id === existing.id)) {
+          normalizeLoadedProjects([existing]);
+          state.projects.push(existing);
+        }
+        openProject(existing.id, { historyMode: "replace" });
+        return;
+      }
+      let response;
+      for (const delay of [0, 1000, 2000, 4000, 8000, 15000, 30000]) {
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!stillHere()) return;
+        response = await fetch(`/api/shares/${encodeURIComponent(shareId)}`, { cache: "no-store" });
+        if (response.status !== 425) break;
+        const status = app.querySelector("[data-share-status]");
+        if (status) status.textContent = "This new link is still becoming available. Retrying…";
+      }
+      if (!stillHere()) return;
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || "This share link is unavailable or has expired.");
+      }
+      const format = response.headers.get("X-CarouselBot-Share-Format");
+      const project = await decodeSharedProject(await response.arrayBuffer(), format);
+      if (!stillHere()) return;
+      const status = app.querySelector("[data-share-status]");
+      if (status) status.textContent = `Adding “${project.name}” to your Shared folder…`;
+      const imported = duplicateProjectData(project, { name: project.name, folderPath: SHARED_FOLDER_PATH });
+      imported.shareSourceId = shareId;
+      normalizeLoadedProjects([imported]);
+      await putProject(imported, { expectedRevision: 0 });
+      state.projects.push(imported);
+      await ensureProjectFontsLoaded(imported).catch(() => {});
+      if (stillHere()) {
+        openProject(imported.id, { historyMode: "replace" });
+        toast("Added to Shared as your own editable project");
+      }
+    } catch (error) {
+      if (!stillHere()) return;
+      console.error("Could not import shared project", error);
+      showShareRouteStatus("Couldn’t open this link", error.message || "This share link is unavailable or has expired.");
+    }
+  }
 
   function projectsInFolder(folderPath) {
     return state.projects.filter((project) => folderContains(folderPath, project.folderPath));
@@ -880,6 +1021,10 @@ export function createEditorProjects({
 
   function renderCurrentRoute() {
     const route = routeFromPathname();
+    if (route.view === "share") {
+      void openSharedProject(route.shareId);
+      return;
+    }
     if (route.view === "project" && openProject(route.projectId, { historyMode: "none" })) return;
     if (route.view === "folder" && openFolder(route.folderPath, { historyMode: "none" })) return;
     const missingProject = route.view === "project";
@@ -1109,6 +1254,7 @@ export function createEditorProjects({
     openDashboard,
     renderCurrentRoute,
     createProject,
+    shareProject,
     bindDashboardEvents,
     migrateLegacyProjects,
     bindGlobalActions,

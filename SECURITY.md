@@ -26,8 +26,11 @@ applied to the latest release line.
   compatibility publish can be retried without republishing the canonical package.
 - **Installed MCP version:** setup writes an exact package version into the local
   MCP configuration. Users update deliberately by rerunning `npx carouselbot@latest setup`.
-- **Application:** the public site is static and has no application backend. User
-  projects stay in browser storage. The optional MCP companion binds to loopback,
+- **Application:** user projects stay in browser storage unless the user clicks
+  **Share link**, which uploads a compressed project snapshot to a private
+  Cloudflare KV namespace for 24 hours. Possession of its random link grants
+  access to all slides, source assets, and imported fonts in that snapshot.
+  Recipients save independent local copies. The optional MCP companion binds to loopback,
   checks the browser origin, and uses random local bearer tokens.
 
 The release workflow has no npm-token fallback: if the npm Trusted Publisher

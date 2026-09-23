@@ -29,9 +29,33 @@ const contentTypes = new Map([
 let web;
 let pageUrl = remoteUrl;
 if (!pageUrl) {
+  const shares = new Map();
+  let shareCounter = 0;
   web = createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    const relativePath = url.pathname === "/" || /^\/(?:projects|folders)\/[^/]+\/?$/.test(url.pathname)
+    if (url.pathname === "/api/shares" && request.method === "POST") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const id = `${Date.now().toString(36)}-${(++shareCounter).toString(16).padStart(32, "0")}`;
+      const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+      shares.set(id, { payload: Buffer.concat(chunks), format: request.headers["x-carouselbot-share-format"], expiresAt });
+      response.writeHead(201, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ id, expiresAt }));
+      return;
+    }
+    const shareId = url.pathname.match(/^\/api\/shares\/([^/]+)$/)?.[1];
+    if (shareId && request.method === "GET") {
+      const share = shares.get(shareId);
+      if (!share || share.expiresAt <= Date.now()) {
+        response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "This share link has expired." }));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": share.format,
+        "Content-Length": share.payload.byteLength, "Cache-Control": "no-store" });
+      response.end(share.payload);
+      return;
+    }
+    const relativePath = url.pathname === "/" || /^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname)
       ? "index.html"
       : url.pathname.slice(1);
     if (!/^(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+$/.test(relativePath)) {
@@ -2132,6 +2156,69 @@ try {
 
   await verifyVideoSlides({ cdp, evaluate, waitFor, outputDirectory: process.env.CAROUSELBOT_VIDEO_OUTPUT });
 
+  await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
+    "The project for share-link coverage did not reopen.",
+  );
+  const projectCountBeforeShare = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.length`);
+  await evaluate(cdp, `document.querySelector('[data-action="share-project-link"]').click()`);
+  const firstShareUrl = await waitFor(
+    () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
+    "Creating an editable project share link did not show the copy dialog.",
+  );
+  if (!firstShareUrl.startsWith(`${pageUrl}/share/`)) throw new Error(`Invalid share URL: ${firstShareUrl}`);
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  const firstImported = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;
+      return project?.folderPath === '/Shared' && project.name === 'Browser regression project'
+        && location.pathname === '/projects/' + project.id ? project : null;
+    })()`),
+    "Opening a share link did not import an editable project into Shared.",
+  );
+  if (firstImported.id === projectId || firstImported.slideCount !== 2) {
+    throw new Error(`The imported project was not an independent full copy: ${JSON.stringify(firstImported)}`);
+  }
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && window.carouselBotAgent.inspect().projects.length === ${projectCountBeforeShare + 1}`),
+    "Opening the same share link again created a duplicate instead of reopening its local copy.",
+  );
+
+  await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
+    "The original project was changed by importing its share.",
+  );
+  await evaluate(cdp, `(() => {
+    const title = document.querySelector('.project-title-input');
+    title.value = 'Updated browser regression project';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-action="share-project-link"]').click();
+    return true;
+  })()`);
+  const secondShareUrl = await waitFor(
+    () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
+    "Creating a second snapshot link failed.",
+  );
+  if (secondShareUrl === firstShareUrl) throw new Error("A new share must create a unique snapshot link.");
+  await cdp.send("Page.navigate", { url: secondShareUrl });
+  const secondImported = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;
+      return project?.folderPath === '/Shared' && project.name === 'Updated browser regression project'
+        && location.pathname === '/projects/' + project.id ? project : null;
+    })()`),
+    "The new share link did not import the updated snapshot.",
+  );
+  if (secondImported.id === firstImported.id) throw new Error("Two snapshot links imported into one project.");
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
+    "Creating an updated snapshot altered the earlier imported project.",
+  );
+
   const failedResources = await evaluate(cdp, `performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/') && entry.responseStatus >= 400).map((entry) => ({ name: entry.name, status: entry.responseStatus }))`);
   if (failedResources.length) throw new Error(`Some source modules failed to load: ${JSON.stringify(failedResources)}`);
   if (runtimeErrors.length) throw new Error(`Browser runtime errors:\n${runtimeErrors.join("\n")}`);
@@ -2157,6 +2244,7 @@ try {
     nativeProjectDeletion: true,
     dashboardProjectFilmstrip: true,
     nativeFolderOrganization: true,
+    shareLinkSnapshots: true,
     deepRouteReload: true,
     missingRouteFallback: true,
     agentCompatibility: true,
