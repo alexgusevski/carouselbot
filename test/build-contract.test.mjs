@@ -107,3 +107,12 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   assert.ok(blocks.get("/src/*")?.includes("Cache-Control: no-cache"));
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
 });
+
+test("Pages deployments bind the temporary share namespace", async () => {
+  const source = await readFile(join(root, "wrangler.jsonc"), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  assert.deepEqual(config.kv_namespaces, [{
+    binding: "SHARES",
+    id: "907668f59e2b401b96ac15bf2c09437e",
+  }]);
+});

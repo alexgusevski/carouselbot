@@ -3,5 +3,11 @@
   // Keep this Pages project name until the legacy-origin IndexedDB migration is retired.
   "name": "slides-editor",
   "compatibility_date": "2026-08-18",
-  "pages_build_output_dir": "./dist"
+  "pages_build_output_dir": "./dist",
+  "kv_namespaces": [
+    {
+      "binding": "SHARES",
+      "id": "907668f59e2b401b96ac15bf2c09437e"
+    }
+  ]
 }
