@@ -59,7 +59,7 @@ The browser editor is organized as a small ES-module graph under `src/`. Pure mo
 
 ## Deploy to Cloudflare
 
-This project uses Cloudflare Pages Direct Upload. The static editor lives in `dist/`; Pages Functions under `functions/api/shares/` use a Workers KV namespace for optional 24-hour links. The KV namespace must be bound to the Pages project as `SHARES` before the share button is available. Keep the account on the Workers Free plan if shares must stop when its free usage limits are reached. KV's Free plan limits include 1 GB of stored data, 1,000 writes/day, and 100,000 reads/day; a single compressed share is capped at 24 MiB by this app.
+This project uses Cloudflare Pages Direct Upload. The static editor lives in `dist/`; Pages Functions under `functions/api/shares/` use a Workers KV namespace for optional 24-hour links. The `SHARES` KV binding is declared in `wrangler.jsonc`, which is the source of truth for Pages deployments. Keep the account on the Workers Free plan if shares must stop when its free usage limits are reached. KV's Free plan limits include 1 GB of stored data, 1,000 writes/day, and 100,000 reads/day; a single compressed share is capped at 24 MiB by this app.
 
 For local share testing, use `npm run build` followed by `npx wrangler pages dev dist --kv=SHARES`. The ordinary `npm start` server serves the editor and share routes but does not emulate KV.
 
