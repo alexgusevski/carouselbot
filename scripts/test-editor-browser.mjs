@@ -1617,6 +1617,32 @@ try {
     throw new Error(`Native download/share behavior changed: ${JSON.stringify({ outputLabels, nativeOutput, shareCountBeforeActivation })}`);
   }
 
+  for (const width of [1137, 360]) {
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    const toolbar = await evaluate(cdp, `(() => {
+      const title = document.querySelector('.project-identity');
+      const actions = document.querySelector('.header-actions');
+      const allShare = document.querySelector('[data-action="share-all"]');
+      return {
+        width: innerWidth,
+        titleVisible: getComputedStyle(title).display !== 'none',
+        titleRight: title.getBoundingClientRect().right,
+        actionsLeft: actions.getBoundingClientRect().left,
+        actionsRight: actions.getBoundingClientRect().right,
+        allShareLabel: allShare.textContent.trim(),
+        allShareAccessibleName: allShare.getAttribute('aria-label'),
+        sharePadding: getComputedStyle(document.querySelector('[data-action="share"]')).paddingLeft,
+      };
+    })()`);
+    if (toolbar.width !== width || toolbar.actionsRight > width + 1
+      || (toolbar.titleVisible && toolbar.titleRight > toolbar.actionsLeft - 8)
+      || toolbar.allShareLabel !== "All" || toolbar.allShareAccessibleName !== "AirDrop all slides"
+      || (width === 1137 && parseFloat(toolbar.sharePadding) > 12)) {
+      throw new Error(`Editor header buttons or project title overflowed: ${JSON.stringify(toolbar)}`);
+    }
+  }
+  await cdp.send("Emulation.clearDeviceMetricsOverride");
+
   const rendered = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
     return window.carouselBotAgent.execute({ type: 'slide.render', projectId: inspected.project.id, slideId: inspected.slide.id, width: 270 });
