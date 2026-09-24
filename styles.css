@@ -758,6 +758,94 @@ button:disabled {
   padding: 82px 0 100px;
 }
 
+.share-import-page {
+  display: grid;
+  min-height: calc(100svh - 72px);
+  padding: 32px 24px;
+  place-items: center;
+}
+
+.share-import-card {
+  width: min(460px, 100%);
+  padding: 38px 40px 36px;
+  border: 1px solid var(--ink);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: 7px 7px 0 var(--cyan), -4px -4px 0 var(--red), var(--shadow);
+}
+
+.share-import-indicator {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 24px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+.share-import-spinner {
+  width: 25px;
+  height: 25px;
+  border: 3px solid var(--line);
+  border-top-color: var(--ink);
+  border-right-color: var(--cyan);
+  border-radius: 50%;
+  animation: share-import-spin 850ms linear infinite;
+}
+
+.share-import-card[data-state="error"] .share-import-indicator {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: #fff4f4;
+}
+
+.share-import-card[data-state="error"] .share-import-spinner {
+  display: none;
+}
+
+.share-import-card[data-state="error"] .share-import-indicator::after {
+  content: "!";
+  font-size: 25px;
+  font-weight: 800;
+}
+
+.share-import-eyebrow {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.share-import-card h1 {
+  margin: 0;
+  font-size: clamp(29px, 5vw, 38px);
+  font-weight: 820;
+  line-height: 1.08;
+  letter-spacing: -0.055em;
+}
+
+.share-import-message {
+  margin: 16px 0 28px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.share-import-card .button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+@keyframes share-import-spin {
+  to { transform: rotate(360deg); }
+}
+
 .migration-modal-backdrop {
   position: fixed;
   z-index: 100;
@@ -3829,6 +3917,10 @@ input[type="range"]::-webkit-slider-thumb {
     padding: 0 14px;
   }
 
+  .share-import-page {
+    min-height: calc(100svh - 62px);
+  }
+
   .brand-copy small,
   .project-identity {
     display: none;
@@ -4030,6 +4122,10 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 @media (max-width: 560px) {
+  .share-import-card {
+    padding: 30px 28px;
+  }
+
   .app-header--editor .github-link {
     display: none;
   }

@@ -7,8 +7,11 @@ function reply(status, message) {
   });
 }
 
-export async function onRequestGet({ env, params }) {
+export async function onRequestGet({ request, env, params }) {
   if (!env.SHARES) return reply(503, "Sharing is not available yet.");
+  if (!["carousel.bot", "localhost", "127.0.0.1"].includes(new URL(request.url).hostname)) {
+    return reply(403, "Sharing is only available on carousel.bot.");
+  }
   const id = params.id;
   if (typeof id !== "string" || !/^[0-9a-z]{8}-[0-9a-f]{32}$/.test(id)) {
     return reply(404, "This share link is invalid or has expired.");

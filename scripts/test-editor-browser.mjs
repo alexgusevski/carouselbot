@@ -28,6 +28,8 @@ const contentTypes = new Map([
 
 let web;
 let pageUrl = remoteUrl;
+let pauseShareResponse = false;
+let resumeShareResponse;
 if (!pageUrl) {
   const shares = new Map();
   let shareCounter = 0;
@@ -50,6 +52,7 @@ if (!pageUrl) {
         response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "This share link has expired." }));
         return;
       }
+      if (pauseShareResponse) await new Promise((resolve) => { resumeShareResponse = resolve; });
       response.writeHead(200, { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": share.format,
         "Content-Length": share.payload.byteLength, "Cache-Control": "no-store" });
       response.end(share.payload);
@@ -2194,7 +2197,43 @@ try {
     "Creating an editable project share link did not show the copy dialog.",
   );
   if (!firstShareUrl.startsWith(`${pageUrl}/share/`)) throw new Error(`Invalid share URL: ${firstShareUrl}`);
+  if (!remoteUrl) pauseShareResponse = true;
   await cdp.send("Page.navigate", { url: firstShareUrl });
+  if (!remoteUrl) {
+    try {
+      await waitFor(
+        () => evaluate(cdp, `document.querySelector('.share-import-card[data-state="loading"] .share-import-spinner') !== null`),
+        "Opening a share link did not show a loading spinner.",
+      );
+      for (const width of [1137, 375]) {
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false });
+        const layout = await evaluate(cdp, `(() => {
+          const card = document.querySelector('.share-import-card');
+          const bounds = card.getBoundingClientRect();
+          const headerBottom = document.querySelector('.app-header').getBoundingClientRect().bottom;
+          return {
+            width: innerWidth,
+            scrollWidth: document.documentElement.scrollWidth,
+            cardWidth: bounds.width,
+            horizontalOffset: Math.abs(bounds.left + bounds.width / 2 - innerWidth / 2),
+            verticalOffset: Math.abs(bounds.top + bounds.height / 2 - (headerBottom + innerHeight) / 2),
+            headingSize: parseFloat(getComputedStyle(card.querySelector('h1')).fontSize),
+            spinnerAnimation: getComputedStyle(card.querySelector('.share-import-spinner')).animationName,
+          };
+        })()`);
+        if (layout.width !== width || layout.scrollWidth > width || layout.cardWidth > width - 24
+          || layout.horizontalOffset > 2 || layout.verticalOffset > 2
+          || layout.headingSize > 40 || layout.spinnerAnimation !== "share-import-spin") {
+          throw new Error(`Shared project loading card is not centered and compact: ${JSON.stringify(layout)}`);
+        }
+      }
+    } finally {
+      await cdp.send("Emulation.clearDeviceMetricsOverride");
+      pauseShareResponse = false;
+      resumeShareResponse?.();
+      resumeShareResponse = undefined;
+    }
+  }
   const firstImported = await waitFor(
     () => evaluate(cdp, `(() => {
       const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;

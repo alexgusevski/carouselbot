@@ -37,7 +37,12 @@ async function readUpload(stream) {
 
 export async function onRequestPost({ request, env }) {
   if (!env.SHARES) return reply(503, "Sharing is not available yet.");
-  if (request.headers.get("Origin") !== new URL(request.url).origin) {
+  const url = new URL(request.url);
+  // pages.dev does not pass through carousel.bot's zone-level WAF rate limit.
+  if (!["carousel.bot", "localhost", "127.0.0.1"].includes(url.hostname)) {
+    return reply(403, "Sharing is only available on carousel.bot.");
+  }
+  if (request.headers.get("Origin") !== url.origin) {
     return reply(403, "This share request must come from CarouselBot.");
   }
   const format = request.headers.get("X-CarouselBot-Share-Format");
