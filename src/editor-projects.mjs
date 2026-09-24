@@ -172,6 +172,7 @@ export function createEditorProjects({
         cache: "no-store",
       });
       const result = await response.json().catch(() => ({}));
+      if (response.status === 429) throw new Error("Too many share requests. Try again in a few seconds.");
       if (!response.ok) throw new Error(result.error || "Couldn’t create a share link.");
       const origin = domainMigration.isLegacyOrigin ? domainMigration.config.canonicalOrigin : window.location.origin;
       const link = new URL(sharePath(result.id), origin).href;
@@ -187,11 +188,13 @@ export function createEditorProjects({
     }
   }
 
-  function showShareRouteStatus(title, message) {
+  function showShareRouteStatus(title, message, { loading = true } = {}) {
     app.innerHTML = `
       <header class="app-header"><a class="brand" href="/" aria-label="Go to projects"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span></a></header>
-      <main class="dashboard share-import-page"><section class="modal" role="status">
-        <h1>${escapeHtml(title)}</h1><p data-share-status>${escapeHtml(message)}</p>
+      <main class="share-import-page"><section class="share-import-card" role="status" aria-live="polite" data-state="${loading ? "loading" : "error"}">
+        <div class="share-import-indicator" aria-hidden="true"><span class="share-import-spinner"></span></div>
+        <p class="share-import-eyebrow">Shared project</p>
+        <h1>${escapeHtml(title)}</h1><p class="share-import-message" data-share-status>${escapeHtml(message)}</p>
         <a class="button button--quiet" href="/">Go to projects</a>
       </section></main>`;
     document.title = `${title} · CarouselBot`;
@@ -226,6 +229,7 @@ export function createEditorProjects({
       if (!stillHere()) return;
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
+        if (response.status === 429) throw new Error("Too many requests from this network. Try again in a few seconds.");
         throw new Error(result.error || "This share link is unavailable or has expired.");
       }
       const format = response.headers.get("X-CarouselBot-Share-Format");
@@ -246,7 +250,7 @@ export function createEditorProjects({
     } catch (error) {
       if (!stillHere()) return;
       console.error("Could not import shared project", error);
-      showShareRouteStatus("Couldn’t open this link", error.message || "This share link is unavailable or has expired.");
+      showShareRouteStatus("Couldn’t open this link", error.message || "This share link is unavailable or has expired.", { loading: false });
     }
   }
 

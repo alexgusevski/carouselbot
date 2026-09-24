@@ -9,5 +9,11 @@
       "binding": "SHARES",
       "id": "907668f59e2b401b96ac15bf2c09437e"
     }
-  ]
+  ],
+  "env": {
+    "preview": {
+      // Preview deployments must not consume the production KV share quota.
+      "kv_namespaces": []
+    }
+  }
 }

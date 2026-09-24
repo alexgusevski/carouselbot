@@ -116,4 +116,5 @@ test("Pages deployments bind the temporary share namespace", async () => {
     binding: "SHARES",
     id: "907668f59e2b401b96ac15bf2c09437e",
   }]);
+  assert.deepEqual(config.env.preview.kv_namespaces, []);
 });
