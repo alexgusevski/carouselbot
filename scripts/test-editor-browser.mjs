@@ -1,3 +1,4 @@
+import { verifyInlineTextRows } from "./inline-text-browser-scenario.mjs";
 import { verifyVideoSlides } from "./video-browser-scenario.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -895,6 +896,8 @@ try {
   ) {
     throw new Error(`Outline width did not stay proportional in editable SVG text and canvas rendering: ${JSON.stringify(outlineWidthRegression)}`);
   }
+
+  await verifyInlineTextRows(cdp, evaluate);
 
   const pointerInteraction = await evaluate(cdp, `(() => {
     const inspectText = () => structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }).slide.texts[0]);

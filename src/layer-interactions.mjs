@@ -1,8 +1,6 @@
 import {
-  DESIGN_WIDTH,
   layerKey,
   overlayCrop,
-  textAlignment,
   rotateDelta,
   applyCropValues,
   clamp,
@@ -26,6 +24,7 @@ import {
 } from "./editor-state.mjs";
 import {
   paintTextContent,
+  updateInlineTextLayout,
   updateTextBox,
   updateOverlayBox,
   updateStageImage,
@@ -444,22 +443,24 @@ export function createLayerInteractions({
     box.classList.add("is-editing", "is-selected");
     const editor = document.createElement("span");
     editor.className = "text-editor";
-    editor.contentEditable = "true";
+    editor.contentEditable = "plaintext-only";
     editor.spellcheck = false;
     editor.setAttribute("role", "textbox");
     editor.setAttribute("aria-label", "Edit text layer");
     editor.setAttribute("aria-multiline", "true");
-    editor.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    editor.style.textAlign = textAlignment(text);
-    editor.textContent = text.text || "";
+    // A plaintext contenteditable needs one extra terminal newline as a caret
+    // placeholder. It is not part of the document (including after reopening).
+    editor.textContent = (text.text || "") + (text.text?.endsWith("\n") ? "\n" : "");
     content.setAttribute("aria-hidden", "true");
     contentWrap.appendChild(editor);
+    updateInlineTextLayout(text, editor, box);
 
     editor.addEventListener("input", () => {
       text.text = editor.innerText.replace(/\n$/, "");
       box.querySelectorAll(".text-content").forEach((renderedContent) => {
         paintTextContent(text, renderedContent, box);
       });
+      updateInlineTextLayout(text, editor, box);
       const textarea = app.querySelector("#text-value");
       if (textarea) textarea.value = text.text;
       ensureTextFits(text);

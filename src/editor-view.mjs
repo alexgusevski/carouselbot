@@ -665,8 +665,7 @@ export function updateTextBox(text) {
   });
   const editor = box.querySelector(".text-editor");
   if (editor) {
-    editor.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    editor.style.textAlign = textAlignment(text);
+    updateInlineTextLayout(text, editor, box);
   }
 }
 
@@ -689,7 +688,27 @@ export function wrappedLinesForBox(text, box) {
     ? text.size * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
     : text.size * 0.32;
   const maxWidth = Math.max(1, boxWidth - horizontalInset);
-  return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
+  return { lines: wrapText(context, text.text, maxWidth), fontSize, context, maxWidth };
+}
+
+// The editable surface must use the same wrapping width as the painted rows.
+// Its origin follows the existing painted padding; it must not move the background.
+export function updateInlineTextLayout(text, editor, box) {
+  const content = box.querySelector(".text-visual--inside .text-content");
+  const { fontSize, maxWidth } = wrappedLinesForBox(text, box);
+  const width = maxWidth * fontSize / text.size;
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const padding = perLineBox ? fontSize * BOX_HORIZONTAL_PADDING : 0;
+  const align = textAlignment(text);
+  const left = content.offsetLeft + (align === "left" ? padding
+    : align === "right" ? content.clientWidth - padding - width
+    : (content.clientWidth - width) / 2);
+  editor.style.fontSize = `${fontSize}px`;
+  editor.style.textAlign = align;
+  editor.style.left = `${left}px`;
+  editor.style.top = `${content.offsetTop}px`;
+  editor.style.width = `${width}px`;
+  editor.style.height = `${content.offsetHeight}px`;
 }
 
 export function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth) {
