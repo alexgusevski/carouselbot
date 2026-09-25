@@ -585,6 +585,8 @@ async function handleInternalCall(body) {
 }
 
 const server = createServer(async (request, response) => {
+  // A disconnected sender can emit a transport error after its body was rejected.
+  request.on("error", () => {});
   const host = request.headers.host || "";
   if (![`${BRIDGE_HOST}:${BRIDGE_PORT}`, `localhost:${BRIDGE_PORT}`].includes(host)) return sendJson(response, 421, { error: "Invalid Host header." });
   let url;

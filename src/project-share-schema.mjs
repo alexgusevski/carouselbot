@@ -8,7 +8,7 @@ const id = (value) => typeof value === "string" && /^[a-zA-Z0-9_-]{1,256}$/.test
 const color = (value) => typeof value === "string" && /^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(value);
 const ratio = (value) => typeof value === "string" && /^\d{1,6}(?:\.\d{1,6})?:\d{1,6}(?:\.\d{1,6})?$/.test(value)
   && value.split(":").every((part) => Number(part) > 0);
-const axisTag = (value) => /^[a-zA-Z0-9 ]{4}$/.test(value);
+const axisTag = (value) => typeof value === "string" && /^[a-zA-Z0-9 ]{4}$/.test(value);
 
 export function isEmbeddedMedia(value, kind) {
   if (typeof value !== "string") return false;

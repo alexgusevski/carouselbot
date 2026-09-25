@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -32,6 +33,11 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const editorA = await connect("editor-a");
   const editorB = await connect("editor-b");
   try {
+    const malformedStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port, path: "http://[", method: "GET" }, (response) => { response.resume(); resolve(response.statusCode); });
+      request.on("error", reject); request.end();
+    });
+    assert.equal(malformedStatus, 400);
     const oversizedConnect = await fetch(`${base}/connect`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ padding: "x".repeat(1024 * 1024) }) });
     assert.equal(oversizedConnect.status, 413);
     const unauthorizedResult = await fetch(`${base}/result`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
