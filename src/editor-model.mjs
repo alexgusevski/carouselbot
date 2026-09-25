@@ -316,7 +316,7 @@ export function routeFromPathname(pathname = window.location.pathname) {
   if (shareMatch) {
     try {
       const shareId = decodeURIComponent(shareMatch[1]);
-      return /^[0-9a-z]{8}-[0-9a-f]{32}$/.test(shareId)
+      return /^[0-9a-z]{8}-[0-9a-f]{32}(?:\.[0-9a-f]{64})?$/.test(shareId)
         ? { view: "share", shareId }
         : { view: "not-found" };
     } catch {

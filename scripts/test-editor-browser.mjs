@@ -42,7 +42,7 @@ if (!pageUrl) {
     if (url.pathname === "/api/shares" && request.method === "POST") {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
-      const id = `${Date.now().toString(36)}-${(++shareCounter).toString(16).padStart(32, "0")}`;
+      const id = `${Date.now().toString(36)}-${(++shareCounter).toString(16).padStart(32, "0")}.${"a".repeat(64)}`;
       const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
       shares.set(id, { payload: Buffer.concat(chunks), format: request.headers["x-carouselbot-share-format"], expiresAt });
       response.writeHead(201, { "Content-Type": "application/json" });
