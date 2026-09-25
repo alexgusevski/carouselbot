@@ -101,3 +101,17 @@ test("shared inspector distinguishes mixed fonts, sizes, and formatting", async 
   assert.match(same, /id="font-size-number"[^>]*value="56"/);
   assert.match(same, /value="" selected>TikTok Sans/);
 });
+
+test("escapes already-stored media and formatting before building HTML", async () => {
+  const { renderAssetRail, renderStage, renderTextBox } = await import('../src/editor-view.mjs');
+  const attack = '\"/><a id="security-injected">Forged</a><img src="';
+  const text = { ...textLayer(), style: attack, background: attack, backgroundShape: attack, rotation: attack };
+  const asset = { id: attack, name: 'Asset', imageData: `data:image/png;base64,AA==${attack}`, width: 100, height: 100 };
+  const slide = { id: 's', name: 'Slide', imageData: asset.imageData, width: 1080, height: 1920, texts: [text], overlays: [] };
+  const project = { id: 'p', name: 'Saved project', assets: [asset], fonts: [], slides: [slide] };
+  state.projects = [project]; state.activeProjectId = 'p'; state.activeSlideId = 's';
+  for (const html of [renderAssetRail(project), renderStage(slide, project), renderTextBox(text)]) {
+    assert.doesNotMatch(html, /<a id="security-injected"/);
+    assert.match(html, /&quot;/);
+  }
+});

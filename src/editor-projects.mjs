@@ -1,3 +1,4 @@
+import { verifyShareRequest } from "./share-verification.mjs";
 import {
   DEFAULT_OUTLINE_WIDTH,
   HISTORY_LIMIT,
@@ -165,14 +166,15 @@ export function createEditorProjects({
       const project = state.projects.find((item) => item.id === projectId);
       if (!project) throw new Error("This project is no longer available.");
       const { payload, format } = await encodeSharedProject(structuredClone(project));
+      const token = await verifyShareRequest();
       const response = await fetch("/api/shares", {
         method: "POST",
-        headers: { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": format },
+        headers: { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": format, "X-CarouselBot-Share-Bytes": String(payload.byteLength), "X-CarouselBot-Turnstile": token },
         body: payload,
         cache: "no-store",
       });
       const result = await response.json().catch(() => ({}));
-      if (response.status === 429) throw new Error("Too many share requests. Try again in a few seconds.");
+
       if (!response.ok) throw new Error(result.error || "Couldn’t create a share link.");
       const origin = domainMigration.isLegacyOrigin ? domainMigration.config.canonicalOrigin : window.location.origin;
       const link = new URL(sharePath(result.id), origin).href;

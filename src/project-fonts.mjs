@@ -27,7 +27,7 @@ function normalizedFontStyle(value, fallback = DEFAULT_FONT_STYLE) {
 
 function normalizedAxis(axis) {
   const tag = normalizedString(axis?.tag, "", 4);
-  if (!/^[\x20-\x7e]{4}$/.test(tag)) return null;
+  if (!/^[a-zA-Z0-9 ]{4}$/.test(tag)) return null;
   const minimum = Number(axis?.min);
   const maximum = Number(axis?.max);
   const defaultValue = Number(axis?.default);
@@ -60,7 +60,7 @@ function normalizedVariationSettings(value) {
   for (const [rawTag, rawValue] of Object.entries(value)) {
     const tag = normalizedString(rawTag, "", 4);
     const numeric = Number(rawValue);
-    if (!/^[\x20-\x7e]{4}$/.test(tag) || !Number.isFinite(numeric)) continue;
+    if (!/^[a-zA-Z0-9 ]{4}$/.test(tag) || !Number.isFinite(numeric)) continue;
     settings[tag] = numeric;
   }
   return settings;

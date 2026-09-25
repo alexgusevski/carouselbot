@@ -539,20 +539,20 @@ export function createEditorUI({ projects, actions, output }) {
       : sortedProjects.filter((project) => !project.folderPath);
 
     const renderProjectCard = (project) => {
-      const previewId = `project-preview-${project.id}`;
+      const previewId = `project-preview-${escapeHtml(project.id)}`;
       const slides = project.slides.map((slide) => {
         const canvas = slideCanvasDimensions(project, slide);
         return `
-          <span class="project-preview-slide" data-project-preview-slide-id="${slide.id}" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}" style="aspect-ratio:${canvas.width} / ${canvas.height}">
+          <span class="project-preview-slide" data-project-preview-slide-id="${escapeHtml(slide.id)}" data-thumbnail-slide-id="${escapeHtml(slide.id)}" data-thumbnail-project-id="${escapeHtml(project.id)}" style="aspect-ratio:${canvas.width} / ${canvas.height}">
             ${state.thumbnailUrls.has(slideThumbnailKey(project.id, slide.id))
               ? renderSlideThumbnail(slide, project)
-              : `<img class="project-preview-source" src="${slide.imageData}" alt="" draggable="false" loading="lazy" decoding="async" aria-hidden="true" />`}
+              : `<img class="project-preview-source" src="${escapeHtml(slide.imageData)}" alt="" draggable="false" loading="lazy" decoding="async" aria-hidden="true" />`}
           </span>
         `;
       }).join("");
       return `
         <div class="project-card-shell">
-          <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}, ${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"}. Right-click for actions." title="Right-click for actions">
+          <a class="project-card" href="${projectPath(project.id)}" data-project-id="${escapeHtml(project.id)}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}, ${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"}. Right-click for actions." title="Right-click for actions">
             <span class="project-preview" id="${previewId}" data-project-preview-strip aria-hidden="true">
               ${slides || `<span class="project-preview-empty">No slides yet</span>`}
             </span>
@@ -574,8 +574,8 @@ export function createEditorUI({ projects, actions, output }) {
       const slide = project.slides[0];
       const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
       return `
-        <span class="folder-preview-slot ${extraClass}" data-project-cover-id="${project.id}" aria-hidden="true">
-          ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? ' data-composite-cover="true"' : ""} />` : ""}
+        <span class="folder-preview-slot ${extraClass}" data-project-cover-id="${escapeHtml(project.id)}" aria-hidden="true">
+          ${cover ? `<img src="${escapeHtml(cover)}" alt=""${state.projectCoverUrls.has(project.id) ? ' data-composite-cover="true"' : ""} />` : ""}
           ${more}
         </span>
       `;
@@ -1356,7 +1356,7 @@ export function createEditorUI({ projects, actions, output }) {
 
   function ensureTextFits(text, { force = false } = {}) {
     requestAnimationFrame(() => {
-      const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
+      const box = app.querySelector(`.text-box[data-text-id="${CSS.escape(text.id)}"]`);
       const contentWrap = box?.querySelector(".text-content-wrap");
       if (!box || !contentWrap || !state.stageHeight) return;
       const previousMaxHeight = contentWrap.style.maxHeight;

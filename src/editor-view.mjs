@@ -188,9 +188,9 @@ export function renderSlideRail(project) {
       <div class="slide-list">
         ${project.slides.map((slide, index) => {
           return `
-            <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
+            <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${escapeHtml(slide.id)}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
               <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-              <span class="thumb-image" data-thumbnail-slide-id="${slide.id}" data-thumbnail-project-id="${project.id}" aria-label="9:16 screen preview; black area is not exported">${renderSlideThumbnail(slide, project)}</span>
+              <span class="thumb-image" data-thumbnail-slide-id="${escapeHtml(slide.id)}" data-thumbnail-project-id="${escapeHtml(project.id)}" aria-label="9:16 screen preview; black area is not exported">${renderSlideThumbnail(slide, project)}</span>
             </button>
           `;
         }).join("")}
@@ -203,7 +203,7 @@ export function renderSlideRail(project) {
 export function renderSlideThumbnail(slide, project = activeProject()) {
   const source = state.thumbnailUrls.get(slideThumbnailKey(project?.id, slide.id));
   return source
-    ? `<img class="thumb-rendered" src="${source}" alt="" draggable="false" decoding="async" aria-hidden="true" />`
+    ? `<img class="thumb-rendered" src="${escapeHtml(source)}" alt="" draggable="false" decoding="async" aria-hidden="true" />`
     : `<span class="thumb-rendering-placeholder" aria-hidden="true"><span></span></span>`;
 }
 
@@ -214,8 +214,8 @@ export function renderAssetRail(project) {
       <div class="rail-heading"><h2>Assets</h2><span>${assets.length}</span></div>
       <div class="asset-grid" aria-label="Uploaded assets">
         ${assets.length ? assets.map((asset) => `
-          <div class="asset-item" tabindex="0" aria-label="${asset.videoData ? "Play video" : "Preview"} ${escapeHtml(asset.name)}" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)}">
-            <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
+          <div class="asset-item" tabindex="0" aria-label="${asset.videoData ? "Play video" : "Preview"} ${escapeHtml(asset.name)}" data-asset-id="${escapeHtml(asset.id)}" draggable="true" title="${escapeHtml(asset.name)}">
+            <img src="${escapeHtml(asset.imageData)}" alt="${escapeHtml(asset.name)}" draggable="false" />
             ${asset.videoData ? `<span class="asset-video-badge" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z"/></svg><span>${Math.round(asset.duration)}s</span></span>` : ""}
           </div>
         `).join("") : `<p class="asset-empty">Upload photos, videos, logos, or stickers. Drag them onto a photo to place them.</p>`}
@@ -268,9 +268,9 @@ export function renderStage(slide, project = activeProject()) {
       <div class="stage-wrap">
         <div class="tiktok-screen-preview ${supportsTikTokOverlay ? "is-native-format" : "has-letterbox"}" aria-label="9:16 TikTok screen preview. Black area is outside the slide and is not exported.">
           <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
-            <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
-            <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
-              ${slide.videoData ? `<video class="stage-image" src="${slide.videoData}" muted playsinline preload="auto" data-slide-video></video>` : `<img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />`}
+            <img class="stage-image-ghost" src="${escapeHtml(slide.imageData)}" alt="" draggable="false" aria-hidden="true" />
+            <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${Number(slide.width)}" data-natural-height="${Number(slide.height)}">
+              ${slide.videoData ? `<video class="stage-image" src="${escapeHtml(slide.videoData)}" muted playsinline preload="auto" data-slide-video></video>` : `<img class="stage-image" src="${escapeHtml(slide.imageData)}" alt="${escapeHtml(slide.name)}" draggable="false" />`}
               ${supportsTikTokOverlay ? renderTikTokOverlay() : ""}
             </div>
             <div class="layer-stack">
@@ -365,13 +365,13 @@ export function renderOverlayBox(overlay) {
   return `
     <div
       class="overlay-box ${selected ? "is-selected" : ""} ${cropping ? "is-cropping" : ""}"
-      data-overlay-id="${overlay.id}"
-      style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${overlay.rotation || 0}deg);"
+      data-overlay-id="${escapeHtml(overlay.id)}"
+      style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${Number(overlay.rotation) || 0}deg);"
       tabindex="0"
       aria-label="Photo overlay: ${escapeHtml(asset.name)}"
     >
-      <div class="overlay-image-clip overlay-image-clip--outside">${asset.videoData ? `<video src="${asset.videoData}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" />`}</div>
-      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}">${asset.videoData ? `<video src="${asset.videoData}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" />`}</div>
+      <div class="overlay-image-clip overlay-image-clip--outside">${asset.videoData ? `<video src="${escapeHtml(asset.videoData)}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${escapeHtml(asset.imageData)}" alt="" draggable="false" style="${imageStyle}" />`}</div>
+      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}">${asset.videoData ? `<video src="${escapeHtml(asset.videoData)}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${escapeHtml(asset.imageData)}" alt="" draggable="false" style="${imageStyle}" />`}</div>
       ${cropping ? `
         <div class="crop-rect" style="left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.w * 100}%;height:${crop.h * 100}%;">
           <span class="crop-handle" data-crop="nw"></span>
@@ -414,12 +414,12 @@ export function renderTextBox(text) {
   return `
     <div
       class="text-box ${selected ? "is-selected" : ""} ${fontMissing ? "is-font-missing" : ""} ${fontLoading ? "is-font-loading" : ""}"
-      data-text-id="${text.id}"
-      data-style="${text.style}"
-      data-background="${background}"
-      data-box-shape="${backgroundShape}"
+      data-text-id="${escapeHtml(text.id)}"
+      data-style="${escapeHtml(text.style)}"
+      data-background="${escapeHtml(background)}"
+      data-box-shape="${escapeHtml(backgroundShape)}"
       data-align="${textAlignment(text)}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;--text-font-family:${fontFamily};--text-font-weight:${fontWeight};--text-font-style:${fontStyle};--text-font-variations:${fontVariations};"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${Number(text.rotation) || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;--text-font-family:${fontFamily};--text-font-weight:${fontWeight};--text-font-style:${fontStyle};--text-font-variations:${fontVariations};"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -617,13 +617,13 @@ export function updateStageImage(slide) {
 
 export function updateTextBox(text) {
   const project = activeProject();
-  const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
+  const box = app.querySelector(`.text-box[data-text-id="${CSS.escape(text.id)}"]`);
   if (!box) return;
   box.style.left = `${text.x * 100}%`;
   box.style.top = `${text.y * 100}%`;
   box.style.width = `${text.width * 100}%`;
   box.style.height = `${text.height * 100}%`;
-  box.style.transform = `rotate(${text.rotation || 0}deg)`;
+  box.style.transform = `rotate(${Number(text.rotation) || 0}deg)`;
   box.dataset.style = text.style;
   box.dataset.background = text.background || "white";
   box.dataset.boxShape = text.backgroundShape || "lines";
@@ -765,7 +765,7 @@ export function paintTextContent(text, content, box) {
 }
 
 export function updateOverlayBox(overlay) {
-  const box = app.querySelector(`.overlay-box[data-overlay-id="${overlay.id}"]`);
+  const box = app.querySelector(`.overlay-box[data-overlay-id="${CSS.escape(overlay.id)}"]`);
   const asset = projectAsset(overlay.assetId);
   if (!box || !asset) return;
   const metrics = getOverlayMetrics(overlay, asset);
@@ -775,7 +775,7 @@ export function updateOverlayBox(overlay) {
   box.style.top = `${overlay.y * 100}%`;
   box.style.width = `${metrics.width * 100}%`;
   box.style.height = `${metrics.height * 100}%`;
-  box.style.transform = `rotate(${overlay.rotation || 0}deg)`;
+  box.style.transform = `rotate(${Number(overlay.rotation) || 0}deg)`;
   const images = box.querySelectorAll(".overlay-image-clip img, .overlay-image-clip video");
   images.forEach((image) => {
     if (cropping) {

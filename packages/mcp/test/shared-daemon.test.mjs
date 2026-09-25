@@ -32,6 +32,11 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const editorA = await connect("editor-a");
   const editorB = await connect("editor-b");
   try {
+    const oversizedConnect = await fetch(`${base}/connect`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ padding: "x".repeat(1024 * 1024) }) });
+    assert.equal(oversizedConnect.status, 413);
+    const unauthorizedResult = await fetch(`${base}/result`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(unauthorizedResult.status, 401);
+    assert.equal((await fetch(`${base}/health`)).status, 200);
     assert.equal(first.daemon.pid, second.daemon.pid);
     assert.equal((await first.call("list_editors")).editors.length, 2);
     await first.call("select_editor", { editorId: "editor-a" });

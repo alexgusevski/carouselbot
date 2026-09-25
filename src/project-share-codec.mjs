@@ -1,7 +1,9 @@
+import { validateSharedProject } from "./project-share-schema.mjs";
+
 export const SHARE_FORMAT_VERSION = 1;
 export const SHARE_TTL_SECONDS = 24 * 60 * 60;
-export const MAX_SHARE_BYTES = 24 * 1024 * 1024;
-export const MAX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024;
+export const MAX_SHARE_BYTES = 8 * 1024 * 1024;
+export const MAX_UNCOMPRESSED_BYTES = 16 * 1024 * 1024;
 export const SHARED_FOLDER_PATH = "/Shared";
 
 function fail(message) {
@@ -35,32 +37,9 @@ async function readLimited(stream, limit) {
   return bytes;
 }
 
-function validProject(project) {
-  if (!project || typeof project !== "object" || Array.isArray(project)
-    || typeof project.id !== "string" || !project.id || project.id.length > 256
-    || typeof project.name !== "string" || !project.name.trim() || project.name.length > 160
-    || !Array.isArray(project.slides) || project.slides.length > 100
-    || !Array.isArray(project.assets) || project.assets.length > 300
-    || !Array.isArray(project.fonts || []) || (project.fonts || []).length > 50) return false;
-  if (!project.slides.every((slide) => slide && typeof slide === "object"
-    && typeof slide.id === "string" && slide.id.length <= 256
-    && Array.isArray(slide.texts || []) && (slide.texts || []).length <= 500
-    && Array.isArray(slide.overlays || []) && (slide.overlays || []).length <= 500
-    && (slide.texts || []).every((text) => text && typeof text === "object" && typeof text.id === "string")
-    && (slide.overlays || []).every((overlay) => overlay && typeof overlay === "object" && typeof overlay.id === "string")
-    && (!slide.imageData || /^data:image\//.test(slide.imageData))
-    && (!slide.videoData || /^data:video\//.test(slide.videoData)))) return false;
-  if (!project.assets.every((asset) => asset && typeof asset === "object"
-    && typeof asset.id === "string" && asset.id.length <= 256
-    && (!asset.imageData || /^data:image\//.test(asset.imageData))
-    && (!asset.videoData || /^data:video\//.test(asset.videoData)))) return false;
-  return (project.fonts || []).every((font) => font && typeof font === "object"
-    && typeof font.id === "string"
-    && Array.isArray(font.variableAxes || []));
-}
-
 export async function encodeSharedProject(project) {
-  if (!validProject(project)) fail("This project cannot be shared yet.");
+  try { project = validateSharedProject(project); }
+  catch { fail("This project cannot be shared yet. Check its media and layers."); }
   const bytes = new TextEncoder().encode(JSON.stringify({ version: SHARE_FORMAT_VERSION, project }));
   if (bytes.byteLength > MAX_UNCOMPRESSED_BYTES) {
     fail("This project is too large to share. Try removing unused assets or videos.");
@@ -88,8 +67,9 @@ export async function decodeSharedProject(payload, format) {
   let data;
   try { data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
   catch { fail("This shared project is damaged."); }
-  if (data?.version !== SHARE_FORMAT_VERSION || !validProject(data.project)) {
+  if (data?.version !== SHARE_FORMAT_VERSION) {
     fail("This share is not a valid CarouselBot project.");
   }
-  return data.project;
+  try { return validateSharedProject(data.project); }
+  catch { fail("This share is not a valid CarouselBot project."); }
 }

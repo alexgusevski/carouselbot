@@ -1,15 +1,11 @@
-import { MAX_SHARE_BYTES, SHARE_TTL_SECONDS } from "../../../src/project-share-codec.mjs";
+import { MAX_SHARE_BYTES, SHARE_TTL_SECONDS, decodeSharedProject } from "../../../src/project-share-codec.mjs";
+import { reply, shareAccess, signShareId, reserveShareBudget, verifyUpload } from "../../_lib/share-security.js";
 
-function reply(status, message) {
-  return Response.json({ error: message }, {
-    status,
-    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
-  });
-}
-
-async function readUpload(stream) {
+async function readUpload(stream, limit) {
   if (!stream) return null;
   const reader = stream.getReader();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; void reader.cancel().catch(() => {}); }, 30_000);
   const chunks = [];
   let total = 0;
   try {
@@ -17,15 +13,17 @@ async function readUpload(stream) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_SHARE_BYTES) {
+      if (total > limit) {
         await reader.cancel();
         return null;
       }
       chunks.push(value);
     }
   } finally {
+    clearTimeout(timer);
     reader.releaseLock();
   }
+  if (timedOut) return null;
   const bytes = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {
@@ -36,41 +34,29 @@ async function readUpload(stream) {
 }
 
 export async function onRequestPost({ request, env }) {
-  if (!env.SHARES) return reply(503, "Sharing is not available yet.");
-  const url = new URL(request.url);
-  // pages.dev does not pass through carousel.bot's zone-level WAF rate limit.
-  if (!["carousel.bot", "localhost", "127.0.0.1"].includes(url.hostname)) {
-    return reply(403, "Sharing is only available on carousel.bot.");
-  }
-  if (request.headers.get("Origin") !== url.origin) {
-    return reply(403, "This share request must come from CarouselBot.");
-  }
+  const denied = shareAccess(request, env);
+  if (denied) return denied;
+  if (request.headers.get("Origin") !== new URL(request.url).origin) return reply(403, "This share request must come from CarouselBot.");
   const format = request.headers.get("X-CarouselBot-Share-Format");
   if (!["gzip-json-v1", "json-v1"].includes(format)
-    || request.headers.get("Content-Type")?.split(";")[0] !== "application/octet-stream") {
-    return reply(415, "Unsupported share format.");
-  }
-  const declaredLength = Number(request.headers.get("Content-Length"));
-  if (declaredLength > MAX_SHARE_BYTES) return reply(413, "This project is too large to share.");
-  let payload;
-  try { payload = await readUpload(request.body); }
-  catch { return reply(400, "Could not read this project."); }
-  if (!payload?.byteLength) return reply(413, "This project is empty or too large to share.");
-
-  const createdAt = Date.now();
-  const id = `${createdAt.toString(36)}-${crypto.randomUUID().replaceAll("-", "")}`;
-  const expiresAt = createdAt + SHARE_TTL_SECONDS * 1000;
+    || request.headers.get("Content-Type")?.split(";")[0] !== "application/octet-stream") return reply(415, "Unsupported share format.");
+  // Reserve the declared size before buffering. The reader enforces that exact
+  // reservation even when HTTP Content-Length is missing or dishonest.
+  const size = Number(request.headers.get("X-CarouselBot-Share-Bytes"));
+  if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_SHARE_BYTES) return reply(413, "This project is empty or too large to share (8 MB maximum).");
   try {
-    await env.SHARES.put(`share:${id}`, payload, {
-      expirationTtl: SHARE_TTL_SECONDS,
-      metadata: { format, expiresAt },
-    });
-  } catch (error) {
-    console.error("Could not store shared project", error);
-    return reply(503, "Free sharing capacity is unavailable right now. Please try again later.");
+    if (!await verifyUpload(request, env)) return reply(403, "Please verify the share request and try again.");
+    const createdAt = Date.now();
+    if (!await reserveShareBudget(request, env, "upload", size, createdAt)) return reply(429, "Free sharing capacity is temporarily full. Please try again later.");
+    const payload = await readUpload(request.body, size);
+    if (!payload || payload.byteLength !== size) return reply(413, "The project size does not match its upload reservation.");
+    try { await decodeSharedProject(payload, format); }
+    catch { return reply(400, "This is not a valid CarouselBot project."); }
+    const id = await signShareId(`${createdAt.toString(36)}-${crypto.randomUUID().replaceAll("-", "")}`, env);
+    const expiresAt = createdAt + SHARE_TTL_SECONDS * 1000;
+    await env.SHARES.put(`share:${id}`, payload, { expiration: Math.floor(expiresAt / 1000), metadata: { format, expiresAt } });
+    return Response.json({ id, expiresAt }, { status: 201, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+  } catch {
+    return reply(503, "Sharing is temporarily unavailable. Please try again later.");
   }
-  return Response.json({ id, expiresAt }, {
-    status: 201,
-    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
-  });
 }

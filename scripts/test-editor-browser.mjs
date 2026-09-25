@@ -35,6 +35,10 @@ if (!pageUrl) {
   let shareCounter = 0;
   web = createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/api/shares/config") {
+      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ siteKey: "test-site-key" }));
+      return;
+    }
     if (url.pathname === "/api/shares" && request.method === "POST") {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -2191,6 +2195,7 @@ try {
     "The project for share-link coverage did not reopen.",
   );
   const projectCountBeforeShare = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.length`);
+  if (!remoteUrl) await evaluate(cdp, `window.turnstile = { render(element, options) { setTimeout(() => options.callback('test-token'), 0); return 'test-widget'; }, remove() {} }`);
   await evaluate(cdp, `document.querySelector('[data-action="share-project-link"]').click()`);
   const firstShareUrl = await waitFor(
     () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
@@ -2256,6 +2261,7 @@ try {
     () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
     "The original project was changed by importing its share.",
   );
+  if (!remoteUrl) await evaluate(cdp, `window.turnstile = { render(element, options) { setTimeout(() => options.callback('test-token'), 0); return 'test-widget'; }, remove() {} };`);
   await evaluate(cdp, `(() => {
     const title = document.querySelector('.project-title-input');
     title.value = 'Updated browser regression project';
@@ -2284,9 +2290,37 @@ try {
     "Creating an updated snapshot altered the earlier imported project.",
   );
 
+  const errorsBeforeSecurityFixture = runtimeErrors.length;
+  // Existing IndexedDB documents must remain safe even if they predate the
+  // stricter share decoder. Exercise the browser's HTML parser after reload.
+  if (!remoteUrl) {
+    await evaluate(cdp, `(async () => {
+      const db = await new Promise((resolve, reject) => { const r = indexedDB.open('carouselbot-db'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('projects', 'readwrite');
+        const store = tx.objectStore('projects');
+        const request = store.get(${JSON.stringify(firstImported.id)});
+        request.onsuccess = () => {
+          const project = request.result;
+          const attack = '"/><a id="security-injected" href="#forged">Forged UI</a><img src="';
+          project.assets.push({ id: 'security-asset', name: 'Security regression', imageData: 'data:image/png;base64,AA==' + attack, width: 1, height: 1 });
+          const text = project.slides[0].texts[0];
+          if (text) { text.style = attack; text.background = attack; text.rotation = attack; }
+          store.put(project);
+        };
+        tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    })()`);
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await waitFor(() => evaluate(cdp, `document.querySelector('[data-asset-id="security-asset"]') !== null`), "Stored security fixture did not reload.");
+    if (await evaluate(cdp, `Boolean(document.querySelector('#security-injected'))`)) throw new Error("Stored project injected HTML after reload.");
+  }
+
   const failedResources = await evaluate(cdp, `performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/') && entry.responseStatus >= 400).map((entry) => ({ name: entry.name, status: entry.responseStatus }))`);
   if (failedResources.length) throw new Error(`Some source modules failed to load: ${JSON.stringify(failedResources)}`);
-  if (runtimeErrors.length) throw new Error(`Browser runtime errors:\n${runtimeErrors.join("\n")}`);
+  const unexpectedRuntimeErrors = runtimeErrors.filter((message, index) => index < errorsBeforeSecurityFixture || remoteUrl || message !== "Failed to load resource: net::ERR_INVALID_URL");
+  if (unexpectedRuntimeErrors.length) throw new Error(`Browser runtime errors:\n${unexpectedRuntimeErrors.join("\n")}`);
 
   process.stdout.write(`${JSON.stringify({
     loadedModules: initial.sourceModules.length,
@@ -2310,6 +2344,7 @@ try {
     dashboardProjectFilmstrip: true,
     nativeFolderOrganization: true,
     shareLinkSnapshots: true,
+    storedProjectInjectionBlocked: !remoteUrl,
     deepRouteReload: true,
     missingRouteFallback: true,
     agentCompatibility: true,

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readBoundedFile } from "./bounded-file.mjs";
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
@@ -10,7 +11,14 @@ import {
 } from "./config.mjs";
 import { createLocalFontService } from "./local-fonts.mjs";
 
-const MAX_JSON_BYTES = 256 * 1024 * 1024;
+const MAX_CONTROL_BYTES = 1024 * 1024;
+const MAX_JSON_BYTES = 144 * 1024 * 1024;
+const MAX_BUFFERED_JSON_BYTES = 160 * 1024 * 1024;
+const MAX_MEDIA_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_MEDIA_ITEMS = 32;
+let bufferedJsonBytes = 0;
+let mediaReservations = 0;
+let mediaPreparations = 0;
 const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 const EDITOR_TTL_MS = Number(process.env.CAROUSELBOT_EDITOR_TTL_MS || process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
 const CLIENT_TTL_MS = 45_000;
@@ -224,25 +232,38 @@ function sendLocalFont(response, item, headers = {}) {
   response.end(item.buffer);
 }
 
-function readJson(request) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    request.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > MAX_JSON_BYTES) {
-        reject(new Error("Request body is too large."));
-        request.destroy();
+async function readJson(request, limit = MAX_CONTROL_BYTES) {
+  const chunks = [];
+  let size = 0;
+  try {
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        request.off("data", data); request.off("end", end);
+        request.off("error", error); request.off("aborted", aborted);
+      };
+      const error = (cause) => { cleanup(); reject(cause); };
+      const aborted = () => error(new Error("Request was aborted."));
+      const end = () => { cleanup(); resolve(); };
+      const data = (chunk) => {
+        if (size + chunk.length > limit || bufferedJsonBytes + chunk.length > MAX_BUFFERED_JSON_BYTES) {
+          error(codedError("REQUEST_TOO_LARGE", "Request body is too large or the local bridge is busy."));
+          request.resume();
+          return;
+        }
+        size += chunk.length;
+        bufferedJsonBytes += chunk.length;
+        chunks.push(chunk);
+      };
+      if (Number(request.headers["content-length"]) > limit) {
+        error(codedError("REQUEST_TOO_LARGE", "Request body is too large."));
+        request.resume();
         return;
       }
-      chunks.push(chunk);
+      request.on("data", data); request.once("end", end);
+      request.once("error", error); request.once("aborted", aborted);
     });
-    request.on("end", () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-      catch { reject(new Error("Request body must be valid JSON.")); }
-    });
-    request.on("error", reject);
-  });
+    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } finally { bufferedJsonBytes -= size; }
 }
 
 function bearer(request) {
@@ -429,15 +450,21 @@ function detectedMime(buffer, filename) {
 }
 
 async function prepareMedia(filePath) {
-  const metadata = await stat(filePath);
-  if (!metadata.isFile()) throw new Error("Media path must point to a regular file.");
-  if (metadata.size > MAX_MEDIA_BYTES) throw new Error("Media is larger than the 100 MB local-transfer limit.");
-  const buffer = await readFile(filePath);
-  const mimeType = detectedMime(buffer, filePath);
-  if (!mimeType) throw new Error("Unsupported media. Use PNG, JPEG, WebP, GIF, SVG, AVIF, MP4, MOV, or WebM (browser-decodable codecs).");
-  const id = randomUUID();
-  media.set(id, { id, buffer, mimeType, filename: basename(filePath), expiresAt: Date.now() + MEDIA_TTL_MS });
-  return { mediaId: id, filename: basename(filePath), mimeType, size: buffer.length };
+  for (const [id, item] of media) if (item.expiresAt < Date.now()) media.delete(id);
+  const used = [...media.values()].reduce((total, item) => total + item.buffer.length, 0);
+  if (media.size + mediaPreparations >= MAX_MEDIA_ITEMS || used + mediaReservations + MAX_MEDIA_BYTES > MAX_MEDIA_TOTAL_BYTES) {
+    throw codedError("MEDIA_TRANSFER_LIMIT", "Local media transfers are full. Finish pending uploads before preparing more.");
+  }
+  mediaReservations += MAX_MEDIA_BYTES;
+  mediaPreparations++;
+  try {
+    const { buffer } = await readBoundedFile(filePath, MAX_MEDIA_BYTES);
+    const mimeType = detectedMime(buffer, filePath);
+    if (!mimeType) throw new Error("Unsupported media. Use PNG, JPEG, WebP, GIF, SVG, AVIF, MP4, MOV, or WebM (browser-decodable codecs).");
+    const id = randomUUID();
+    media.set(id, { id, buffer, mimeType, filename: basename(filePath), expiresAt: Date.now() + MEDIA_TTL_MS });
+    return { mediaId: id, filename: basename(filePath), mimeType, size: buffer.length };
+  } finally { mediaReservations -= MAX_MEDIA_BYTES; mediaPreparations--; }
 }
 
 function localFontFilename(font, mimeType) {
@@ -560,7 +587,9 @@ async function handleInternalCall(body) {
 const server = createServer(async (request, response) => {
   const host = request.headers.host || "";
   if (![`${BRIDGE_HOST}:${BRIDGE_PORT}`, `localhost:${BRIDGE_PORT}`].includes(host)) return sendJson(response, 421, { error: "Invalid Host header." });
-  const url = new URL(request.url || "/", BRIDGE_URL);
+  let url;
+  try { url = new URL(request.url || "/", BRIDGE_URL); }
+  catch { return sendJson(response, 400, { error: "Invalid request URL." }); }
   const origin = request.headers.origin;
   const cors = browserCors(origin);
 
@@ -584,7 +613,7 @@ const server = createServer(async (request, response) => {
         setImmediate(() => void shutdown());
         return;
       }
-      const body = await readJson(request);
+      const body = await readJson(request, url.pathname === "/internal/call" ? MAX_JSON_BYTES : MAX_CONTROL_BYTES);
       if (url.pathname === "/internal/client/connect" && request.method === "POST") {
         const existing = clients.get(body.clientId) || { id: body.clientId };
         Object.assign(existing, { name: body.name || existing.name || "MCP agent", version: body.version || existing.version || null, lastSeen: Date.now() });
@@ -735,7 +764,9 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/result" && request.method === "POST") {
-      const body = await readJson(request);
+      const token = bearer(request);
+      if (!token || ![...editors.values()].some((editor) => editor.sessionToken === token)) return sendJson(response, 401, { error: "Editor session is not authorized." }, cors);
+      const body = await readJson(request, MAX_JSON_BYTES);
       const editor = requireEditor(request, response, body.editorId, cors);
       if (!editor) return;
       const pending = inflight.get(body.requestId);
@@ -774,12 +805,12 @@ const server = createServer(async (request, response) => {
     }
     return sendJson(response, 404, { error: "Not found." }, cors);
   } catch (error) {
-    const headers = cors || {};
+    const headers = { ...cors, ...(error.code === "REQUEST_TOO_LARGE" ? { Connection: "close" } : {}) };
     const statusCode = ["ENOENT", "FONT_NOT_FOUND", "FONT_MEDIA_UNAVAILABLE"].includes(error.code)
       ? 404
       : ["EACCES", "FONT_PERMISSION_REQUIRED"].includes(error.code)
         ? 403
-        : error.code === "FONT_TRANSFER_LIMIT" ? 429 : 400;
+        : ["FONT_TRANSFER_LIMIT", "MEDIA_TRANSFER_LIMIT"].includes(error.code) ? 429 : error.code === "REQUEST_TOO_LARGE" ? 413 : 400;
     return sendJson(response, statusCode, {
       error: error.message,
       ...(error.code ? { code: error.code } : {}),
