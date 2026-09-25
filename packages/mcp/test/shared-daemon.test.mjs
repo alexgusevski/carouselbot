@@ -38,8 +38,14 @@ test("shares one daemon while preserving per-agent editor selection", async () =
       request.on("error", reject); request.end();
     });
     assert.equal(malformedStatus, 400);
-    const oversizedConnect = await fetch(`${base}/connect`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ padding: "x".repeat(1024 * 1024) }) });
-    assert.equal(oversizedConnect.status, 413);
+    // Send headers only: the limit must reject before any body is buffered.
+    // Uploading a megabyte concurrently with a closing 413 races TCP on Linux.
+    const oversizedStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port, path: "/connect", method: "POST", headers: { Origin: origin, "Content-Type": "application/json", "Content-Length": 1024 * 1024 + 1 } }, (response) => { response.resume(); resolve(response.statusCode); });
+      request.setTimeout(5000, () => request.destroy(new Error("Oversized headers were not rejected.")));
+      request.on("error", reject); request.end();
+    });
+    assert.equal(oversizedStatus, 413);
     const unauthorizedResult = await fetch(`${base}/result`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
     assert.equal(unauthorizedResult.status, 401);
     assert.equal((await fetch(`${base}/health`)).status, 200);
