@@ -200,6 +200,12 @@ test("routes dashboard and encoded project URLs", () => {
   const shareId = "mpt5n1hd-0123456789abcdef0123456789abcdef";
   assert.equal(sharePath(shareId), `/share/${shareId}`);
   assert.deepEqual(routeFromPathname(`/share/${shareId}`), { view: "share", shareId });
+  const signedShareId = `${shareId}.${"a".repeat(64)}`;
+  assert.deepEqual(routeFromPathname(sharePath(signedShareId)), { view: "share", shareId: signedShareId });
+  assert.deepEqual(routeFromPathname(`${sharePath(signedShareId)}/`), { view: "share", shareId: signedShareId });
+  for (const signature of ["a".repeat(63), "a".repeat(65), "g".repeat(64)]) {
+    assert.deepEqual(routeFromPathname(`/share/${shareId}.${signature}`), { view: "not-found" });
+  }
   assert.deepEqual(routeFromPathname("/share/not-a-share"), { view: "not-found" });
 });
 
