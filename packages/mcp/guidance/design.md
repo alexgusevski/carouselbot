@@ -1,5 +1,25 @@
 # CarouselBot design guidance
 
+## Image proportions: crop only
+
+Never stretch, squash, squeeze, or shrink one axis of an image to fit a frame. Preserve the source image and its natural proportions. Fit a different frame shape by cropping; never bake a distorted resize into an asset. Uniform display scaling is allowed to place an image on the canvas, but horizontal and vertical scale must be identical.
+
+For every `add_image` or `update_image`, read the asset's pixel dimensions and the slide's actual canvas dimensions. Explicit `width` and `height` define a destination rectangle; they do NOT automatically perform a cover crop. A full-source crop (`cropW: 1, cropH: 1`) in a differently shaped rectangle distorts the image.
+
+Before sending geometry, enforce:
+`(width * canvasWidth) / (height * canvasHeight) = (assetWidth * cropW) / (assetHeight * cropH)`.
+
+To fill a frame without distortion, let `R = (width * canvasWidth) / (height * canvasHeight)` and `S = assetWidth / assetHeight`:
+- If `R < S`, set `cropW = R / S`, `cropH = 1`.
+- Otherwise set `cropW = 1`, `cropH = S / R`.
+- Center initially with `cropX = (1 - cropW) / 2`, `cropY = (1 - cropH) / 2`; adjust within the source bounds to keep the subject visible. Send frame geometry and all crop fields together.
+- For an uncropped image, derive the other dimension from its natural aspect ratio instead of choosing width and height independently.
+- If the calculated crop is outside tool limits, change the frame; never clamp the crop in a way that breaks the ratio.
+
+Example: a 1086 × 1448 asset in a 1080 × 1440 slide frame of `width: 0.298, height: 0.365` requires `cropW: 0.8164383562, cropH: 1, cropX: 0.0917808219, cropY: 0`, not a full-source crop.
+
+Verify the ratio numerically and inspect `render_slide` after placement. Check faces, bottles, circles, and logos against the original image. A successful tool call does not prove undistorted rendering.
+
 Read this before creating or editing slides. Use it as a compact quality bar, then inspect the rendered slide instead of assuming code values look good.
 
 ## Defaults that usually look good

@@ -48,10 +48,14 @@ const textFields = {
   rotation: z.number().min(-720).max(720).optional(), z: z.number().optional(),
 };
 const imageFields = {
-  x: unit.optional(), y: unit.optional(), width: positiveUnit.optional(), height: positiveUnit.optional(),
+  x: unit.optional(), y: unit.optional(),
+  width: positiveUnit.optional().describe("Normalized frame width, not a stretch control. Preserve the source crop aspect ratio with matching height and crop fields. Inspect asset dimensions and slide canvasWidth/canvasHeight first."),
+  height: positiveUnit.optional().describe("Normalized frame height. Does NOT auto-crop. Never squash/stretch media: (width*canvasWidth)/(height*canvasHeight) must equal (assetWidth*cropW)/(assetHeight*cropH). Updating only one dimension can distort an existing layer."),
   rotation: z.number().min(-720).max(720).optional(), z: z.number().optional(),
-  cropX: z.number().min(0).max(0.95).optional(), cropY: z.number().min(0).max(0.95).optional(),
-  cropW: z.number().min(0.05).max(1).optional(), cropH: z.number().min(0.05).max(1).optional(),
+  cropX: z.number().min(0).max(0.95).optional().describe("Source crop left offset. Use to frame the subject without distortion."),
+  cropY: z.number().min(0).max(0.95).optional().describe("Source crop top offset. Use to frame the subject without distortion."),
+  cropW: z.number().min(0.05).max(1).optional().describe("Source fraction retained horizontally. Match the destination frame aspect ratio; keep cropX + cropW <= 1."),
+  cropH: z.number().min(0.05).max(1).optional().describe("Source fraction retained vertically. Match the destination frame aspect ratio; keep cropY + cropH <= 1."),
 };
 
 function backgroundSourceSchema(shape) {
@@ -226,8 +230,8 @@ export async function createCarouselBotMcpServer(companion) {
   register("import_asset", "Import a local image or video (MP4, MOV, WebM; browser-decodable codecs) into the project asset library, up to 100 MB. Bytes stay local. Returns assetId, type and video duration; use add_image to place either media type.", z.object({ ...targetSlide, path: z.string().min(1), name: z.string().max(160).optional() }).strict(), (args) => browserOperation(companion, "import_asset", args), { destructiveHint: false });
   register("update_asset", "Rename a reusable image asset.", z.object({ ...targetProject, assetId: id, name: z.string().min(1).max(160) }).strict(), (args) => browserOperation(companion, "update_asset", args), { destructiveHint: true });
   register("delete_asset", "Delete an asset and every placed instance that references it.", z.object({ ...targetProject, assetId: id }).strict(), (args) => browserOperation(companion, "delete_asset", args), { destructiveHint: true });
-  register("add_image", "Place an imported image or video asset as an editable layer (videos automatically enable looping video mode) and optionally set geometry, crop, rotation, and stacking.", z.object({ ...targetSlide, assetId: id, ...imageFields }).strict(), (args) => browserOperation(companion, "add_image", args), { destructiveHint: false });
-  register("update_image", "Update one or more placed image or video layers, including geometry, crop, rotation, and stacking.", z.object({ ...targetSlide, updates: z.array(z.object({ id, ...imageFields }).strict()).min(1).max(100) }).strict(), (args) => browserOperation(companion, "update_image", args), { destructiveHint: true });
+  register("add_image", "Place an imported image or video without distortion (videos enable looping video mode). Never stretch or squeeze media to fit. Explicit width and height do not auto-crop: match the source crop ratio to the frame ratio using cropW/cropH. Read get_design_guidance for the cover-crop formula and inspect_editor for asset and canvas dimensions. Inspect render_slide after placement.", z.object({ ...targetSlide, assetId: id, ...imageFields }).strict(), (args) => browserOperation(companion, "add_image", args), { destructiveHint: false });
+  register("update_image", "Update placed images or videos without distortion. Never change frame width/height independently of the source crop ratio. Fit frames by cropping; preserve equal horizontal and vertical scale. Send matching geometry and crop fields together, including when changing only one dimension. Read get_design_guidance for the formula and inspect render_slide after resizing.", z.object({ ...targetSlide, updates: z.array(z.object({ id, ...imageFields }).strict()).min(1).max(100) }).strict(), (args) => browserOperation(companion, "update_image", args), { destructiveHint: true });
 
   register("delete_layers", "Delete text and/or image layers by ID.", z.object({ ...targetSlide, layerIds: z.array(id).min(1).max(200) }).strict(), (args) => browserOperation(companion, "delete_layers", args), { destructiveHint: true });
   register("duplicate_layers", "Duplicate text and/or image layers with an optional normalized offset.", z.object({ ...targetSlide, layerIds: z.array(id).min(1).max(100), offsetX: z.number().min(-1).max(1).optional(), offsetY: z.number().min(-1).max(1).optional() }).strict(), (args) => browserOperation(companion, "duplicate_layers", args), { destructiveHint: false });
