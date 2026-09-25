@@ -79,4 +79,33 @@ export async function verifyInlineTextRows(cdp, evaluate) {
       await run({ type: 'layer.delete', layerIds: [id] });
     }
   })()`);
+  // Exercise a real pointer selection across the wrapped rows, not only select-all.
+  const drag = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const current = agent.inspect({ includeAllProjects: false });
+    const scope = { projectId: current.project.id, slideId: current.slide.id };
+    const result = await agent.execute({ ...scope, type: 'text.add', text: 'Vibecoded an app\\nwith AI',
+      style: 'boxed', align: 'left', size: 105, fontWeight: 719, width: 0.897802, height: 0.36, x: 0.05, y: 0.05 });
+    const box = document.querySelector('[data-text-id="' + result.createdTextId + '"]');
+    box.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, button: 0 }));
+    const node = box.querySelector('.text-editor').firstChild;
+    window.getSelection().collapse(node, 0);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const point = (index, end) => {
+      const range = document.createRange(); range.setStart(node, index); range.setEnd(node, index + 1);
+      const rect = range.getBoundingClientRect();
+      return { x: end ? rect.right - 0.1 : rect.left + 0.1, y: rect.y + rect.height / 2 };
+    };
+    return { scope, id: result.createdTextId, start: point(0, false), end: point(node.length - 1, true) };
+  })()`);
+  try {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...drag.start, button: 'left', buttons: 1, clickCount: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...drag.end, button: 'left', buttons: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...drag.end, button: 'left', buttons: 0, clickCount: 1 });
+    const selected = await evaluate(cdp, 'window.getSelection().toString()');
+    if (selected !== 'Vibecoded an app\nwith AI') throw new Error('Pointer selection did not span all text rows: ' + JSON.stringify(selected));
+  } finally {
+    await evaluate(cdp, `window.carouselBotAgent.execute(${JSON.stringify({ ...drag.scope, type: 'layer.delete', layerIds: [drag.id] })})`);
+  }
+
 }
