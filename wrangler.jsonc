@@ -10,10 +10,14 @@
       "id": "907668f59e2b401b96ac15bf2c09437e"
     }
   ],
+  "vars": { "SHARING_ENABLED": "true", "TURNSTILE_SITE_KEY": "0x4AAAAAAFDBOVqLSqypczL7" },
+  "d1_databases": [{ "binding": "SHARE_BUDGETS", "database_name": "carouselbot-share-budgets", "database_id": "0c23bce1-e55b-44c7-bd97-e4ca0f233802" }],
   "env": {
     "preview": {
       // Preview deployments must not consume the production KV share quota.
-      "kv_namespaces": []
+      "kv_namespaces": [],
+      "d1_databases": [],
+      "vars": { "SHARING_ENABLED": "false" }
     }
   }
 }

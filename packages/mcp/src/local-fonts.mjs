@@ -1,9 +1,8 @@
+import { readBoundedFile } from "./bounded-file.mjs";
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
 import {
   chmod,
   mkdir,
-  open,
   readFile,
   readdir,
   realpath,
@@ -259,17 +258,8 @@ async function fontPaths(directories) {
 }
 
 async function readFileSafely(pathInternal) {
-  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
-  const handle = await open(pathInternal, flags);
-  try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size <= 0 || metadata.size > MAX_FONT_FILE_BYTES) {
-      throw codedError("FONT_UNAVAILABLE", "The selected local font is unavailable or too large.");
-    }
-    return { buffer: await handle.readFile(), metadata };
-  } finally {
-    await handle.close();
-  }
+  try { return await readBoundedFile(pathInternal, MAX_FONT_FILE_BYTES, { noFollow: true }); }
+  catch { throw codedError("FONT_UNAVAILABLE", "The selected local font is unavailable or too large."); }
 }
 
 function mimeTypeFor(buffer, extension = "") {

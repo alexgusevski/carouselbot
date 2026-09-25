@@ -1,6 +1,7 @@
+import { request as httpRequest } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,35 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const editorA = await connect("editor-a");
   const editorB = await connect("editor-b");
   try {
+    for (const wait of ["5001", "-1", "Infinity", "NaN"]) {
+      const response = await fetch(`${base}/events?editorId=editor-a&wait=${wait}`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+      assert.equal(response.status, 400);
+    }
+    const malformedStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port, path: "http://[", method: "GET" }, (response) => { response.resume(); resolve(response.statusCode); });
+      request.on("error", reject); request.end();
+    });
+    assert.equal(malformedStatus, 400);
+    // Send headers only: the limit must reject before any body is buffered.
+    // Uploading a megabyte concurrently with a closing 413 races TCP on Linux.
+    const oversizedStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port, path: "/connect", method: "POST", headers: { Origin: origin, "Content-Type": "application/json", "Content-Length": 1024 * 1024 + 1 } }, (response) => { response.resume(); resolve(response.statusCode); });
+      request.setTimeout(5000, () => request.destroy(new Error("Oversized headers were not rejected.")));
+      request.on("error", reject); request.end();
+    });
+    assert.equal(oversizedStatus, 413);
+    const unauthorizedResult = await fetch(`${base}/result`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(unauthorizedResult.status, 401);
+    assert.equal((await fetch(`${base}/health`)).status, 200);
+    const mediaPath = join(stateDirectory, "bounded-media.svg");
+    await writeFile(mediaPath, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+    const transfers = [];
+    for (let index = 0; index < 32; index++) transfers.push(await first.call("prepare_media", { path: mediaPath }));
+    await assert.rejects(first.call("prepare_media", { path: mediaPath }), /MEDIA_TRANSFER_LIMIT/);
+    const consumed = await fetch(`${base}/media/${transfers[0].mediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(consumed.status, 200);
+    await consumed.arrayBuffer();
+    assert.ok((await first.call("prepare_media", { path: mediaPath })).mediaId, "consuming a transfer releases its capacity");
     assert.equal(first.daemon.pid, second.daemon.pid);
     assert.equal((await first.call("list_editors")).editors.length, 2);
     await first.call("select_editor", { editorId: "editor-a" });

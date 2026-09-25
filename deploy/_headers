@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self' http://127.0.0.1:43117; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; style-src-attr 'unsafe-inline'; frame-src https://challenges.cloudflare.com; connect-src 'self' http://127.0.0.1:43117 https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff

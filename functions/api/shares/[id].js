@@ -1,19 +1,12 @@
 import { MAX_SHARE_BYTES, SHARE_TTL_SECONDS } from "../../../src/project-share-codec.mjs";
 
-function reply(status, message) {
-  return Response.json({ error: message }, {
-    status,
-    headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
-  });
-}
+import { reply, shareAccess, verifyShareId, reserveShareBudget } from "../../_lib/share-security.js";
 
 export async function onRequestGet({ request, env, params }) {
-  if (!env.SHARES) return reply(503, "Sharing is not available yet.");
-  if (!["carousel.bot", "localhost", "127.0.0.1"].includes(new URL(request.url).hostname)) {
-    return reply(403, "Sharing is only available on carousel.bot.");
-  }
+  const denied = shareAccess(request, env);
+  if (denied) return denied;
   const id = params.id;
-  if (typeof id !== "string" || !/^[0-9a-z]{8}-[0-9a-f]{32}$/.test(id)) {
+  if (typeof id !== "string" || !/^[0-9a-z]{8}-[0-9a-f]{32}\.[0-9a-f]{64}$/.test(id)) {
     return reply(404, "This share link is invalid or has expired.");
   }
   const createdAt = parseInt(id.split("-", 1)[0], 36);
@@ -24,7 +17,11 @@ export async function onRequestGet({ request, env, params }) {
     return reply(410, "This share link has expired.");
   }
   let result;
-  try { result = await env.SHARES.getWithMetadata(`share:${id}`, "arrayBuffer"); }
+  try {
+    if (!await verifyShareId(id, env)) return reply(404, "This share link is invalid or has expired.");
+    if (!await reserveShareBudget(request, env, "read")) return reply(429, "Free sharing capacity is temporarily full. Please try again later.");
+    result = await env.SHARES.getWithMetadata(`share:${id}`, "arrayBuffer");
+  }
   catch (error) {
     console.error("Could not load shared project", error);
     return reply(503, "Sharing is temporarily unavailable. Please try again later.");

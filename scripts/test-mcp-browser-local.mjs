@@ -368,7 +368,7 @@ try {
   if (statusAlignment?.justifySelf !== "start" || statusAlignment.justifyContent !== "flex-start" || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
   await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
-  const remembered = await evaluate(cdp, `localStorage.getItem("carouselbot:mcp-connected")`);
+  const remembered = await waitFor(() => evaluate(cdp, `localStorage.getItem("carouselbot:mcp-connected")`), "Browser did not acknowledge its MCP connection.");
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
