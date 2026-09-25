@@ -741,10 +741,10 @@ const server = createServer(async (request, response) => {
     if (url.pathname === "/events" && request.method === "GET") {
       const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
       if (!editor) return;
-      const requestedWait = Number(url.searchParams.get("wait"));
-      const waitMs = url.searchParams.has("wait") && Number.isFinite(requestedWait)
-        ? Math.min(MAX_EVENT_POLL_TIMEOUT_MS, Math.max(0, requestedWait))
-        : EVENT_POLL_TIMEOUT_MS;
+      const waitMs = url.searchParams.has("wait") ? Number(url.searchParams.get("wait")) : EVENT_POLL_TIMEOUT_MS;
+      if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > MAX_EVENT_POLL_TIMEOUT_MS) {
+        return sendJson(response, 400, { error: "Event wait must be between 0 and 5000 milliseconds." }, cors);
+      }
       editor.cors = cors;
       if (editor.poll) endEditorPoll(editor);
       editor.poll = response;

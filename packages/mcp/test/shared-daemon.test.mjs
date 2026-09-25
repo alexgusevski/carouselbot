@@ -33,6 +33,10 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const editorA = await connect("editor-a");
   const editorB = await connect("editor-b");
   try {
+    for (const wait of ["5001", "-1", "Infinity", "NaN"]) {
+      const response = await fetch(`${base}/events?editorId=editor-a&wait=${wait}`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+      assert.equal(response.status, 400);
+    }
     const malformedStatus = await new Promise((resolve, reject) => {
       const request = httpRequest({ hostname: "127.0.0.1", port, path: "http://[", method: "GET" }, (response) => { response.resume(); resolve(response.statusCode); });
       request.on("error", reject); request.end();
