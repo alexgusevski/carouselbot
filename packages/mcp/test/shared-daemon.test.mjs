@@ -1,7 +1,7 @@
 import { request as httpRequest } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +53,15 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const unauthorizedResult = await fetch(`${base}/result`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
     assert.equal(unauthorizedResult.status, 401);
     assert.equal((await fetch(`${base}/health`)).status, 200);
+    const mediaPath = join(stateDirectory, "bounded-media.svg");
+    await writeFile(mediaPath, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+    const transfers = [];
+    for (let index = 0; index < 32; index++) transfers.push(await first.call("prepare_media", { path: mediaPath }));
+    await assert.rejects(first.call("prepare_media", { path: mediaPath }), /MEDIA_TRANSFER_LIMIT/);
+    const consumed = await fetch(`${base}/media/${transfers[0].mediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(consumed.status, 200);
+    await consumed.arrayBuffer();
+    assert.ok((await first.call("prepare_media", { path: mediaPath })).mediaId, "consuming a transfer releases its capacity");
     assert.equal(first.daemon.pid, second.daemon.pid);
     assert.equal((await first.call("list_editors")).editors.length, 2);
     await first.call("select_editor", { editorId: "editor-a" });
