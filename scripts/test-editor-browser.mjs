@@ -2190,7 +2190,15 @@ try {
     "Confirming native project deletion did not remove it from IndexedDB and the dashboard.",
   );
 
+  const beforeVideoExportErrors = runtimeErrors.length;
   await verifyVideoSlides({ cdp, evaluate, waitFor, outputDirectory: process.env.CAROUSELBOT_VIDEO_OUTPUT });
+  // Chromium logs a codec-description warning for avc1 canvas recordings even
+  // when the fixed-size export succeeds. The scenario checks the actual codec,
+  // full playback and seeking; Apple AVFoundation is also checked at release.
+  const avc1DescriptionWarning = 'When using "avc1" for mp4 encoding, the codec description is not supposed to change during the entire recording. Normally, a change in the encoding resolution may lead to this situation. Consider switching to "avc3" instead to resolve this problem';
+  for (let index = runtimeErrors.length - 1; index >= beforeVideoExportErrors; index--) {
+    if (runtimeErrors[index] === avc1DescriptionWarning) runtimeErrors.splice(index, 1);
+  }
 
   await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
   await waitFor(

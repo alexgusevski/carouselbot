@@ -71,11 +71,22 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
     return new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(window.__sampleExport); });
   })()`);
   if (!bytes?.startsWith('data:video/mp4;base64,')) throw new Error('Export did not produce MP4');
+  const mp4Bytes = Buffer.from(bytes.split(',')[1], 'base64');
+  if (!mp4Bytes.includes(Buffer.from('avc1')) || mp4Bytes.includes(Buffer.from('avc3'))) {
+    throw new Error('MP4 export must use Apple-compatible avc1, not avc3');
+  }
   const metadata = await evaluate(cdp, `(async () => {
     const { loadVideo, releaseVideo } = await import('/src/video-media.mjs');
     const url = URL.createObjectURL(window.__sampleExport);
     const video = await loadVideo(url);
     const result = { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
+    // Decode from beginning to end, not only metadata/the first frame.
+    await new Promise((resolve, reject) => {
+      video.loop = false;
+      video.addEventListener('ended', resolve, { once: true });
+      video.addEventListener('error', () => reject(new Error('Export failed during playback')), { once: true });
+      video.play().catch(reject);
+    });
     video.currentTime = 5;
     await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
     releaseVideo(video); URL.revokeObjectURL(url);
