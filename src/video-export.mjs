@@ -7,7 +7,9 @@ import { loadVideo, releaseVideo } from "./video-media.mjs";
 
 // Record the same canvas composition used by PNG export, entirely on-device.
 export async function renderSlideMp4(slide, project) {
-  const mimeType = ["video/mp4;codecs=avc3.420033,mp4a.40.2", "video/mp4;codecs=avc1.420033,mp4a.40.2", "video/mp4"].find((type) => globalThis.MediaRecorder?.isTypeSupported(type));
+  // avc3 recordings play in Chrome but are rejected by QuickTime and WhatsApp.
+  // Require avc1: a generic MP4 fallback can silently select avc3 again.
+  const mimeType = ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1.640028"].find((type) => globalThis.MediaRecorder?.isTypeSupported(type));
   if (!mimeType) throw new Error("MP4 export needs a browser with MP4 recording support, such as current Chrome or Safari.");
   const videos = [];
   const media = new Map();
@@ -54,7 +56,7 @@ export async function renderSlideMp4(slide, project) {
       recorder.onstop = () => resolve(new Blob(chunks, { type: "video/mp4" }));
     });
     await Promise.all([...videos, ...(audio?.player ? [audio.player] : [])].map((video) => video.play()));
-    recorder.start(250);
+    recorder.start();
     const started = performance.now();
     const duration = slideVideoDuration(slide, project) * 1000;
     let drawing = false;
