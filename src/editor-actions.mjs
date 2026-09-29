@@ -276,6 +276,26 @@ export function createEditorActions({
     return true;
   }
 
+  function duplicateSlide(slideId) {
+    const project = activeProject();
+    const index = project?.slides.findIndex((slide) => slide.id === slideId) ?? -1;
+    if (index < 0) return;
+
+    recordHistory();
+    clearLayerSelection();
+    const copy = structuredClone(project.slides[index]);
+    copy.id = uid();
+    copy.name = `${copy.name} copy`;
+    copy.texts = (copy.texts || []).map((text) => ({ ...text, id: uid() }));
+    copy.overlays = (copy.overlays || []).map((overlay) => ({ ...overlay, id: uid() }));
+    project.slides.splice(index + 1, 0, copy);
+    state.activeSlideId = copy.id;
+    state.photoAdjustMode = false;
+    scheduleSave();
+    renderEditor();
+    toast("Slide duplicated");
+  }
+
   function removeSlide(slideId) {
     const project = activeProject();
     if (!project) return;
@@ -818,6 +838,7 @@ export function createEditorActions({
     beginSlideBackgroundChange,
     handleSlideBackgroundChange,
     setSlideAspectRatio,
+    duplicateSlide,
     removeSlide,
     reorderSlide,
     addDroppedAssetsToSlide,

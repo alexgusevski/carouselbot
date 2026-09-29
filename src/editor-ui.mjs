@@ -87,6 +87,7 @@ export function createEditorUI({ projects, actions, output }) {
     beginSlideBackgroundChange,
     handleSlideBackgroundChange,
     setSlideAspectRatio,
+    duplicateSlide,
     removeSlide,
     reorderSlide,
     addDroppedAssetsToSlide,
@@ -256,6 +257,7 @@ export function createEditorUI({ projects, actions, output }) {
 
     [
       ["change", "image", "Change"],
+      ["duplicate", "duplicate", "Duplicate"],
       ["remove", "trash", "Remove"],
     ].forEach(([action, iconName, label]) => {
       const button = document.createElement("button");
@@ -269,6 +271,7 @@ export function createEditorUI({ projects, actions, output }) {
         clickEvent.stopPropagation();
         closeLayerMenu();
         if (action === "change") beginSlideBackgroundChange(slideId);
+        else if (action === "duplicate") duplicateSlide(slideId);
         else removeSlide(slideId);
       });
       menu.appendChild(button);
