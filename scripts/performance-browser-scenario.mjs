@@ -1,5 +1,13 @@
 // Small, capped fixtures in the smoke test's disposable Chrome profile.
 export async function verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl }) {
+  async function navigate(url = null) {
+    await evaluate(cdp, `window.__memoryNavigationPending = true`);
+    await cdp.send(url ? 'Page.navigate' : 'Page.reload', url ? { url } : { ignoreCache: true });
+    await waitFor(() => evaluate(cdp, `!window.__memoryNavigationPending && document.readyState === 'complete'
+      && Boolean(window.carouselBotReady)`), 'Memory fixture navigation did not finish');
+    await evaluate(cdp, `window.carouselBotReady`);
+  }
+
   const fixture = await evaluate(cdp, `(async () => {
     const store = await import('/src/project-store.mjs');
     const { solidBackgroundDataUrl } = await import('/src/slide-background.mjs');
@@ -36,7 +44,7 @@ export async function verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl }) {
     return { full: await measure(store.getAllProjects), catalog: await measure(store.getProjectCatalog) };
   })()`);
   if (fixture.catalog.serializedBytes > fixture.full.serializedBytes / 20) throw new Error('Catalog retained original media');
-  await cdp.send('Page.navigate', { url: pageUrl + '/folders/Memory%20regression' });
+  await navigate(pageUrl + '/folders/Memory%20regression');
   await waitFor(() => evaluate(cdp, `document.querySelectorAll('.project-card img.thumb-rendered').length === 4`), 'Cold catalog previews did not render');
   const dashboard = await evaluate(cdp, `(async () => {
     const { state } = await import('/src/editor-state.mjs');
@@ -56,7 +64,7 @@ export async function verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl }) {
       return originalGet.apply(this, args);
     };
   ` });
-  await cdp.send('Page.reload', { ignoreCache: true });
+  await navigate();
   await waitFor(() => evaluate(cdp, `document.querySelectorAll('.project-card img.thumb-rendered').length === 4`), 'Stored previews did not restore');
   const warmReads = await evaluate(cdp, 'window.__originalProjectReads');
   if (warmReads !== 0) throw new Error('Warm dashboard read original projects: ' + warmReads);
@@ -86,7 +94,7 @@ export async function verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl }) {
       }
     } finally { IDBObjectStore.prototype.get = originalGet; }
   })()`);
-  await cdp.send('Page.navigate', { url: pageUrl + '/folders/Memory%20regression' });
+  await navigate(pageUrl + '/folders/Memory%20regression');
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('[data-project-id="memory-fixture-0"]'))`), 'Navigation fixture did not restore folder');
   await evaluate(cdp, `(() => {
     const policy = document.createElement('meta');
@@ -123,7 +131,7 @@ export async function verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl }) {
     const { deleteProjectFromDb } = await import('/src/project-store.mjs');
     for (let index = 0; index < 4; index++) await deleteProjectFromDb('memory-fixture-' + index, { broadcast: false });
   })()`);
-  await cdp.send('Page.navigate', { url: pageUrl });
+  await navigate(pageUrl);
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.dashboard'))`), 'Fixture cleanup did not return to dashboard');
   return { ...fixture, dashboard, dashboardJsHeapMiB: Math.round(dashboardHeap.usedSize / 1048576), warmOriginalReads: warmReads, editor, returned };
 }
