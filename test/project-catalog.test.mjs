@@ -28,3 +28,14 @@ test("legacy catalog entries have safe empty collections and canonical folders",
     id: "legacy", __catalog: true, folderPath: null, slides: [], assets: [], fonts: [],
   });
 });
+
+test("catalog backfill tolerates malformed optional legacy collections without touching originals", () => {
+  const legacy = { id: "old", slides: [{ id: "s", texts: {}, overlays: null }], assets: {}, fonts: [null, "invalid"] };
+  const before = structuredClone(legacy);
+  const catalog = projectCatalogEntry(legacy);
+  assert.deepEqual(catalog.assets, []);
+  assert.deepEqual(catalog.fonts, []);
+  assert.deepEqual(catalog.slides[0].texts, []);
+  assert.deepEqual(catalog.slides[0].overlays, []);
+  assert.deepEqual(legacy, before);
+});

@@ -829,6 +829,7 @@ export function allSlideTexts(slides = []) {
 
 // The catalog is derived metadata. Original media stays in the projects store.
 export function projectCatalogEntry(project) {
+  const records = (value) => Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
   const withoutMedia = ({ imageData, videoData, fontData, ...metadata }) => ({
     ...metadata,
     ...(videoData ? { __hasVideoData: true } : {}),
@@ -840,8 +841,8 @@ export function projectCatalogEntry(project) {
     ...withoutMedia(project),
     __catalog: true,
     folderPath: normalizeStoredFolderPath(project.folderPath),
-    slides: (project.slides || []).map((slide) => ({ ...withoutMedia(slide), texts: slide.texts || [], overlays: slide.overlays || [] })),
-    assets: (project.assets || []).map(withoutMedia),
-    fonts: (project.fonts || []).map(withoutMedia),
+    slides: records(project.slides).map((slide) => ({ ...withoutMedia(slide), texts: records(slide.texts), overlays: records(slide.overlays) })),
+    assets: records(project.assets).map(withoutMedia),
+    fonts: records(project.fonts).map(withoutMedia),
   };
 }
