@@ -1,6 +1,6 @@
 import { isEditingTextTarget } from "./editor-model.mjs";
 import { state, app, selectedLayerKeys } from "./editor-state.mjs";
-import { openDatabase, getAllProjects } from "./project-store.mjs";
+import { openDatabase, getProjectCatalog } from "./project-store.mjs";
 import { createEditorActions } from "./editor-actions.mjs";
 import { createEditorOutput } from "./editor-output.mjs";
 import { createEditorProjects, normalizeLoadedProjects } from "./editor-projects.mjs";
@@ -69,7 +69,7 @@ export async function init() {
       beforeVersionChange: () => editorProjects.flushPendingSave(),
       onVersionChange: () => window.location.reload(),
     });
-    state.projects = await getAllProjects();
+    state.projects = await getProjectCatalog();
     normalizeLoadedProjects(state.projects);
   } catch (error) {
     console.error(error);
@@ -77,7 +77,7 @@ export async function init() {
     toast("Browser storage is unavailable. Projects won’t persist.");
   }
   window.addEventListener("carouselbot:migration-complete", async (event) => {
-    const migratedProjects = normalizeLoadedProjects(await getAllProjects());
+    const migratedProjects = normalizeLoadedProjects(await getProjectCatalog());
     editorOutput.pruneSlideThumbnails(migratedProjects);
     state.projects = migratedProjects;
     renderDashboard();
@@ -96,7 +96,7 @@ export async function init() {
     window.location.replace(domainMigration.config.canonicalOrigin);
     return;
   }
-  editorProjects.renderCurrentRoute();
+  await editorProjects.renderCurrentRoute();
   window.addEventListener("popstate", editorProjects.renderCurrentRoute);
   window.addEventListener("pageshow", () => {
     if (!state.activeProjectId) void editorProjects.refreshDashboardProjects();

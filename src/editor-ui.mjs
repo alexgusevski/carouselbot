@@ -507,11 +507,14 @@ export function createEditorUI({ projects, actions, output }) {
   }
 
   function renderDashboard() {
+    output.cancelPendingThumbnailRenders();
     disposeVideoPlayback();
     hideAssetPreview();
     state.activeProjectId = null;
     state.activeSlideId = null;
+    state.shareAllCache = null;
     clearLayerSelection();
+    projects.releaseInactiveProjects();
     const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
     const activeFolderPath = state.activeFolderPath;
     document.title = activeFolderPath ? `${folderDisplayName(activeFolderPath)} · CarouselBot` : "CarouselBot";
@@ -544,9 +547,7 @@ export function createEditorUI({ projects, actions, output }) {
         const canvas = slideCanvasDimensions(project, slide);
         return `
           <span class="project-preview-slide" data-project-preview-slide-id="${escapeHtml(slide.id)}" data-thumbnail-slide-id="${escapeHtml(slide.id)}" data-thumbnail-project-id="${escapeHtml(project.id)}" style="aspect-ratio:${canvas.width} / ${canvas.height}">
-            ${state.thumbnailUrls.has(slideThumbnailKey(project.id, slide.id))
-              ? renderSlideThumbnail(slide, project)
-              : `<img class="project-preview-source" src="${escapeHtml(slide.imageData)}" alt="" draggable="false" loading="lazy" decoding="async" aria-hidden="true" />`}
+            ${renderSlideThumbnail(slide, project)}
           </span>
         `;
       }).join("");
@@ -572,7 +573,7 @@ export function createEditorUI({ projects, actions, output }) {
     const renderFolderProjectPreview = (project, extraClass = "", more = "") => {
       if (!project) return `<span class="folder-preview-slot ${extraClass}" aria-hidden="true"></span>`;
       const slide = project.slides[0];
-      const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
+      const cover = slide ? state.projectCoverUrls.get(project.id) : null;
       return `
         <span class="folder-preview-slot ${extraClass}" data-project-cover-id="${escapeHtml(project.id)}" aria-hidden="true">
           ${cover ? `<img src="${escapeHtml(cover)}" alt=""${state.projectCoverUrls.has(project.id) ? ' data-composite-cover="true"' : ""} />` : ""}
@@ -663,10 +664,12 @@ export function createEditorUI({ projects, actions, output }) {
 
 
   function renderEditor() {
+    output.cancelPendingThumbnailRenders();
     disconnectDashboardSlideThumbnails();
     disposeVideoPlayback();
     const project = activeProject();
     if (!project) return renderDashboard();
+    projects.releaseInactiveProjects();
     document.title = `${project.name} · CarouselBot`;
     if (!activeSlide() && project.slides[0]) state.activeSlideId = project.slides[0].id;
     const previousSlideList = app.querySelector(".slide-list");
@@ -701,10 +704,8 @@ export function createEditorUI({ projects, actions, output }) {
         state.slideRailScrollPositions.set(project.id, slideList.scrollTop);
       }, { passive: true });
     }
-    requestAnimationFrame(() => {
-      if (activeSlide()) sizeStage();
-      refreshAllSlideThumbnails(project.slides);
-    });
+    if (activeSlide()) sizeStage();
+    refreshAllSlideThumbnails(project.slides, project);
     void repaintTextAfterFontLoad(project.id, state.activeSlideId);
   }
 

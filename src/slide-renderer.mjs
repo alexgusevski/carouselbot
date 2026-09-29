@@ -25,7 +25,10 @@ import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 
 export function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not render thumbnail")), "image/png", 1);
+    canvas.toBlob((blob) => {
+      canvas.width = canvas.height = 0;
+      blob ? resolve(blob) : reject(new Error("Could not render thumbnail"));
+    }, "image/png", 1);
   });
 }
 
@@ -53,6 +56,45 @@ export function loadImage(src) {
   });
 }
 
+async function renderImage(src) {
+  // ImageBitmaps have explicit lifetimes; detached HTMLImages leave decoded originals
+  // in the browser image cache long after thumbnail rendering has completed.
+  if (typeof createImageBitmap === "function" && /^data:image\/(?!svg)[^,]*;base64,/i.test(src)) {
+    // Decode locally: fetch(data:) would violate production's connect-src CSP.
+    try {
+      const comma = src.indexOf(",");
+      const payload = src.slice(comma + 1);
+      let bytes;
+      if (typeof Uint8Array.fromBase64 === "function") bytes = Uint8Array.fromBase64(payload);
+      else {
+        const binary = atob(payload);
+        bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+      }
+      return await createImageBitmap(new Blob([bytes], { type: src.slice(5, src.indexOf(";")) }));
+    } catch { /* use HTMLImage for unsupported formats */ }
+  }
+  return loadImage(src);
+}
+
+function releaseRenderImage(image) {
+  if (typeof image.close === "function") image.close();
+  else image.removeAttribute("src");
+}
+
+export async function renderAssetThumbnail(asset) {
+  const image = await renderImage(asset.imageData);
+  const canvas = document.createElement("canvas");
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const scale = Math.min(1, 256 / Math.max(width, height));
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  try { canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height); }
+  finally { releaseRenderImage(image); }
+  return canvasToBlob(canvas);
+}
+
 export async function renderSlideCanvas(slide, width, height, project = activeProject(), media = null) {
   await ensureProjectFontsLoaded(project, slide.texts || []);
   const dimensions = slideCanvasDimensions(project, slide);
@@ -73,9 +115,10 @@ export async function renderSlideCanvas(slide, width, height, project = activePr
     context.fillStyle = backgroundColor;
     context.fillRect(0, 0, canvasWidth, canvasHeight);
   } else {
-    const image = media?.get(slide.id) || await loadImage(slide.imageData);
+    const image = media?.get(slide.id) || await renderImage(slide.imageData);
     const imageLayout = getImageLayout(slide, canvasWidth, canvasHeight);
-    context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
+    try { context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height); }
+    finally { if (!media?.has(slide.id)) releaseRenderImage(image); }
   }
   await drawSlideLayers(context, slide, canvasWidth, canvasHeight, project, media);
   return canvas;
@@ -91,22 +134,25 @@ export async function drawSlideLayers(context, slide, canvasWidth, canvasHeight,
 export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject(), slide = null, media = null) {
   const asset = project?.assets?.find((item) => item.id === overlay.assetId);
   if (!asset) return;
-  const image = media?.get(asset.id) || await loadImage(asset.imageData);
+  const image = media?.get(asset.id) || await renderImage(asset.imageData);
   const metrics = getOverlayMetrics(overlay, asset, { project, slide });
   const width = metrics.width * canvasWidth;
   const height = metrics.height * canvasHeight;
   const x = overlay.x * canvasWidth;
   const y = overlay.y * canvasHeight;
   const crop = overlayCrop(overlay);
-  const sx = crop.x * (image.videoWidth || image.naturalWidth);
-  const sy = crop.y * (image.videoHeight || image.naturalHeight);
-  const sw = Math.max(1, crop.w * (image.videoWidth || image.naturalWidth));
-  const sh = Math.max(1, crop.h * (image.videoHeight || image.naturalHeight));
+  const sx = crop.x * (image.videoWidth || image.naturalWidth || image.width);
+  const sy = crop.y * (image.videoHeight || image.naturalHeight || image.height);
+  const sw = Math.max(1, crop.w * (image.videoWidth || image.naturalWidth || image.width));
+  const sh = Math.max(1, crop.h * (image.videoHeight || image.naturalHeight || image.height));
   context.save();
   context.translate(x + width / 2, y + height / 2);
   context.rotate(((overlay.rotation || 0) * Math.PI) / 180);
-  context.drawImage(image, sx, sy, sw, sh, -width / 2, -height / 2, width, height);
-  context.restore();
+  try { context.drawImage(image, sx, sy, sw, sh, -width / 2, -height / 2, width, height); }
+  finally {
+    context.restore();
+    if (!media?.has(asset.id)) releaseRenderImage(image);
+  }
 }
 
 export function drawTextLayer(context, text, imageWidth, imageHeight, project = activeProject()) {

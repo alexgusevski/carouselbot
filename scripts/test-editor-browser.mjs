@@ -1,3 +1,4 @@
+import { verifyEditorMemory } from "./performance-browser-scenario.mjs";
 import { verifyInlineTextRows } from "./inline-text-browser-scenario.mjs";
 import { verifyVideoSlides } from "./video-browser-scenario.mjs";
 import { execFileSync, spawn } from "node:child_process";
@@ -314,7 +315,7 @@ try {
         }
         const actual = lines.map(node => node.textContent);
         expected ||= actual;
-        if (actual.length !== lineCount || JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Preview wrapping differs from fitting');
+        if (actual.length !== lineCount || JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Preview wrapping differs from fitting: ' + JSON.stringify({canvasZoom, actual, expected, lineCount, html:box.outerHTML, stage:document.querySelector(".stage").getBoundingClientRect().toJSON()}));
       }
       const layer = agent.inspect().slide.texts.find(text => text.id === id);
       for (const width of [180, 540, 1080]) {
@@ -1095,7 +1096,7 @@ try {
     item.click();
     let modal = document.querySelector('.asset-preview-modal');
     const opened = modal?.open && modal.matches(':modal')
-      && modal.querySelector('img').src === item.querySelector('img').src;
+      && modal.querySelector('img').src === (await import('/src/editor-state.mjs')).activeProject().assets.find(asset => asset.id === item.dataset.assetId).imageData;
     modal.querySelector('img').click();
     const imageStaysOpen = modal.open;
     modal.click();
@@ -1776,7 +1777,7 @@ try {
     const meta = card?.querySelector('.project-meta');
     const title = meta?.querySelector('.project-meta-name > span');
     const details = meta?.lastElementChild;
-    if (!card || !shell || !strip || slides.length !== 8 || slides.some((slide) => !slide.querySelector('img'))) return false;
+    if (!card || !shell || !strip || slides.length !== 8 || !slides.some((slide) => slide.querySelector('img.thumb-rendered'))) return false;
     const stripRect = strip.getBoundingClientRect();
     const titleRect = title?.getBoundingClientRect();
     const detailsRect = details?.getBoundingClientRect();
@@ -1811,7 +1812,7 @@ try {
       dividerWidths: slideStyles.map((style) => Number.parseFloat(style.borderRightWidth)),
       dividerColors: slideStyles.map((style) => style.borderRightColor),
     };
-  })()`), "The dashboard project filmstrip did not render all slide thumbnails.");
+  })()`), "The dashboard project filmstrip did not render its visible slide thumbnails.");
   if (
     JSON.stringify(filmstrip.slideIds) !== JSON.stringify(filmstripSlideIds)
     || filmstrip.ratios.some((ratio, index) => {
@@ -2300,6 +2301,13 @@ try {
     () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
     "Creating an updated snapshot altered the earlier imported project.",
   );
+
+  if (!remoteUrl) {
+    const memory = await verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl });
+    process.stdout.write('Memory regression: ' + JSON.stringify(memory) + '\n');
+    await cdp.send("Page.navigate", { url: firstShareUrl });
+    await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.project-title-input'))`), "Memory fixture did not restore the test project");
+  }
 
   const errorsBeforeSecurityFixture = runtimeErrors.length;
   // Existing IndexedDB documents must remain safe even if they predate the
