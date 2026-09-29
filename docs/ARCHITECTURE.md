@@ -13,7 +13,7 @@ editor ─────────────> projects + actions + output + UI
 UI ─────────────────> interactions + view + fonts + state + model
 projects ───────────> store + view + fonts + background + state + model
 actions ────────────> store + renderer + fonts + background + state + model
-output ─────────────> renderer + view + state + model
+output ─────────────> store + renderer + view + state + model
 interactions ───────> view + state + model
 view/renderer ──────> fonts + background + state + model
 background ─────────> model
@@ -162,3 +162,22 @@ are bounded at 120 seconds and JSON responses at 256 MB.
 Web Audio autoplay restrictions during agent exports in Chrome. Browsers without
 media-element capture use the existing live audio mix with a bounded activation
 error instead of hanging. All tracks and temporary media URLs are released.
+
+## Bounded dashboard memory
+
+Database version 3 adds a derived `project-catalog` and disposable `project-previews`.
+The upgrade backfills metadata with a cursor, holding only one original project at
+a time. Original `projects` records, media bytes, revisions, and migration remain
+unchanged. Project writes, imports, deletes, and folder moves update the catalog
+in the same transaction. Catalog records are explicitly marked and cannot be saved
+as originals. Startup and dashboard refresh read the catalog; editor navigation
+hydrates only the selected project. Inactive records become metadata again, while
+pending saves and undo history remain available.
+
+Slide previews, folder covers, and asset thumbnails share a two-job queue. Only
+near-viewport previews render, with generation checks before and after async work.
+Offscreen previews release their object URLs and DOM images, and persisted slide
+previews can be restored without decoding source photos. The disposable disk cache
+is capped at 128 entries. Render-owned image bitmaps
+are closed after drawing; encoded canvases release their pixel buffers. Export
+continues to use original images and the existing canvas dimensions.

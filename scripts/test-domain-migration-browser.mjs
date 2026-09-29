@@ -96,21 +96,14 @@ try {
 
   await evaluate(legacyCdp, "window.carouselBotReady");
 
-  await evaluate(legacyCdp, `new Promise((resolve, reject) => {
-    const request = indexedDB.open("slide-studio-db");
-    request.onupgradeneeded = () => request.result.createObjectStore("projects", { keyPath: "id" });
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const transaction = request.result.transaction("projects", "readwrite");
-      transaction.objectStore("projects").put({
-        id: "migration-browser-project", name: "Migration browser project", folderPath: "/migrated-folder", createdAt: 1, updatedAt: 2, revision: 3,
-        assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
-        slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
-      });
-      transaction.oncomplete = () => { request.result.close(); resolve(true); };
-      transaction.onerror = () => reject(transaction.error);
-    };
-  })`);
+  await evaluate(legacyCdp, `(async () => {
+    const { putProject } = await import('/src/project-store.mjs');
+    await putProject({
+      id: "migration-browser-project", name: "Migration browser project", folderPath: "/migrated-folder", createdAt: 1, updatedAt: 2, revision: 3,
+      assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
+      slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
+    }, { broadcast: false });
+  })()`);
   await evaluate(legacyCdp, "window.__migrationReloadPending = true");
   await legacyCdp.send("Page.reload");
   await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && !window.__migrationReloadPending && Boolean(window.carouselBotReady)"), "Migration page did not reload.");

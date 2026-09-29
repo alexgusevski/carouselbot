@@ -32,6 +32,7 @@ import {
   selectedLayerKeys,
   setLayerSelection,
 } from "./editor-state.mjs";
+import { projectCatalogEntry } from "./editor-model.mjs";
 import { icon } from "./editor-view.mjs";
 import {
   decodeSharedProject,
@@ -40,6 +41,8 @@ import {
 } from "./project-share-codec.mjs";
 import {
   STORE_NAME,
+  CATALOG_STORE,
+  getProjectCatalog,
   PROJECT_SYNC_STORAGE_KEY,
   projectChannel,
   projectChannelSource,
@@ -57,7 +60,21 @@ import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 
 export function normalizeLoadedProjects(projects) {
   projects.forEach((project) => {
-    normalizeProjectFonts(project);
+    const previous = state.projects.find((item) => item.id === project.id && !item.__catalog)
+      || history.past.findLast((item) => item.id === project.id);
+    if (!project.__catalog && previous && previous !== project) {
+      for (const field of ["slides", "assets", "fonts"]) {
+        const byId = new Map((previous[field] || []).map((item) => [item.id, item]));
+        for (const item of project[field] || []) {
+          const prior = byId.get(item.id);
+          if (!prior) continue;
+          for (const key of ["imageData", "videoData", "fontData"]) {
+            if (item[key] === prior[key] && prior[key]) item[key] = prior[key];
+          }
+        }
+      }
+    }
+    if (!project.__catalog) normalizeProjectFonts(project);
     if (!Number.isFinite(Number(project.revision))) project.revision = 0;
     project.aspectRatio = normalizeAspectRatio(project.aspectRatio);
     project.folderPath = normalizeStoredFolderPath(project.folderPath);
@@ -208,7 +225,7 @@ export function createEditorProjects({
     const stillHere = () => generation === shareRouteGeneration && window.location.pathname.replace(/\/$/, "") === route;
     showShareRouteStatus("Opening shared project", "Getting the editable copy…");
     try {
-      const savedProjects = await getAllProjects();
+      const savedProjects = await getProjectCatalog();
       const existing = savedProjects.find((project) => project.shareSourceId === shareId);
       if (!stillHere()) return;
       if (existing) {
@@ -350,7 +367,7 @@ export function createEditorProjects({
   async function importMigratedProject(project) {
     const incoming = structuredClone(project);
     const result = await new Promise((resolve, reject) => {
-      const transaction = state.db.transaction(STORE_NAME, "readwrite");
+      const transaction = state.db.transaction([STORE_NAME, CATALOG_STORE], "readwrite");
       const store = transaction.objectStore(STORE_NAME);
       let outcome = "invalid";
       const read = store.get(incoming.id);
@@ -364,6 +381,7 @@ export function createEditorProjects({
         if (outcome !== "skipped") {
           normalizeLoadedProjects([incoming]);
           store.put(incoming);
+          transaction.objectStore(CATALOG_STORE).put(projectCatalogEntry(incoming));
         }
       };
       transaction.oncomplete = () => resolve(outcome);
@@ -448,6 +466,7 @@ export function createEditorProjects({
       project.revision = baseRevision + 1;
       await putProject(project, { expectedRevision: baseRevision });
       if (dirtySaveProjects.get(project.id)?.project === project) dirtySaveProjects.delete(project.id);
+      releaseInactiveProjects();
     } catch (error) {
       // A failed transaction did not advance the stored revision. Keep the
       // in-memory edit retryable and let explicit folder/agent operations abort
@@ -557,7 +576,8 @@ export function createEditorProjects({
     await flushPendingSave();
     const index = state.projects.findIndex((project) => project.id === projectId);
     if (index < 0) throw new Error(`Project not found: ${projectId}`);
-    const project = state.projects[index];
+    const project = state.projects[index].__catalog
+      ? await reloadProjectFromDb(projectId, { render: false }) : state.projects[index];
     const folderPath = normalizeFolderPath(requestedFolderPath);
     if (requestedFolderPath != null && String(requestedFolderPath).trim() && !folderPath) {
       throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
@@ -994,8 +1014,25 @@ export function createEditorProjects({
     cancelButton.focus();
   }
 
-  function openProject(projectId, { historyMode = "push" } = {}) {
-    const project = state.projects.find((item) => item.id === projectId);
+  let navigationGeneration = 0;
+  async function openProject(projectId, { historyMode = "push" } = {}) {
+    const generation = ++navigationGeneration;
+    await flushPendingSave();
+    let project = state.projects.find((item) => item.id === projectId);
+    if (project?.__catalog) {
+      const loaded = await getProjectFromDb(projectId);
+      // A cancelled navigation must not hydrate a project into a dashboard that
+      // the user has already returned to while the database read was pending.
+      if (generation !== navigationGeneration) return true;
+      project = loaded;
+      if (project) {
+        normalizeLoadedProjects([project]);
+        const index = state.projects.findIndex((item) => item.id === projectId);
+        if (index >= 0) state.projects[index] = project;
+        else state.projects.push(project);
+      }
+    }
+    if (generation !== navigationGeneration) return true;
     if (!project) return false;
     updateBrowserRoute(projectPath(projectId), historyMode);
     state.activeProjectId = projectId;
@@ -1007,6 +1044,7 @@ export function createEditorProjects({
   }
 
   function openFolder(requestedFolderPath, { historyMode = "push" } = {}) {
+    navigationGeneration += 1;
     const folderPath = normalizeFolderPath(requestedFolderPath);
     if (!folderExists(folderPath)) return false;
     updateBrowserRoute(folderRoutePath(folderPath), historyMode);
@@ -1020,18 +1058,19 @@ export function createEditorProjects({
   }
 
   function openDashboard({ historyMode = "push" } = {}) {
+    navigationGeneration += 1;
     state.activeFolderPath = null;
     updateBrowserRoute("/", historyMode);
     renderDashboard();
   }
 
-  function renderCurrentRoute() {
+  async function renderCurrentRoute() {
     const route = routeFromPathname();
     if (route.view === "share") {
       void openSharedProject(route.shareId);
       return;
     }
-    if (route.view === "project" && openProject(route.projectId, { historyMode: "none" })) return;
+    if (route.view === "project" && await openProject(route.projectId, { historyMode: "none" })) return;
     if (route.view === "folder" && openFolder(route.folderPath, { historyMode: "none" })) return;
     const missingProject = route.view === "project";
     const missingFolder = route.view === "folder";
@@ -1183,7 +1222,7 @@ export function createEditorProjects({
     button.disabled = true;
     button.textContent = "Opening CarouselBot…";
     try {
-      const summary = await domainMigration.start([...state.projects], {
+      const summary = await domainMigration.start(await getAllProjects(), {
         onProgress: ({ completed, total }) => {
           button.textContent = `Copying ${completed} of ${total}…`;
           if (status) status.textContent = "Keep both tabs open while your projects and images are copied.";
@@ -1226,7 +1265,7 @@ export function createEditorProjects({
     if (!state.db || state.activeProjectId) return Promise.resolve();
     if (dashboardRefreshPromise) return dashboardRefreshPromise;
     dashboardRefreshPromise = flushPendingSave()
-      .then(() => getAllProjects())
+      .then(() => getProjectCatalog())
       .then((projects) => {
         if (state.activeProjectId) return;
         const refreshedProjects = normalizeLoadedProjects(projects);
@@ -1240,7 +1279,14 @@ export function createEditorProjects({
     return dashboardRefreshPromise;
   }
 
+  function releaseInactiveProjects() {
+    state.projects = state.projects.map((project) => project.id === state.activeProjectId
+      || project === pendingSaveProject || dirtySaveProjects.has(project.id)
+      ? project : projectCatalogEntry(project));
+  }
+
   return {
+    releaseInactiveProjects,
     domainMigration,
     recordHistory,
     undo,

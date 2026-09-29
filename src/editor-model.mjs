@@ -816,7 +816,7 @@ export function isVideoFile(file) {
 
 export function slideVideoDuration(slide, project) {
   const media = [slide, ...(slide?.overlays || []).map((layer) => project?.assets?.find((asset) => asset.id === layer.assetId))];
-  return Math.max(0, ...media.filter((asset) => asset?.videoData).map((asset) => Number.isFinite(asset.duration) && asset.duration > 0 ? asset.duration : 0));
+  return Math.max(0, ...media.filter((asset) => asset?.videoData || asset?.__hasVideoData).map((asset) => Number.isFinite(asset.duration) && asset.duration > 0 ? asset.duration : 0));
 }
 
 // Keep each text layer on one row, and separate nonempty slides by one blank row.
@@ -825,4 +825,23 @@ export function allSlideTexts(slides = []) {
     .map((item) => String(item.text ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim())
     .filter(Boolean).join("\n"))
     .filter(Boolean).join("\n\n");
+}
+
+// The catalog is derived metadata. Original media stays in the projects store.
+export function projectCatalogEntry(project) {
+  const withoutMedia = ({ imageData, videoData, fontData, ...metadata }) => ({
+    ...metadata,
+    ...(videoData ? { __hasVideoData: true } : {}),
+    ...(fontData ? { __hasFontData: true } : {}),
+    // Solid backgrounds are tiny SVG strings, needed to validate their color.
+    ...(typeof imageData === "string" && imageData.length < 2048 && imageData.startsWith("data:image/svg+xml") ? { imageData } : {}),
+  });
+  return {
+    ...withoutMedia(project),
+    __catalog: true,
+    folderPath: normalizeStoredFolderPath(project.folderPath),
+    slides: (project.slides || []).map((slide) => ({ ...withoutMedia(slide), texts: slide.texts || [], overlays: slide.overlays || [] })),
+    assets: (project.assets || []).map(withoutMedia),
+    fonts: (project.fonts || []).map(withoutMedia),
+  };
 }

@@ -215,7 +215,7 @@ export function renderAssetRail(project) {
       <div class="asset-grid" aria-label="Uploaded assets">
         ${assets.length ? assets.map((asset) => `
           <div class="asset-item" tabindex="0" aria-label="${asset.videoData ? "Play video" : "Preview"} ${escapeHtml(asset.name)}" data-asset-id="${escapeHtml(asset.id)}" draggable="true" title="${escapeHtml(asset.name)}">
-            <img src="${escapeHtml(asset.imageData)}" alt="${escapeHtml(asset.name)}" draggable="false" />
+            <img data-asset-preview-id="${escapeHtml(asset.id)}" alt="${escapeHtml(asset.name)}" draggable="false" decoding="async" />
             ${asset.videoData ? `<span class="asset-video-badge" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z"/></svg><span>${Math.round(asset.duration)}s</span></span>` : ""}
           </div>
         `).join("") : `<p class="asset-empty">Upload photos, videos, logos, or stickers. Drag them onto a photo to place them.</p>`}

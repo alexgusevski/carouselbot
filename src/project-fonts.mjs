@@ -447,7 +447,8 @@ async function registerProjectFont(font) {
     }
   })();
   fontRegistrations.set(key, registration);
-  return registration.promise;
+  try { return await registration.promise; }
+  finally { registration.promise = null; }
 }
 
 export function isTextFontAvailable(project, text) {
@@ -466,6 +467,7 @@ export function isTextFontLoaded(project, text) {
 
 export function isProjectFontAvailable(project, font) {
   if (!font || !project?.fonts?.some((candidate) => candidate?.id === font.id)) return false;
+  if (project.__catalog) return Boolean(font.__hasFontData);
   const registration = fontRegistrations.get(registrationKey(font));
   if (registration?.signature !== registrationSignature(font)) return isFontDataUrl(font.fontData);
   if (registration?.status === "missing") return false;

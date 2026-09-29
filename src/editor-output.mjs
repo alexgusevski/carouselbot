@@ -7,27 +7,51 @@ import {
   activeSlide,
   slideThumbnailKey,
 } from "./editor-state.mjs";
+import { getProjectFromDb, getStoredPreview, storePreview } from "./project-store.mjs";
 import { renderSlideThumbnail } from "./editor-view.mjs";
-import { canvasToBlob, renderSlideCanvas } from "./slide-renderer.mjs";
+import { canvasToBlob, renderSlideCanvas, renderAssetThumbnail } from "./slide-renderer.mjs";
 
 export function createEditorOutput({ toast }) {
   const thumbnailRenderQueue = [];
   let activeThumbnailRenders = 0;
   let dashboardThumbnailObserver = null;
+  let coverObserver = null;
+  let assetObserver = null;
+  let assetGeneration = 0;
+  const assetUrls = new Map();
+  let coverGeneration = 0;
   let dashboardThumbnailKeys = new Set();
+  let slideObservationGeneration = 0;
 
-  function acquireThumbnailRenderSlot() {
-    if (activeThumbnailRenders < 4) {
+  function acquireThumbnailRenderSlot(key) {
+    const queued = thumbnailRenderQueue.findIndex((entry) => entry.key === key);
+    if (queued >= 0) thumbnailRenderQueue.splice(queued, 1)[0].resolve(false);
+    if (activeThumbnailRenders < 2) {
       activeThumbnailRenders += 1;
-      return Promise.resolve();
+      return Promise.resolve(true);
     }
-    return new Promise((resolve) => thumbnailRenderQueue.push(resolve));
+    return new Promise((resolve) => thumbnailRenderQueue.push({ key, resolve }));
+  }
+
+  function cancelPendingThumbnailRenders() {
+    for (const entry of thumbnailRenderQueue.splice(0)) entry.resolve(false);
   }
 
   function releaseThumbnailRenderSlot() {
     const next = thumbnailRenderQueue.shift();
-    if (next) next();
+    if (next) next.resolve(true);
     else activeThumbnailRenders = Math.max(0, activeThumbnailRenders - 1);
+  }
+
+  function previewIsVisible(target) {
+    const rect = target.getBoundingClientRect();
+    if (!rect.width || !rect.height || rect.bottom < -160 || rect.top > innerHeight + 160
+      || rect.right < -160 || rect.left > innerWidth + 160) return false;
+    const clip = target.closest("[data-project-preview-strip], .slide-list, .asset-grid");
+    if (!clip) return true;
+    const bounds = clip.getBoundingClientRect();
+    return rect.right > bounds.left && rect.left < bounds.right
+      && rect.bottom > bounds.top && rect.top < bounds.bottom;
   }
 
   let videoExportBusy = false;
@@ -36,8 +60,9 @@ export function createEditorOutput({ toast }) {
     return slide ? `${Number(project.revision) || 0}:${slide.id}:${thumbnailSignature(slide, project)}` : "";
   }
 
-  async function refreshProjectCover(project) {
-    const slide = project.slides[0];
+  async function refreshProjectCover(project, generation = coverGeneration) {
+    if (generation !== coverGeneration) return;
+    let slide = project.slides[0];
     const target = app.querySelector(`[data-project-cover-id="${project.id}"]`);
     if (!target) return;
     if (!slide) {
@@ -56,14 +81,26 @@ export function createEditorOutput({ toast }) {
       return;
     }
 
-    const version = (state.projectCoverVersions.get(project.id) || 0) + 1;
+    const version = Symbol("cover");
     state.projectCoverVersions.set(project.id, version);
     target.classList.add("is-rendering");
+    if (!await acquireThumbnailRenderSlot(`cover:${project.id}`)) return;
     try {
-      const preview = scaleCanvasDimensions(project, 270, slide);
-      const canvas = await renderSlideCanvas(slide, preview.width, preview.height, project);
-      const blob = await canvasToBlob(canvas);
-      if (state.projectCoverVersions.get(project.id) !== version) return;
+      if (generation !== coverGeneration || state.projectCoverVersions.get(project.id) !== version || !target.isConnected) return;
+      const key = JSON.stringify([project.id, "cover"]);
+      let blob = await getStoredPreview(key, signature);
+      if (!blob) {
+        if (project.__catalog) project = await getProjectFromDb(project.id);
+        if (!project || generation !== coverGeneration) return;
+        slide = project.slides[0];
+        if (!slide) return;
+        const preview = scaleCanvasDimensions(project, 270, slide);
+        const canvas = await renderSlideCanvas(slide, preview.width, preview.height, project);
+        blob = await canvasToBlob(canvas);
+        if (generation !== coverGeneration || state.projectCoverVersions.get(project.id) !== version) return;
+        storePreview(key, signature, blob, project);
+      }
+      if (generation !== coverGeneration || state.projectCoverVersions.get(project.id) !== version) return;
       const url = URL.createObjectURL(blob);
       const previousUrl = state.projectCoverUrls.get(project.id);
       state.projectCoverUrls.set(project.id, url);
@@ -82,16 +119,20 @@ export function createEditorOutput({ toast }) {
         currentTarget.classList.remove("is-rendering");
       }
     } catch (error) {
+      if (generation !== coverGeneration || state.projectCoverVersions.get(project.id) !== version) return;
       console.error("Could not render project cover", error);
+      const fallback = slide.imageData ? await renderAssetThumbnail(slide).catch(() => null) : null;
+      if (generation !== coverGeneration || state.projectCoverVersions.get(project.id) !== version) return;
       clearProjectCover(project.id);
       const currentTarget = app.querySelector(`[data-project-cover-id="${project.id}"]`);
       if (currentTarget) {
         const overflowLabel = currentTarget.querySelector(".folder-preview-more");
         currentTarget.classList.remove("is-rendering");
         currentTarget.title = error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Preview unavailable";
-        if (slide.imageData) {
+        if (fallback) {
           const image = document.createElement("img");
-          image.src = slide.imageData;
+          image.src = URL.createObjectURL(fallback);
+          state.projectCoverUrls.set(project.id, image.src);
           image.alt = "";
           currentTarget.replaceChildren(image);
         } else {
@@ -99,11 +140,41 @@ export function createEditorOutput({ toast }) {
         }
         if (overflowLabel) currentTarget.appendChild(overflowLabel);
       }
+    } finally {
+      releaseThumbnailRenderSlot();
     }
   }
 
   function refreshAllProjectCovers(projects = state.projects) {
-    projects.forEach((project) => { void refreshProjectCover(project); });
+    coverObserver?.disconnect();
+    const generation = ++coverGeneration;
+    const byId = new Map(projects.map((project) => [project.id, project]));
+    const targets = [...app.querySelectorAll("[data-project-cover-id]")];
+    const visibleIds = new Set(targets.map((target) => target.dataset.projectCoverId));
+    for (const id of state.projectCoverUrls.keys()) if (!visibleIds.has(id)) clearProjectCover(id);
+    const requested = new WeakSet();
+    const refresh = (target) => {
+      if (requested.has(target)) return;
+      requested.add(target);
+      const project = byId.get(target.dataset.projectCoverId);
+      if (project) void refreshProjectCover(project, generation);
+    };
+    if (typeof IntersectionObserver !== "function") { targets.forEach(refresh); return; }
+    coverObserver = new IntersectionObserver((entries) => {
+      if (generation !== coverGeneration) return;
+      for (const entry of entries) {
+        if (entry.isIntersecting) refresh(entry.target);
+        else {
+          requested.delete(entry.target);
+          clearProjectCover(entry.target.dataset.projectCoverId);
+          entry.target.querySelector("img")?.remove();
+        }
+      }
+    }, { rootMargin: "160px" });
+    targets.forEach((target) => {
+      coverObserver.observe(target);
+      if (previewIsVisible(target)) refresh(target);
+    });
   }
 
   function clearProjectCover(projectId) {
@@ -127,7 +198,7 @@ export function createEditorOutput({ toast }) {
     const fontIds = new Set((slide.texts || []).map((text) => text.fontId).filter(Boolean));
     const fonts = (project?.fonts || [])
       .filter((font) => fontIds.has(font.id))
-      .map((font) => [font.id, font.fingerprint || font.localFontId || "", font.dataRevision || "", font.fontData?.length || 0]);
+      .map((font) => [font.id, font.fingerprint || font.localFontId || "", font.dataRevision || ""]);
     return JSON.stringify([
       slideCanvasDimensions(project, slide),
       slide.backgroundRevision || "",
@@ -151,7 +222,8 @@ export function createEditorOutput({ toast }) {
     const targets = slideThumbnailTargets(slide.id, project);
     if (!targets.length) return;
     const cacheKey = slideThumbnailKey(project?.id, slide.id);
-    const signature = thumbnailSignature(slide, project);
+    const storedKey = JSON.stringify([project?.id, "slide", slide.id]);
+    const signature = `${Number(project?.revision) || 0}:${thumbnailSignature(slide, project)}`;
     const renderToken = Symbol("slide-thumbnail-render");
     state.thumbnailVersions.set(cacheKey, renderToken);
     const cachedUrl = state.thumbnailUrls.get(cacheKey);
@@ -169,12 +241,22 @@ export function createEditorOutput({ toast }) {
     }
 
     targets.forEach((target) => target.classList.add("is-rendering"));
-    await acquireThumbnailRenderSlot();
+    if (!await acquireThumbnailRenderSlot(`slide:${cacheKey}`)) return;
     try {
       if (state.thumbnailVersions.get(cacheKey) !== renderToken || !slideThumbnailTargets(slide.id, project).length) return;
-      const preview = scaleCanvasDimensions(project, 540, slide);
-      const canvas = await renderSlideCanvas(slide, preview.width, preview.height, project);
-      const blob = await canvasToBlob(canvas);
+      let blob = await getStoredPreview(storedKey, signature);
+      if (!blob) {
+        const slideId = slide.id;
+        if (project.__catalog) project = await getProjectFromDb(project.id);
+        if (!project || state.thumbnailVersions.get(cacheKey) !== renderToken) return;
+        slide = project.slides.find((item) => item.id === slideId);
+        if (!slide) return;
+        const preview = scaleCanvasDimensions(project, 540, slide);
+        const canvas = await renderSlideCanvas(slide, preview.width, preview.height, project);
+        blob = await canvasToBlob(canvas);
+        if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
+        storePreview(storedKey, signature, blob, project);
+      }
       if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
       const url = URL.createObjectURL(blob);
       const previousUrl = state.thumbnailUrls.get(cacheKey);
@@ -189,14 +271,18 @@ export function createEditorOutput({ toast }) {
     } catch (error) {
       if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
       console.error(error);
+      const fallback = slide.imageData ? await renderAssetThumbnail(slide).catch(() => null) : null;
+      if (state.thumbnailVersions.get(cacheKey) !== renderToken) return;
       clearSlideThumbnail(slide.id, project?.id);
+      const fallbackUrl = fallback ? URL.createObjectURL(fallback) : null;
+      if (fallbackUrl) state.thumbnailUrls.set(cacheKey, fallbackUrl);
       slideThumbnailTargets(slide.id, project).forEach((currentTarget) => {
         currentTarget.classList.remove("is-rendering");
         currentTarget.title = error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "Preview unavailable";
-        if (currentTarget.classList.contains("project-preview-slide") && slide.imageData) {
+        if (currentTarget.classList.contains("project-preview-slide") && fallbackUrl) {
           const image = document.createElement("img");
           image.className = "project-preview-source";
-          image.src = slide.imageData;
+          image.src = fallbackUrl;
           image.alt = "";
           image.draggable = false;
           image.loading = "lazy";
@@ -214,13 +300,67 @@ export function createEditorOutput({ toast }) {
 
   function refreshAllSlideThumbnails(slides, project = activeProject()) {
     disconnectDashboardSlideThumbnails();
-    slides.forEach((slide) => { void refreshSlideThumbnail(slide, project); });
+    releaseUnusedPreviews();
+    observeSlideTargets([project]);
+    refreshAssetPreviews(project);
+  }
+
+  function refreshAssetPreviews(project) {
+    assetObserver?.disconnect();
+    const generation = ++assetGeneration;
+    for (const url of assetUrls.values()) URL.revokeObjectURL(url);
+    assetUrls.clear();
+    if (!project) return;
+    const versions = new WeakMap();
+    assetObserver = new IntersectionObserver((entries) => {
+      if (generation !== assetGeneration) return;
+      for (const entry of entries) {
+        const token = Symbol("asset-preview");
+        versions.set(entry.target, token);
+        entry.target.dataset.previewVisible = String(entry.isIntersecting);
+        if (!entry.isIntersecting) {
+          const id = entry.target.dataset.assetPreviewId;
+          if (assetUrls.has(id)) URL.revokeObjectURL(assetUrls.get(id));
+          assetUrls.delete(id);
+          entry.target.removeAttribute("src");
+          continue;
+        }
+        void (async () => {
+          if (!await acquireThumbnailRenderSlot(`asset:${project.id}:${entry.target.dataset.assetPreviewId}`)) return;
+          try {
+            if (generation !== assetGeneration || !entry.target.isConnected || versions.get(entry.target) !== token || entry.target.dataset.previewVisible !== "true") return;
+            const asset = project.assets.find((item) => item.id === entry.target.dataset.assetPreviewId);
+            if (!asset) return;
+            const key = JSON.stringify([project.id, "asset", asset.id]);
+            const signature = asset.fingerprint || `${Number(project.revision) || 0}:${asset.id}`;
+            let blob = await getStoredPreview(key, signature);
+            if (!blob) {
+              blob = await renderAssetThumbnail(asset);
+              storePreview(key, signature, blob, project);
+            }
+            if (generation !== assetGeneration || !entry.target.isConnected || versions.get(entry.target) !== token || entry.target.dataset.previewVisible !== "true") return;
+            const url = URL.createObjectURL(blob);
+            if (assetUrls.has(asset.id)) URL.revokeObjectURL(assetUrls.get(asset.id));
+            assetUrls.set(asset.id, url);
+            entry.target.src = url;
+          } catch (error) { console.error("Could not render asset preview", error); }
+          finally { releaseThumbnailRenderSlot(); }
+        })();
+      }
+    }, { rootMargin: "160px" });
+    app.querySelectorAll("[data-asset-preview-id]").forEach((target) => assetObserver.observe(target));
   }
 
   function refreshDashboardSlideThumbnails(projects) {
+    refreshAssetPreviews(null);
     disconnectDashboardSlideThumbnails();
+    observeSlideTargets(projects);
+  }
+
+  function observeSlideTargets(projects) {
+    const generation = slideObservationGeneration;
     const projectsById = new Map(projects.map((project) => [project.id, project]));
-    const targets = [...app.querySelectorAll(".project-preview-slide[data-thumbnail-project-id][data-thumbnail-slide-id]")];
+    const targets = [...app.querySelectorAll("[data-thumbnail-project-id][data-thumbnail-slide-id]")];
     dashboardThumbnailKeys = new Set(targets.map((target) => slideThumbnailKey(
       target.dataset.thumbnailProjectId,
       target.dataset.thumbnailSlideId,
@@ -228,39 +368,44 @@ export function createEditorOutput({ toast }) {
     dashboardThumbnailKeys.forEach((cacheKey) => {
       state.thumbnailVersions.set(cacheKey, Symbol("dashboard-thumbnail-generation"));
     });
+    const requested = new WeakSet();
     const refreshTarget = (target) => {
+      if (requested.has(target)) return;
+      requested.add(target);
       const project = projectsById.get(target.dataset.thumbnailProjectId);
       const slide = project?.slides.find((item) => item.id === target.dataset.thumbnailSlideId);
       if (slide) void refreshSlideThumbnail(slide, project);
     };
 
-    const eagerProjectIds = new Set();
-    const deferredTargets = [];
-    targets.forEach((target) => {
-      if (!eagerProjectIds.has(target.dataset.thumbnailProjectId)) {
-        eagerProjectIds.add(target.dataset.thumbnailProjectId);
-        refreshTarget(target);
-      } else {
-        deferredTargets.push(target);
-      }
-    });
+    const deferredTargets = targets;
+    releaseUnusedPreviews();
     if (!deferredTargets.length) return;
     if (typeof IntersectionObserver !== "function") {
       deferredTargets.forEach(refreshTarget);
       return;
     }
 
-    dashboardThumbnailObserver = new IntersectionObserver((entries, observer) => {
+    dashboardThumbnailObserver = new IntersectionObserver((entries) => {
+      if (generation !== slideObservationGeneration) return;
       entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        observer.unobserve(entry.target);
-        refreshTarget(entry.target);
+        if (entry.isIntersecting) refreshTarget(entry.target);
+        else {
+          requested.delete(entry.target);
+          const key = slideThumbnailKey(entry.target.dataset.thumbnailProjectId, entry.target.dataset.thumbnailSlideId);
+          clearThumbnailCacheKey(key);
+          entry.target.innerHTML = '<span class="thumb-rendering-placeholder" aria-hidden="true"><span></span></span>';
+        }
       });
     }, { rootMargin: "160px", threshold: 0.01 });
-    deferredTargets.forEach((target) => dashboardThumbnailObserver.observe(target));
+    deferredTargets.forEach((target) => {
+      dashboardThumbnailObserver.observe(target);
+      // Keep in-viewport previews current even when background tabs throttle frames.
+      if (previewIsVisible(target)) refreshTarget(target);
+    });
   }
 
   function disconnectDashboardSlideThumbnails() {
+    slideObservationGeneration += 1;
     dashboardThumbnailObserver?.disconnect();
     dashboardThumbnailObserver = null;
     dashboardThumbnailKeys.forEach((cacheKey) => {
@@ -269,6 +414,18 @@ export function createEditorOutput({ toast }) {
       }
     });
     dashboardThumbnailKeys = new Set();
+  }
+
+  function releaseUnusedPreviews() {
+    const liveKeys = new Set([...app.querySelectorAll("[data-thumbnail-project-id][data-thumbnail-slide-id]")]
+      .map((target) => slideThumbnailKey(target.dataset.thumbnailProjectId, target.dataset.thumbnailSlideId)));
+    for (const key of state.thumbnailVersions.keys()) if (!liveKeys.has(key)) clearThumbnailCacheKey(key);
+    for (const key of state.thumbnailUrls.keys()) if (!liveKeys.has(key)) clearThumbnailCacheKey(key);
+    if (state.activeProjectId) {
+      coverGeneration += 1;
+      coverObserver?.disconnect();
+      for (const id of new Set([...state.projectCoverVersions.keys(), ...state.projectCoverUrls.keys()])) clearProjectCover(id);
+    }
   }
 
   function clearThumbnailCacheKey(cacheKey) {
@@ -320,7 +477,7 @@ export function createEditorOutput({ toast }) {
       finally { videoExportBusy = false; }
     }
     const canvas = await renderSlideCanvas(slide, undefined, undefined, project);
-    return new Promise((resolve) => canvas.toBlob(resolve, "image/png", 1));
+    return canvasToBlob(canvas);
   }
 
   function slideExportName(slide = activeSlide(), index = null) {
@@ -486,6 +643,7 @@ export function createEditorOutput({ toast }) {
   }
 
   return {
+    cancelPendingThumbnailRenders,
     scheduleThumbnailRefresh,
     refreshAllProjectCovers,
     clearProjectCover,

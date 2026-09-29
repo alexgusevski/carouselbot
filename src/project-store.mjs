@@ -1,7 +1,10 @@
 import { uid, folderContains, movedFolderPath, normalizeStoredFolderPath } from "./editor-model.mjs";
+import { projectCatalogEntry } from "./editor-model.mjs";
 import { state } from "./editor-state.mjs";
 
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
+export const CATALOG_STORE = "project-catalog";
+export const PREVIEW_STORE = "project-previews";
 
 export const STORE_NAME = "projects";
 
@@ -20,10 +23,27 @@ export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersion
     // Surface recovery guidance even when the browser never dispatches that event here.
     const blockedTimer = setTimeout(onBlocked, 1500);
     request.onupgradeneeded = () => {
+      clearTimeout(blockedTimer);
       const db = request.result;
       if (!db.objectStoreNames.contains("folders")) db.createObjectStore("folders", { keyPath: "path" });
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(PREVIEW_STORE)) {
+        const previews = db.createObjectStore(PREVIEW_STORE, { keyPath: "key" });
+        previews.createIndex("projectId", "projectId");
+        previews.createIndex("updatedAt", "updatedAt");
+      }
+      if (!db.objectStoreNames.contains(CATALOG_STORE)) {
+        const catalog = db.createObjectStore(CATALOG_STORE, { keyPath: "id" });
+        // Cursor backfill bounds migration memory to one project, rather than getAll().
+        const cursor = request.transaction.objectStore(STORE_NAME).openCursor();
+        cursor.onsuccess = () => {
+          const entry = cursor.result;
+          if (!entry) return;
+          catalog.put(projectCatalogEntry(entry.value));
+          entry.continue();
+        };
       }
     };
     request.onblocked = () => onBlocked();
@@ -55,6 +75,50 @@ export async function getAllProjects() {
   });
 }
 
+export async function getProjectCatalog() {
+  state.folders = await getAllFolders();
+  return new Promise((resolve, reject) => {
+    const request = state.db.transaction(CATALOG_STORE).objectStore(CATALOG_STORE).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export function getStoredPreview(key, signature) {
+  if (!state.db) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const request = state.db.transaction(PREVIEW_STORE).objectStore(PREVIEW_STORE).get(key);
+    request.onsuccess = () => resolve(request.result?.signature === signature ? request.result.blob : null);
+    request.onerror = () => resolve(null);
+  });
+}
+
+export function storePreview(key, signature, blob, project) {
+  if (!state.db) return;
+  const tx = state.db.transaction([CATALOG_STORE, PREVIEW_STORE], "readwrite");
+  const read = tx.objectStore(CATALOG_STORE).get(project.id);
+  read.onsuccess = () => {
+    if (read.result && Number(read.result.revision || 0) === Number(project.revision || 0)) {
+      const previews = tx.objectStore(PREVIEW_STORE);
+      previews.put({ key, signature, blob, projectId: project.id, updatedAt: Date.now() });
+      const count = previews.count();
+      count.onsuccess = () => {
+        let excess = count.result - 128;
+        if (excess <= 0) return;
+        const oldest = previews.index("updatedAt").openKeyCursor();
+        oldest.onsuccess = () => {
+          const cursor = oldest.result;
+          if (!cursor || excess-- <= 0) return;
+          previews.delete(cursor.primaryKey);
+          cursor.continue();
+        };
+      };
+    }
+  };
+  // Previews are disposable. A quota error must never prevent saving originals.
+  tx.onerror = (event) => event.preventDefault();
+}
+
 export function getAllFolders() {
   return new Promise((resolve, reject) => {
     const request = state.db.transaction("folders", "readonly").objectStore("folders").getAll();
@@ -73,6 +137,14 @@ export function createFolderInDb(path) {
     };
     transaction.onabort = () => reject(transaction.error || new Error("Couldn’t create this folder."));
     transaction.onerror = () => {};
+  });
+}
+
+export function getProjectMetadataFromDb(projectId) {
+  return new Promise((resolve, reject) => {
+    const request = state.db.transaction(CATALOG_STORE).objectStore(CATALOG_STORE).get(projectId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
   });
 }
 
@@ -104,8 +176,9 @@ export function announceProjectChange(type, project) {
 }
 
 export function putProject(project, { expectedRevision = null, broadcast = true } = {}) {
+  if (project.__catalog) return Promise.reject(new Error("Cannot save an unloaded project."));
   return new Promise((resolve, reject) => {
-    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const transaction = state.db.transaction([STORE_NAME, CATALOG_STORE, PREVIEW_STORE], "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     let conflict = null;
     const read = store.get(project.id);
@@ -118,6 +191,7 @@ export function putProject(project, { expectedRevision = null, broadcast = true 
         return;
       }
       store.put(project);
+      transaction.objectStore(CATALOG_STORE).put(projectCatalogEntry(project));
     };
     transaction.oncomplete = () => {
       if (broadcast) announceProjectChange("project.updated", project);
@@ -130,7 +204,7 @@ export function putProject(project, { expectedRevision = null, broadcast = true 
 
 export function deleteProjectFromDb(projectId, { expectedRevision = null, broadcast = true } = {}) {
   return new Promise((resolve, reject) => {
-    const transaction = state.db.transaction(STORE_NAME, "readwrite");
+    const transaction = state.db.transaction([STORE_NAME, CATALOG_STORE, PREVIEW_STORE], "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     let conflict = null;
     const read = store.get(projectId);
@@ -143,6 +217,14 @@ export function deleteProjectFromDb(projectId, { expectedRevision = null, broadc
         return;
       }
       store.delete(projectId);
+      transaction.objectStore(CATALOG_STORE).delete(projectId);
+      const previews = transaction.objectStore(PREVIEW_STORE).index("projectId").openCursor(projectId);
+      previews.onsuccess = () => {
+        const cursor = previews.result;
+        if (!cursor) return;
+        if (cursor.value.projectId === projectId) cursor.delete();
+        cursor.continue();
+      };
     };
     transaction.oncomplete = () => {
       if (broadcast) announceProjectEvent({ type: "project.deleted", source: projectChannelSource, projectId });
@@ -155,7 +237,7 @@ export function deleteProjectFromDb(projectId, { expectedRevision = null, broadc
 
 export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath = null) {
   return new Promise((resolve, reject) => {
-    const transaction = state.db.transaction([STORE_NAME, "folders"], "readwrite");
+    const transaction = state.db.transaction([STORE_NAME, "folders", CATALOG_STORE], "readwrite");
     const store = transaction.objectStore(STORE_NAME);
     const moved = [];
     const folders = transaction.objectStore("folders");
@@ -170,29 +252,23 @@ export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPa
         }
       } catch { transaction.abort(); }
     };
-    const read = store.getAll();
+    const read = store.openCursor();
     read.onerror = () => reject(read.error);
     read.onsuccess = () => {
-      const now = Date.now();
-      // Validate the entire subtree before issuing any writes.
+      const cursor = read.result;
+      if (!cursor) return;
+      const project = cursor.value;
       try {
-        for (const project of read.result || []) movedFolderPath(normalizeStoredFolderPath(project.folderPath), sourceFolderPath, destinationFolderPath);
-      } catch (error) {
-        reject(error);
-        transaction.abort();
-        return;
-      }
-      for (const project of read.result || []) {
-        if (!folderContains(sourceFolderPath, normalizeStoredFolderPath(project.folderPath))) continue;
-        const updated = {
-          ...project,
-          folderPath: movedFolderPath(normalizeStoredFolderPath(project.folderPath), sourceFolderPath, destinationFolderPath),
-          revision: (Number(project.revision) || 0) + 1,
-          updatedAt: now,
-        };
-        moved.push(updated);
-        store.put(updated);
-      }
+        const path = movedFolderPath(normalizeStoredFolderPath(project.folderPath), sourceFolderPath, destinationFolderPath);
+        if (folderContains(sourceFolderPath, normalizeStoredFolderPath(project.folderPath))) {
+          const updated = { ...project, folderPath: path, revision: (Number(project.revision) || 0) + 1, updatedAt: Date.now() };
+          const catalog = projectCatalogEntry(updated);
+          moved.push(catalog);
+          cursor.update(updated);
+          transaction.objectStore(CATALOG_STORE).put(catalog);
+        }
+        cursor.continue();
+      } catch (error) { reject(error); transaction.abort(); }
     };
     transaction.oncomplete = () => {
       announceProjectEvent({ type: "folders.updated", source: projectChannelSource });

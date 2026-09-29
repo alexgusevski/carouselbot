@@ -54,7 +54,7 @@ import {
   constrainImagePosition,
 } from "./editor-state.mjs";
 import {
-  getProjectFromDb,
+  getProjectMetadataFromDb,
   staleProjectError,
   putProject,
   deleteProjectFromDb,
@@ -165,7 +165,7 @@ function agentFolderSummaries() {
 }
 
 function agentSlideBackgroundSummary(slide, project) {
-  if (slide.videoData) return { type: "video", duration: slide.duration };
+  if (slide.videoData || slide.__hasVideoData) return { type: "video", duration: slide.duration };
   const color = canonicalSolidBackgroundColor(slide, project);
   return color
     ? { type: "solid", color }
@@ -209,13 +209,13 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
     project: project ? {
       ...agentProjectSummary(project),
       slides: project.slides.map((projectSlide, index) => agentSlideSummary(projectSlide, index, project)),
-      assets: (project.assets || []).map(({ id, name, width, height, videoData, duration }) => ({ id, name, width, height, type: videoData ? "video" : "image", ...(videoData ? { duration } : {}) })),
+      assets: (project.assets || []).map(({ id, name, width, height, videoData, __hasVideoData, duration }) => ({ id, name, width, height, type: videoData || __hasVideoData ? "video" : "image", ...(videoData || __hasVideoData ? { duration } : {}) })),
       fonts: (project.fonts || []).map((font) => publicProjectFont(project, font)),
     } : null,
     slide: slide ? {
       ...agentSlideSummary(slide, project.slides.indexOf(slide), project),
       texts: slide.texts.map((text) => ({ ...text, effectiveFontWeight: textFontWeight(project, text), supportedWeights: textWeightOptions(project, text) })),
-      images: (slide.overlays || []).map((overlay) => ({ ...overlay, type: project.assets?.find((asset) => asset.id === overlay.assetId)?.videoData ? "video" : "image" })),
+      images: (slide.overlays || []).map((overlay) => ({ ...overlay, type: project.assets?.some((asset) => asset.id === overlay.assetId && (asset.videoData || asset.__hasVideoData)) ? "video" : "image" })),
     } : null,
   };
 }
@@ -257,7 +257,7 @@ async function agentMarkFontsUsed(project, textLayers) {
 }
 
 async function agentCommit(project, slide, mutate, message) {
-  const stored = await getProjectFromDb(project.id);
+  const stored = await getProjectMetadataFromDb(project.id);
   const baseRevision = Number(project.revision) || 0;
   const storedRevision = Number(stored?.revision) || 0;
   if (stored && (storedRevision !== baseRevision || Number(stored.updatedAt) > Number(project.updatedAt))) {
@@ -285,6 +285,13 @@ async function agentCommit(project, slide, mutate, message) {
   project.updatedAt = Date.now();
   project.revision = baseRevision + 1;
   state.shareAllCache = null;
+  // Dashboard previews hydrate from storage, so expose only the committed revision.
+  try {
+    await putProject(project, { expectedRevision: baseRevision });
+  } catch (error) {
+    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
+    throw error;
+  }
   if (targetIsVisible) renderEditor();
   else if (!visibleView.projectId) {
     if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
@@ -295,12 +302,6 @@ async function agentCommit(project, slide, mutate, message) {
     bindGlobalActions();
   }
   await agentNextFrame();
-  try {
-    await putProject(project, { expectedRevision: baseRevision });
-  } catch (error) {
-    if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
-    throw error;
-  }
   if (message) toast(message);
   return {
     projectId: project.id,

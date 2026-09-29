@@ -860,8 +860,11 @@ try {
   if ((await tool("inspect_editor", { ...bgTarget, includeAllProjects: false })).structuredContent.slide.mode !== 'image') throw new Error("Replacing video background left video mode enabled");
   await tool("update_slide", { ...bgTarget, backgroundPath: videoPath });
   if ((await tool("inspect_editor", { ...bgTarget, includeAllProjects: false })).structuredContent.slide.mode !== 'video') throw new Error("Replacing image background with video failed");
+  await evaluate(cdp, `window.__videoReloadPending = true`);
   await cdp.send('Page.reload');
-  await waitFor(() => evaluate(cdp, `Boolean(window.carouselBotAgent)`), 'Video reload failed');
+  await waitFor(() => evaluate(cdp, `!window.__videoReloadPending && Boolean(window.carouselBotReady)
+    && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), 'Video reload failed');
+  await evaluate(cdp, `window.carouselBotReady`);
   videoInspection = (await tool("inspect_editor", { ...videoTarget, includeAllProjects: false })).structuredContent;
   if (videoInspection.slide.mode !== 'video' || videoInspection.project.assets.find(asset => asset.id === videoAsset.assetId)?.type !== 'video') throw new Error("Video metadata did not persist");
   await tool("set_view", { ...videoTarget, showTikTokOverlay: true, canvasZoom: 0.8 });
