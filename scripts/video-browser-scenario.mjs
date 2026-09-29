@@ -19,6 +19,32 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
       label: document.querySelector('[data-action="export"]').textContent };
   })()`);
   if (sample.duration < 9.8 || sample.duration > 10.5 || sample.texts !== 5 || !sample.videos || !sample.label.includes('MP4')) throw new Error(`Invalid video sample: ${JSON.stringify(sample)}`);
+  // A new media element in a hidden Chrome tab stalls before loadedmetadata.
+  // Agent imports and frame renders must work without focusing the editor.
+  const foreground = await cdp.send("Target.createTarget", { url: "about:blank" });
+  try {
+    await cdp.send("Target.activateTarget", { targetId: foreground.targetId });
+    const background = await evaluate(cdp, `(async () => {
+      if (document.visibilityState !== 'hidden') throw new Error('Regression requires a hidden editor');
+      const { readVideoAsset } = await import('/src/video-media.mjs');
+      const { renderVideoFrame } = await import('/src/video-frame.mjs');
+      const asset = await readVideoAsset(window.__sampleVideoAsset.videoData);
+      const first = await renderVideoFrame(window.__sampleVideoSlide, window.__sampleVideoProject, 270, 480, 0);
+      const later = await renderVideoFrame(window.__sampleVideoSlide, window.__sampleVideoProject, 270, 480, 7);
+      const changed = first.toDataURL() !== later.toDataURL();
+      first.width = later.width = 0;
+      let rejected = false;
+      try { await readVideoAsset('data:video/mp4;base64,aW52YWxpZA=='); } catch { rejected = true; }
+      return { duration: asset.duration, width: asset.width, height: asset.height, changed, rejected, hidden: document.hidden };
+    })()`);
+    if (!background.hidden || !background.changed || !background.rejected || background.duration < 9.8 || background.width !== 460 || background.height !== 920) {
+      throw new Error(`Background video import/render failed: ${JSON.stringify(background)}`);
+    }
+    process.stdout.write(`Background video import and frame rendering passed: ${JSON.stringify(background)}\n`);
+  } finally {
+    await cdp.send("Page.bringToFront");
+    await cdp.send("Target.closeTarget", { targetId: foreground.targetId });
+  }
   await evaluate(cdp, `document.querySelector('[data-video-play]').click()`);
   await evaluate(cdp, `(() => {
     const range = document.querySelector('[data-video-time]'); range.value = 6;
@@ -75,6 +101,7 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
   if (!mp4Bytes.includes(Buffer.from('avc1')) || mp4Bytes.includes(Buffer.from('avc3'))) {
     throw new Error('MP4 export must use Apple-compatible avc1, not avc3');
   }
+  process.stdout.write("MP4 encoded; checking metadata and seeking\n");
   const metadata = await evaluate(cdp, `(async () => {
     const { loadVideo, releaseVideo } = await import('/src/video-media.mjs');
     const url = URL.createObjectURL(window.__sampleExport);
@@ -87,11 +114,15 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
       video.addEventListener('error', () => reject(new Error('Export failed during playback')), { once: true });
       video.play().catch(reject);
     });
-    video.currentTime = 5;
-    await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Exported MP4 seek timed out')), 10000);
+      video.addEventListener('seeked', () => { clearTimeout(timer); resolve(); }, { once: true });
+      video.currentTime = 5;
+    });
     releaseVideo(video); URL.revokeObjectURL(url);
     return result;
   })()`);
+  process.stdout.write("MP4 metadata and seek passed\n");
   if (metadata.width !== 1080 || metadata.height !== 1920 || metadata.duration < 9.8 || metadata.duration > 11) throw new Error(`MP4 metadata invalid: ${JSON.stringify(metadata)}`);
   if (outputDirectory) {
     await mkdir(outputDirectory, { recursive: true });

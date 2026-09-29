@@ -41,6 +41,8 @@ await Promise.all([
   copyFile(join(root, "deploy", "_headers"), join(output, "_headers")),
   cp(join(root, "src"), join(output, "src"), { recursive: true }),
   cp(join(root, "assets"), join(output, "assets"), { recursive: true }),
+  copyFile(join(root, "node_modules/mediabunny/dist/bundles/mediabunny.min.mjs"), join(output, "assets/mediabunny-1.60.0.min.mjs")),
+  copyFile(join(root, "node_modules/mediabunny/LICENSE"), join(output, "assets/mediabunny-LICENSE.txt")),
 ]);
 
 console.log("Built the static Cloudflare bundle in dist/");

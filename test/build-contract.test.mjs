@@ -91,6 +91,12 @@ test("the production build copies the complete module graph and versions the ent
   const sourceModules = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs")).sort();
   const builtModules = (await readdir(join(root, "dist", "src"))).filter((name) => name.endsWith(".mjs")).sort();
   assert.deepEqual(builtModules, sourceModules);
+  const { dependencies } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  const videoLibrary = `assets/mediabunny-${dependencies.mediabunny}.min.mjs`;
+  assert.deepEqual(await readFile(join(root, "dist", videoLibrary)), await readFile(join(root, "node_modules/mediabunny/dist/bundles/mediabunny.min.mjs")));
+  assert.ok((await readFile(join(root, "src/video-media.mjs"), "utf8")).includes(`/${videoLibrary}`));
+  assert.ok((await readFile(join(root, "server.mjs"), "utf8")).includes(`/${videoLibrary}`));
+  await access(join(root, "dist/assets/mediabunny-LICENSE.txt"));
 
   const index = await readFile(join(root, "dist", "index.html"), "utf8");
   assert.doesNotMatch(index, /\?v=dev/);

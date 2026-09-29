@@ -39,5 +39,8 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
     "wrangler": "^4.139.0"
+  },
+  "dependencies": {
+    "mediabunny": "1.60.0"
   }
 }
