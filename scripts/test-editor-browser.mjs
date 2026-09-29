@@ -1400,6 +1400,56 @@ try {
     throw new Error(`Native slide drag ordering changed: ${JSON.stringify(slideReordering)}`);
   }
 
+  const slideDuplication = await evaluate(cdp, `(async () => {
+    const { state } = await import('/src/editor-state.mjs');
+    const project = state.projects.find((item) => item.id === state.activeProjectId);
+    const source = project.slides[0];
+    const before = structuredClone(source);
+    // Duplicate a non-active slide to verify that the menu targets the clicked thumbnail.
+    document.querySelector('.slide-thumb[data-slide-id="' + project.slides[1].id + '"]').click();
+    const button = document.querySelector('.slide-thumb[data-slide-id="' + source.id + '"]');
+    button.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
+    const duplicateButton = [...document.querySelectorAll('.layer-menu-item')]
+      .find((item) => item.textContent.trim() === 'Duplicate');
+    if (!duplicateButton) throw new Error('Missing Duplicate slide menu action.');
+    duplicateButton.click();
+    const copy = project.slides[1];
+    const normalized = structuredClone(copy);
+    normalized.id = before.id;
+    normalized.name = before.name;
+    normalized.texts.forEach((item, index) => { item.id = before.texts[index].id; });
+    normalized.overlays.forEach((item, index) => { item.id = before.overlays[index].id; });
+    const sourceIds = new Set([before.id, ...before.texts.map((item) => item.id), ...before.overlays.map((item) => item.id)]);
+    const newIds = [copy.id, ...copy.texts.map((item) => item.id), ...copy.overlays.map((item) => item.id)];
+    return {
+      id: copy.id,
+      correct: project.slides.length === 3 && state.activeSlideId === copy.id
+        && JSON.stringify(normalized) === JSON.stringify(before)
+        && new Set(newIds).size === newIds.length && newIds.every((id) => !sourceIds.has(id))
+        && copy.texts.every((item, index) => item !== source.texts[index])
+        && copy.overlays.every((item, index) => item !== source.overlays[index])
+        && !document.querySelector('.layer-menu'),
+    };
+  })()`);
+  if (!slideDuplication.correct) throw new Error('Slide duplication did not preserve content, ordering, or independent layer IDs.');
+  await waitFor(
+    () => evaluate(cdp, `(async () => {
+      const { getProjectFromDb } = await import('/src/project-store.mjs');
+      const project = await getProjectFromDb(${JSON.stringify(projectId)});
+      return project?.slides[1]?.id === ${JSON.stringify(slideDuplication.id)};
+    })()`),
+    'Duplicated slide was not persisted immediately beneath its source.',
+  );
+  await evaluate(cdp, `(async () => {
+    const { undo, redo } = await import('/src/editor.mjs');
+    const ids = () => window.carouselBotAgent.inspect({ includeAllProjects: false }).project.slides.map((item) => item.id);
+    await undo();
+    if (ids().length !== 2 || ids().includes(${JSON.stringify(slideDuplication.id)})) throw new Error('Undo did not remove the duplicated slide.');
+    await redo();
+    if (ids()[1] !== ${JSON.stringify(slideDuplication.id)}) throw new Error('Redo did not restore the duplicate beneath its source.');
+    await undo();
+  })()`);
+
   const keyboardSlideNavigation = await evaluate(cdp, `(() => {
     const activeSlideId = () => window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId;
     const activeThumbId = () => document.querySelector('.slide-thumb.is-active')?.dataset.slideId || null;
