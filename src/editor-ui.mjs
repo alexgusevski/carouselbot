@@ -1013,30 +1013,41 @@ export function createEditorUI({ projects, actions, output }) {
 
     const weightNumber = app.querySelector("#font-weight-number");
     const weightRange = app.querySelector("#font-weight");
-    const setWeight = async (value) => {
+    let weightUpdate = 0;
+    let weightHistoryRecorded = false;
+    const setWeight = async (value, { fromSlider = false } = {}) => {
       if (value === "" || !Number.isFinite(Number(value))) return;
+      const update = ++weightUpdate;
       const project = activeProject();
       const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
       const selection = selectedLayerKeys().join("|");
       try {
         const candidates = targets.map((item) => applyTextWeight(project, { ...item }, value));
         await ensureProjectFontsLoaded(project, candidates);
-        if (activeProject() !== project || selectedLayerKeys().join("|") !== selection) return;
-        recordHistory(project);
+        if (update !== weightUpdate || activeProject() !== project || selectedLayerKeys().join("|") !== selection) return;
+        if (!fromSlider || !weightHistoryRecorded) recordHistory(project);
+        if (fromSlider) weightHistoryRecorded = true;
         targets.forEach((item, index) => {
           Object.assign(item, candidates[index]);
           updateTextBox(item);
           ensureTextFits(item, { force: true });
         });
-        refreshSelection();
+        if (fromSlider) {
+          if (weightNumber) weightNumber.value = String(candidates[0]?.fontWeight ?? value);
+          if (weightRange) weightRange.dataset.mixed = "false";
+        } else refreshSelection();
         scheduleSave();
       } catch (error) {
-        window.alert(error.message);
+        if (update === weightUpdate) window.alert(error.message);
       }
     };
     weightNumber?.addEventListener("change", () => void setWeight(weightNumber.value));
-    weightRange?.addEventListener("input", () => { if (weightNumber) weightNumber.value = weightRange.value; });
-    weightRange?.addEventListener("change", () => void setWeight(weightRange.value));
+    weightRange?.addEventListener("pointerdown", () => { weightHistoryRecorded = false; });
+    weightRange?.addEventListener("keydown", (event) => { if (!event.repeat) weightHistoryRecorded = false; });
+    weightRange?.addEventListener("input", () => {
+      if (weightNumber) weightNumber.value = weightRange.value;
+      void setWeight(weightRange.value, { fromSlider: true });
+    });
 
     const range = app.querySelector("#font-size");
     const number = app.querySelector("#font-size-number");

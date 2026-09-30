@@ -1,3 +1,4 @@
+import { verifySelectedLayerPriority } from "./selection-browser-scenario.mjs";
 import { verifyEditorMemory } from "./performance-browser-scenario.mjs";
 import { verifyInlineTextRows } from "./inline-text-browser-scenario.mjs";
 import { verifyVideoSlides } from "./video-browser-scenario.mjs";
@@ -2242,6 +2243,8 @@ try {
   );
 
   const beforeVideoExportErrors = runtimeErrors.length;
+  await verifySelectedLayerPriority({ cdp, evaluate });
+
   await verifyVideoSlides({ cdp, evaluate, waitFor, outputDirectory: process.env.CAROUSELBOT_VIDEO_OUTPUT });
   // Chromium logs a codec-description warning for avc1 canvas recordings even
   // when the fixed-size export succeeds. The scenario checks the actual codec,
@@ -2401,6 +2404,8 @@ try {
     directUiTextEditing: true,
     outlineWidthRendering: true,
     pointerDragResize: true,
+    coveredSelectedLayerControls: true,
+    liveFontWeightDrag: true,
     sharedSelectionFormatting: true,
     sharedSelectionResizing: true,
     undoRedo: true,
