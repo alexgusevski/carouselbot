@@ -40,6 +40,29 @@ export function createLayerInteractions({
   ensureTextFits,
   deleteSelectedLayers,
 }) {
+  const layerPointerHandlers = new WeakMap();
+  const boundInteractionSurfaces = new WeakSet();
+
+  function bindSelectedLayerPriority(box, handler) {
+    layerPointerHandlers.set(box, handler);
+    const surface = box.closest(".layer-stack");
+    if (!surface || boundInteractionSurfaces.has(surface)) return;
+    boundInteractionSurfaces.add(surface);
+    surface.addEventListener("pointerdown", (event) => {
+      // Modifier clicks must still reach other layers for additive selection.
+      if (state.photoAdjustMode || event.metaKey || event.ctrlKey || event.button !== 0) return;
+      const hits = document.elementsFromPoint(event.clientX, event.clientY)
+        .map((target) => ({ target, box: target.closest(".overlay-box, .text-box") }))
+        .filter((hit) => hit.box?.classList.contains("is-selected") && surface.contains(hit.box));
+      const hit = hits.find(({ target }) => target.closest("[data-corner], [data-edge], [data-rotate], [data-crop]")) || hits[0];
+      if (!hit || hit.box.contains(event.target)) return;
+      const selectedHandler = layerPointerHandlers.get(hit.box);
+      if (!selectedHandler) return;
+      event.stopPropagation();
+      selectedHandler(event, hit.target);
+    }, { capture: true });
+  }
+
   function prepareLayerPointerSelection(event, kind, id) {
     const key = layerKey(kind, id);
     if ((event.metaKey || event.ctrlKey) && event.button === 0) {
@@ -56,12 +79,12 @@ export function createLayerInteractions({
   }
 
   function bindOverlayBox(box) {
-    box.addEventListener("pointerdown", (event) => {
+    const handlePointerDown = (event, target = event.target) => {
       if (state.photoAdjustMode) return;
-      const corner = event.target.closest("[data-corner]")?.dataset.corner;
-      const edge = event.target.closest("[data-edge]")?.dataset.edge;
-      const rotate = event.target.closest("[data-rotate]");
-      const cropHandle = event.target.closest("[data-crop]")?.dataset.crop;
+      const corner = target.closest("[data-corner]")?.dataset.corner;
+      const edge = target.closest("[data-edge]")?.dataset.edge;
+      const rotate = target.closest("[data-rotate]");
+      const cropHandle = target.closest("[data-crop]")?.dataset.crop;
       if (!prepareLayerPointerSelection(event, "overlay", box.dataset.overlayId)) return;
       if (state.croppingOverlayId && state.croppingOverlayId !== box.dataset.overlayId) {
         finishCrop();
@@ -69,14 +92,16 @@ export function createLayerInteractions({
       }
       if (state.croppingOverlayId === box.dataset.overlayId) {
         if (cropHandle) beginCropResize(event, box, cropHandle);
-        else if (event.target.closest(".crop-rect")) beginCropMove(event, box);
+        else if (target.closest(".crop-rect")) beginCropMove(event, box);
         return;
       }
       if (rotate) beginOverlayRotate(event, box);
       else if (corner) beginOverlayResize(event, box, corner);
       else if (edge) beginOverlayResize(event, box, edge, { preserveAspect: false });
       else beginOverlayDrag(event, box);
-    });
+    };
+    box.addEventListener("pointerdown", handlePointerDown);
+    bindSelectedLayerPriority(box, handlePointerDown);
     box.addEventListener("contextmenu", (event) => {
       showLayerMenu(event, "overlay", box.dataset.overlayId);
     });
@@ -345,11 +370,11 @@ export function createLayerInteractions({
 
   function bindTextBox(box) {
     const content = box.querySelector(".text-visual--inside .text-content");
-    box.addEventListener("pointerdown", (event) => {
-      const corner = event.target.closest("[data-corner]")?.dataset.corner;
-      const edge = event.target.closest("[data-edge]")?.dataset.edge;
-      const rotate = event.target.closest("[data-rotate]");
-      const contentTarget = event.target.closest(".text-content, .text-editor");
+    const handlePointerDown = (event, target = event.target) => {
+      const corner = target.closest("[data-corner]")?.dataset.corner;
+      const edge = target.closest("[data-edge]")?.dataset.edge;
+      const rotate = target.closest("[data-rotate]");
+      const contentTarget = target.closest(".text-content, .text-editor");
       const wasSelected = isLayerSelected("text", box.dataset.textId);
 
       if (box.classList.contains("is-editing")) {
@@ -371,7 +396,9 @@ export function createLayerInteractions({
       else if (corner) beginResize(event, box, corner);
       else if (edge) beginResize(event, box, edge);
       else beginDrag(event, box);
-    });
+    };
+    box.addEventListener("pointerdown", handlePointerDown);
+    bindSelectedLayerPriority(box, handlePointerDown);
     box.addEventListener("contextmenu", (event) => {
       if (box.classList.contains("is-editing")) return;
       showLayerMenu(event, "text", box.dataset.textId);
