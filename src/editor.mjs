@@ -1,10 +1,16 @@
 import { isEditingTextTarget } from "./editor-model.mjs";
 import { state, app, selectedLayerKeys } from "./editor-state.mjs";
-import { openDatabase, getProjectCatalog } from "./project-store.mjs";
+import { openDatabase, getProjectCatalog, configureCloudStore } from "./project-store.mjs";
 import { createEditorActions } from "./editor-actions.mjs";
 import { createEditorOutput } from "./editor-output.mjs";
 import { createEditorProjects, normalizeLoadedProjects } from "./editor-projects.mjs";
 import { createEditorUI } from "./editor-ui.mjs";
+
+import { createProductClient } from "./product-client.mjs";
+import { createProductUI } from "./product-ui.mjs";
+
+const productClient = createProductClient();
+let productUI;
 
 const APP_CONFIG = window.CAROUSELBOT_CONFIG;
 
@@ -21,8 +27,10 @@ const editorOutput = createEditorOutput({
 
 const editorProjects = createEditorProjects({
   domainMigration,
+  onSaveStatus: (error) => productUI?.updateSaveStatus(error),
   renderDashboard: (...args) => editorUI.renderDashboard(...args),
   renderEditor: (...args) => editorUI.renderEditor(...args),
+  renderLanding: (...args) => editorUI.renderLanding(...args),
   clearLayerSelection: (...args) => editorActions.clearLayerSelection(...args),
   toast: (...args) => editorUI.toast(...args),
   scheduleThumbnailRefresh: editorOutput.scheduleThumbnailRefresh,
@@ -34,6 +42,7 @@ const editorProjects = createEditorProjects({
 editorActions = createEditorActions({
   recordHistory: editorProjects.recordHistory,
   scheduleSave: editorProjects.scheduleSave,
+  flushPendingSave: editorProjects.flushPendingSave,
   reloadProjectFromDb: editorProjects.reloadProjectFromDb,
   renderEditor: (...args) => editorUI.renderEditor(...args),
   toast: (...args) => editorUI.toast(...args),
@@ -45,9 +54,20 @@ editorUI = createEditorUI({
   projects: editorProjects,
   actions: editorActions,
   output: editorOutput,
+  renderProductLanding: () => productUI.renderLanding(),
+  mountProduct: (view) => productUI.mount(view),
+});
+
+productUI = createProductUI({
+  client: productClient,
+  projects: editorProjects,
+  renderEditor: () => editorUI.renderEditor(),
+  toast: (message) => editorUI.toast(message),
+  addAssets: editorActions.handleAssetUpload,
 });
 
 export const recordHistory = editorProjects.recordHistory;
+export const hasUndo = editorProjects.hasUndo;
 export const undo = editorProjects.undo;
 export const redo = editorProjects.redo;
 export const updateBrowserRoute = editorProjects.updateBrowserRoute;
@@ -64,6 +84,10 @@ export const fileToDataUrl = editorActions.fileToDataUrl;
 
 export async function init() {
   try {
+    await productClient.init({ legacy: domainMigration.isLegacyOrigin });
+  } catch (error) { toast(error.message); }
+  if (productClient.user) configureCloudStore(productClient.cloudStore);
+  try {
     state.db = await openDatabase(DB_NAME, {
       onBlocked: editorUI.renderStorageBlocked,
       beforeVersionChange: () => editorProjects.flushPendingSave(),
@@ -74,7 +98,7 @@ export async function init() {
   } catch (error) {
     console.error(error);
     state.projects = [];
-    toast("Browser storage is unavailable. Projects won’t persist.");
+    toast(productClient.user ? "Couldn’t load your projects. Please reload to try again." : "Browser storage is unavailable. Projects won’t persist.");
   }
   window.addEventListener("carouselbot:migration-complete", async (event) => {
     const migratedProjects = normalizeLoadedProjects(await getProjectCatalog());
@@ -105,6 +129,10 @@ export async function init() {
     if (document.visibilityState === "visible" && !state.activeProjectId) void editorProjects.refreshDashboardProjects();
   });
   document.addEventListener("paste", (event) => {
+    if (state.activeProjectId && !isEditingTextTarget(event.target)) {
+      try { [...(event.clipboardData?.files || [])].forEach((file) => productClient.validateUpload(file)); }
+      catch (error) { event.preventDefault(); toast(error.message); return; }
+    }
     editorActions.handleClipboardPaste(event);
   });
   document.addEventListener("copy", editorActions.handleLayerCopy);

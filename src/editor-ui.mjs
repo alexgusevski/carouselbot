@@ -69,7 +69,7 @@ import {
   ensureProjectFontsLoaded,
 } from "./project-fonts.mjs";
 
-export function createEditorUI({ projects, actions, output }) {
+export function createEditorUI({ projects, actions, output, renderProductLanding = () => {}, mountProduct = () => {} }) {
   const {
     recordHistory,
     scheduleSave,
@@ -509,7 +509,17 @@ export function createEditorUI({ projects, actions, output }) {
       </main>`;
   }
 
+  function renderLanding() {
+    output.cancelPendingThumbnailRenders();
+    disconnectDashboardSlideThumbnails();
+    disposeVideoPlayback();
+    hideAssetPreview();
+    renderProductLanding();
+    projects.releaseInactiveProjects();
+  }
+
   function renderDashboard() {
+    if (["/", "/index.html"].includes(location.pathname) && !domainMigration.isLegacyOrigin) return renderLanding();
     output.cancelPendingThumbnailRenders();
     disposeVideoPlayback();
     hideAssetPreview();
@@ -629,7 +639,7 @@ export function createEditorUI({ projects, actions, output }) {
             <div>
               ${folderParentPath(activeFolderPath)
                 ? `<a class="folder-breadcrumb" href="${folderRoutePath(folderParentPath(activeFolderPath))}" data-folder-path="${escapeHtml(folderParentPath(activeFolderPath))}">${icon("back")} ${escapeHtml(folderDisplayName(folderParentPath(activeFolderPath)))}</a>`
-                : `<a class="folder-breadcrumb" href="/" data-action="open-dashboard-root">${icon("back")} Home</a>`}
+                : `<a class="folder-breadcrumb" href="/dashboard" data-action="open-dashboard-root">${icon("back")} Home</a>`}
               <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath.split("/").at(-1))}</span></h1>
             </div>
           </section>
@@ -658,6 +668,7 @@ export function createEditorUI({ projects, actions, output }) {
       </main>
     `;
     bindDashboardEvents();
+    mountProduct("dashboard");
     // The dashboard DOM is already mounted. Start composing covers immediately so
     // background tabs are not left with raw solid-color slide backgrounds while
     // requestAnimationFrame is throttled or paused by the browser.
@@ -698,6 +709,7 @@ export function createEditorUI({ projects, actions, output }) {
       <input id="asset-upload" class="hidden-input" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple />
     `;
     bindEditorEvents();
+    mountProduct("editor");
     app.querySelector('[data-action="video-sample"]')?.addEventListener("click", addVideoSample);
     disposeVideoPlayback = mountVideoPlayback(app, activeSlide(), project);
     const slideList = app.querySelector(".slide-list");
@@ -1684,6 +1696,7 @@ export function createEditorUI({ projects, actions, output }) {
   return {
     toast,
     renderDashboard,
+    renderLanding,
     renderStorageBlocked,
     renderEditor,
     navigateSlides,

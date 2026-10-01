@@ -116,7 +116,7 @@ export function renderHeader({ editor = false } = {}) {
     </button>`;
   return `
     <header class="app-header${editor ? " app-header--editor" : ""}">
-      <a class="brand" href="/" data-action="home" aria-label="Go to projects">
+      <a class="brand" href="/dashboard" data-action="home" aria-label="Go to projects">
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span>
       </a>
@@ -144,7 +144,7 @@ export function renderHeader({ editor = false } = {}) {
             ${icon("download")} <span>All</span>
           </button>
         ` : `<div class="home-agent-connect">${agentConnectButton}<span class="agent-callout" aria-hidden="true"><span>Connect your agent</span><svg viewBox="0 0 110 90" fill="none"><path d="M5 80 C63 89 97 45 98 7 M88 18 L98 7 L106 20" /></svg></span></div><button class="button button--primary" type="button" data-action="new-project">New project</button>`}
-        <a class="icon-button github-link" href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer" aria-label="Open CarouselBot on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
+
       </div>
     </header>
   `;
@@ -169,8 +169,7 @@ export function renderLegacyMigrationNotice(projects, migrationController, dismi
         <p class="eyebrow">Slide Studio has moved</p>
         <h2 id="migration-modal-title">Meet CarouselBot.</h2>
         <p id="migration-modal-description" class="migration-modal-description">
-          This project now lives at <strong>carousel.bot</strong>. It is still free and
-          <a href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer">open source</a>.
+          This project now lives at <strong>carousel.bot</strong>. Your existing projects and MCP connection still work.
         </p>
         <p id="migration-modal-status" class="migration-modal-status" data-migration-status>${escapeHtml(detail)}</p>
         <div class="migration-actions">

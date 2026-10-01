@@ -296,7 +296,7 @@ async function agentCommit(project, slide, mutate, message) {
   else if (!visibleView.projectId) {
     if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
       state.activeFolderPath = null;
-      updateBrowserRoute("/", "replace");
+      updateBrowserRoute("/dashboard", "replace");
     }
     renderDashboard();
     bindGlobalActions();
@@ -518,7 +518,7 @@ async function executeCarouselBotAgentOperation(operation) {
       aspectRatio, folderPath, updatedAt: now, revision: 1, slides: [], assets: [], fonts: [],
     };
     state.projects.push(project);
-    await putProject(project);
+    await putProject(project, { expectedRevision: 0 });
     if (dashboardVisible || !state.activeProjectId) {
       renderDashboard();
       bindGlobalActions();
@@ -598,14 +598,14 @@ async function executeCarouselBotAgentOperation(operation) {
     clearProjectCover(project.id);
     if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
       state.activeFolderPath = null;
-      updateBrowserRoute("/", "replace");
+      updateBrowserRoute("/dashboard", "replace");
     }
     if (targetIsVisible) {
       state.activeFolderPath = null;
       state.activeProjectId = null;
       state.activeSlideId = null;
       clearLayerSelection();
-      updateBrowserRoute("/", "push");
+      updateBrowserRoute("/dashboard", "push");
       renderDashboard();
       bindGlobalActions();
     } else if (!state.activeProjectId) {

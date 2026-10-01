@@ -1,14 +1,18 @@
 # CarouselBot
 
-A focused, local-first editor for creating social carousel images.
+A focused editor for creating social carousel images, with optional hosted AI generation.
 
 **Canonical site:** [carousel.bot](https://carousel.bot)
 
-Editing runs in the browser. Photos and projects stay in IndexedDB on the user's device unless the user explicitly creates a temporary project share link.
+Editing runs in the browser. **Local mode** stores projects on the device and works with the npm MCP companion. Signing in enables private cloud projects and a hosted assistant. Local projects are copied into the account only through the explicit import action; originals stay on the device.
+
+The landing page lives at `/`, projects at `/dashboard`, and the editor at `/projects/:id`. The hosted product uses Clerk for sign-in, Polar for subscriptions, and a Cloudflare Worker with D1, private R2 storage, Workflows and Browser Run. The $19/month plan has a configurable provider-cost allowance; generation reserves a bounded amount before it starts. See [backend/README.md](backend/README.md) for provisioning, secrets and billing verification.
+
+The GitHub repository is private. Previously published versions and the npm MCP packages retain their MIT license.
 
 ## AI agent control
 
-The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
+The MIT-licensed local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
 
 ```bash
 npx carouselbot@latest setup
@@ -57,7 +61,11 @@ Fast editor tests use Node's built-in test runner. Browser suites launch a tempo
 
 The browser editor is organized as a small ES-module graph under `src/`. Pure model logic, state, persistence, views, final slide rendering, and pointer interactions have explicit boundaries; stateful workflow coordination remains in one controller. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the dependency direction, invariants, and change guide.
 
-## Deploy to Cloudflare
+## Deploy the hosted product
+
+The product preview uses `wrangler.product.jsonc`. Its resources are separate from the existing Pages editor. Apply the backend migrations before deploying; configure secrets through Wrangler, never source files. `npm run deploy:product:dev` builds and uploads only the product preview. Production promotion requires separate live resources, a production Clerk instance, an approved Polar organization/product, and live end-to-end verification.
+
+## Existing Pages deployment
 
 This project uses Cloudflare Pages Direct Upload. The static editor lives in `dist/`; Pages Functions under `functions/api/shares/` use a Workers KV namespace for optional 24-hour links. The `SHARES` KV binding is declared in `wrangler.jsonc`, which is the source of truth for Pages deployments. Keep the account on the Workers Free plan if shares must stop when its free usage limits are reached. KV's Free plan limits include 1 GB of stored data, 1,000 writes/day, and 100,000 reads/day; a single compressed share is capped at 24 MiB by this app.
 
@@ -92,4 +100,4 @@ npm releases use GitHub Actions trusted publishing instead of a stored npm token
 
 ## License
 
-MIT. TikTok Sans is distributed under the SIL Open Font License 1.1; its license is included at `assets/TikTokSans-OFL.txt`. The GitHub Octicons mark is distributed under the MIT License; its notice is included at `assets/Octicons-LICENSE.txt`.
+New product additions are proprietary; previously published code retains its original MIT license. The npm MCP packages remain MIT. See [LICENSE](LICENSE) and [licenses/legacy-MIT.txt](licenses/legacy-MIT.txt). TikTok Sans is distributed under the SIL Open Font License 1.1; its license is included at `assets/TikTokSans-OFL.txt`. The GitHub Octicons mark is distributed under the MIT License; its notice is included at `assets/Octicons-LICENSE.txt`.

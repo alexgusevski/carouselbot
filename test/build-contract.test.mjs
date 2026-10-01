@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { generateKeyPairSync } from "node:crypto";
+import { validateCleanMain, validateMatchingMain, validateProductProductionConfig } from "../scripts/deploy-product.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sourceDirectory = join(root, "src");
@@ -23,6 +25,8 @@ test("every local module import resolves to a committed source file", async () =
     "editor.mjs",
     "layer-interactions.mjs",
     "main.mjs",
+    "product-client.mjs",
+    "product-ui.mjs",
     "project-fonts.mjs",
     "project-share-codec.mjs",
     "project-share-schema.mjs",
@@ -125,4 +129,38 @@ test("Pages deployments bind the temporary share namespace", async () => {
     id: "907668f59e2b401b96ac15bf2c09437e",
   }]);
   assert.deepEqual(config.env.preview.kv_namespaces, []);
+});
+
+test("product production deployment requires clean remote main and live, correctly routed services", async () => {
+  assert.throws(() => validateCleanMain("alex/product", ""), /not “main”/);
+  assert.throws(() => validateCleanMain("main", " M index.html"), /uncommitted/);
+  assert.throws(() => validateMatchingMain("local", "remote"), /origin\/main/);
+  assert.throws(() => validateMatchingMain("", ""), /origin\/main/);
+  assert.doesNotThrow(() => validateCleanMain("main", ""));
+  assert.doesNotThrow(() => validateMatchingMain("same", "same"));
+
+  // Parse the preparation template through Wrangler, preserving JSONC semantics.
+  const { unstable_readConfig } = await import("wrangler");
+  const config = unstable_readConfig({ config: join(root, "wrangler.product.production.jsonc") }, { hideWarnings: true, preserveOriginalMain: true });
+  const preparation = structuredClone(config);
+  preparation.routes = [];
+  assert.throws(() => validateProductProductionConfig(preparation), /route/);
+  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const live = structuredClone(config);
+  live.routes = [{ pattern: "carousel.bot/*", zone_name: "carousel.bot" }];
+  live.vars.CLERK_PUBLISHABLE_KEY = `pk_live_${Buffer.from("clerk.carousel.bot$").toString("base64")}`;
+  live.vars.CLERK_JWT_KEY = publicKey.export({ type: "spki", format: "pem" });
+  live.vars.POLAR_PRODUCT_ID = "11111111-1111-4111-8111-111111111111";
+  assert.doesNotThrow(() => validateProductProductionConfig(live));
+  const mutate = (change, pattern) => {
+    const invalid = structuredClone(live); change(invalid);
+    assert.throws(() => validateProductProductionConfig(invalid), pattern);
+  };
+  mutate(value => { value.vars.CLERK_PUBLISHABLE_KEY = "pk_test_example"; }, /live Clerk/);
+  mutate(value => { value.vars.APP_ORIGIN = "https://preview.example"; }, /APP_ORIGIN/);
+  mutate(value => { value.routes.push({ pattern: "*/*" }); }, /route/);
+  mutate(value => { value.vars.POLAR_ENVIRONMENT = "sandbox"; }, /live Polar/);
+  mutate(value => { value.vars.JOB_BUDGET_USD = "50"; }, /50-credit/);
+  mutate(value => { value.kv_namespaces = []; }, /share namespace/);
+  mutate(value => { value.vars.CLERK_JWT_KEY = "placeholder"; }, /PEM/);
 });

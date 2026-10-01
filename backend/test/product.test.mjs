@@ -1,0 +1,285 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import { generateKeyPair, exportSPKI, SignJWT } from 'jose';
+import { validateProject, readBody, normalizedSubscription, ApiError } from '../core.mjs';
+import { getProject, saveProject, deleteProject, deleteAsset, cleanupUnusedAssets, account, saveAsset, loadAsset, acceptWebhook, statement } from '../store.mjs';
+import { createJob, recordUsage, finishJob, startJob, canUndoJob, undoJob } from '../jobs.mjs';
+import { api } from '../api.mjs';
+import { createFolder, moveFolder, folders } from '../folders.mjs';
+function fixture() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(readFileSync(new URL('../migrations/0001_product.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0002_folders.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0003_asset_references.sql', import.meta.url), 'utf8'));
+  const makeStatement = (sql) => ({ bind: (...values) => {
+    const statement = db.prepare(sql);
+    return { sql, values, first: async () => statement.get(...values) || null, all: async () => ({ results: statement.all(...values) }), run: async () => ({ meta: statement.run(...values) }) };
+  } });
+  const objects = new Map();
+  const env = { DB: { prepare: makeStatement, batch: async (queries) => { db.exec('BEGIN'); try { const result = []; for (const query of queries) result.push(await query.run()); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } } },
+    APP_ORIGIN: 'https://carousel.bot', POLAR_PRODUCT_ID: 'product', OPENROUTER_API_KEY: 'test', BROWSER: {},
+    AGENT_WORKFLOW: { create: async () => {}, get: async () => ({ status: async () => ({ status: 'running' }) }) },
+    ASSETS_BUCKET: { put: async (key, body) => objects.set(key, body), delete: async key => objects.delete(key), get: async (key) => objects.has(key) ? { arrayBuffer: async () => objects.get(key).buffer } : null }, AGENT_ALLOWANCE_USD: '5', JOB_BUDGET_USD: '.5' };
+  return { env, db };
+}
+const project = (id = 'carousel') => ({ id, name: 'Test carousel', slides: [], assets: [], revision: 0 });
+function subscription(status = 'active', stamp = Date.now(), start = Date.now() - 60000) {
+  return { type: 'subscription.updated', timestamp: new Date(stamp).toISOString(), data: { id: 'sub', status, product_id: 'product', customer: { external_id: 'user_alex' }, current_period_start: new Date(start).toISOString(), current_period_end: new Date(start + 86400000).toISOString(), modified_at: new Date(stamp).toISOString() } };
+}
+test('project CAS and tenant isolation hold with real SQLite', async () => {
+  const { env } = fixture();
+  const initial = await saveProject(env, 'user_alex', 'carousel', project(), 0);
+  assert.equal(initial.revision, 1);
+  const update = await saveProject(env, 'user_alex', 'carousel', { ...initial, name: 'Updated' }, 1);
+  assert.equal(update.revision, 2);
+  await assert.rejects(saveProject(env, 'user_alex', 'carousel', initial, 1), error => error.code === 'STALE_PROJECT' && error.details.actualRevision === 2);
+  await assert.rejects(getProject(env, 'user_other', 'carousel'), error => error.status === 404);
+  await saveProject(env, 'user_other', 'carousel', project(), 0);
+  assert.equal((await getProject(env, 'user_alex', 'carousel')).name, 'Updated');
+});
+test('private R2 assets enforce ownership and upload limits', async () => {
+  const { env } = fixture();
+  const saved = await saveAsset(env, 'user_alex', { body: new Uint8Array([1,2,3]), mimeType: 'image/png', name: 'Hello.png' });
+  assert.equal((await loadAsset(env, 'user_alex', saved.id)).name, 'Hello.png');
+  await assert.rejects(loadAsset(env, 'user_other', saved.id), error => error.status === 404);
+  await assert.rejects(saveAsset(env, 'user_alex', { body: new Uint8Array([1]), mimeType: 'image/svg+xml' }), error => error.status === 415);
+  await assert.rejects(readBody(new Request('https://example.com', { method: 'POST', body: 'too big' }), 2), error => error.status === 413);
+});
+test('large images and fonts externalize once; shared assets survive deletion until the last project is removed', async () => {
+  const { env } = fixture();
+  const data = `data:image/png;base64,${Buffer.alloc(2_100_000, 1).toString('base64')}`;
+  const initial = { ...project(), assets: [{ id: 'image', name: 'Image', imageData: data }], fonts: [{ id: 'font', fontData: 'data:;base64,AQID' }] };
+  const saved = await saveProject(env, 'user_alex', 'carousel', initial, 0);
+  assert.ok(saved.assets[0].imageData.startsWith('/api/assets/'));
+  assert.ok(saved.fonts[0].fontData.startsWith('/api/assets/'));
+  assert.ok(JSON.stringify(saved).length < 1000);
+  const assetId = saved.assets[0].imageData.split('/').at(-1);
+  assert.equal((await loadAsset(env, 'user_alex', assetId)).body.length, 2_100_000);
+  await saveProject(env, 'user_alex', 'copy', { ...saved, id: 'copy' }, 0);
+  await assert.rejects(deleteAsset(env, 'user_alex', assetId), error => error.code === 'ASSET_IN_USE');
+  await deleteProject(env, 'user_alex', 'carousel', 1);
+  assert.equal((await loadAsset(env, 'user_alex', assetId)).body.length, 2_100_000);
+  await deleteProject(env, 'user_alex', 'copy', 1);
+  await assert.rejects(loadAsset(env, 'user_alex', assetId), error => error.status === 404);
+  assert.equal((await statement(env, 'SELECT COUNT(*) AS count FROM assets').first()).count, 0);
+});
+test('delayed deletion cannot remove a newer upload of the same asset', async () => {
+  const { env } = fixture();
+  const bytes = new Uint8Array([1, 2, 3]);
+  const saved = await saveAsset(env, 'user_alex', { body: bytes, mimeType: 'image/png' });
+  const old = await statement(env, 'SELECT object_key FROM assets WHERE id=?', saved.id).first();
+  const replacementKey = `user_alex/${saved.id}/replacement`;
+  const originalBatch = env.DB.batch;
+  env.DB.batch = async queries => {
+    env.DB.batch = originalBatch;
+    // Reupload completed after deleteAsset read its old metadata.
+    await statement(env, 'UPDATE assets SET object_key=? WHERE id=?', replacementKey, saved.id).run();
+    await env.ASSETS_BUCKET.put(replacementKey, bytes);
+    return originalBatch(queries);
+  };
+  assert.equal(await deleteAsset(env, 'user_alex', saved.id), false);
+  assert.ok(await env.ASSETS_BUCKET.get(replacementKey));
+  assert.equal(await env.ASSETS_BUCKET.get(old.object_key), null);
+  assert.deepEqual((await loadAsset(env, 'user_alex', saved.id)).body, bytes);
+});
+test('signed subscription processing ignores stale and unrelated deliveries without resetting spend', async () => {
+  const { env } = fixture();
+  const now = Date.now(); const start = now - 60000;
+  await acceptWebhook(env, 'first', subscription('active', now, start));
+  await statement(env, 'UPDATE allowances SET spent=1000000 WHERE user_id=?', 'user_alex').run();
+  await acceptWebhook(env, 'first', subscription('active', now, start));
+  assert.equal((await account(env, 'user_alex')).credits, 400);
+  await acceptWebhook(env, 'revoked', subscription('canceled', now + 1000, start));
+  await acceptWebhook(env, 'late', subscription('active', now - 1000, start));
+  assert.equal((await account(env, 'user_alex')).billing.active, false);
+  const unrelated = subscription('active', now + 2000, start); unrelated.data.product_id = 'different';
+  await acceptWebhook(env, 'unrelated', unrelated);
+  assert.equal((await account(env, 'user_alex')).billing.active, false);
+  assert.equal(normalizedSubscription({ type: 'order.paid', data: {} }, 'product'), null);
+});
+test('opportunistic cleanup stays bounded and account scoped', async () => {
+  const { env } = fixture();
+  for (let i = 0; i < 6; i++) await saveAsset(env, 'user_alex', { body: new Uint8Array([i]), mimeType: 'image/png' });
+  const other = await saveAsset(env, 'user_other', { body: new Uint8Array([9]), mimeType: 'image/png' });
+  await statement(env, 'UPDATE assets SET created_at=0').run();
+  for (let i = 0; i < 12; i++) await statement(env, 'INSERT INTO asset_deletions VALUES(?,0)', `user_alex/abandoned/${i}`).run();
+  await statement(env, 'INSERT INTO asset_deletions VALUES(?,0)', 'user_other/abandoned/one').run();
+  let deletes = 0;
+  const originalDelete = env.ASSETS_BUCKET.delete;
+  env.ASSETS_BUCKET.delete = async key => { deletes++; return originalDelete(key); };
+  await cleanupUnusedAssets(env, 'user_alex');
+  assert.equal((await statement(env, 'SELECT COUNT(*) AS count FROM assets WHERE user_id=?', 'user_alex').first()).count, 1);
+  assert.equal(deletes, 10);
+  assert.ok(await statement(env, 'SELECT object_key FROM asset_deletions WHERE object_key=?', 'user_other/abandoned/one').first());
+  assert.equal((await loadAsset(env, 'user_other', other.id)).body.length, 1);
+});
+test('job reservations, request idempotency and provider debits cannot exceed allowance concurrently', async () => {
+  const { env } = fixture();
+  const saved = await saveProject(env, 'user_alex', 'carousel', project(), 0);
+  const request = { prompt: 'Make slides', expectedRevision: saved.revision, requestId: 'request-one' };
+  await assert.rejects(createJob(env, 'user_alex', 'carousel', request), error => error.status === 402);
+  await acceptWebhook(env, 'sub', subscription());
+  const job = await createJob(env, 'user_alex', 'carousel', request);
+  assert.equal((await account(env, 'user_alex')).credits, 450);
+  assert.equal((await createJob(env, 'user_alex', 'carousel', request)).id, job.id);
+  await assert.rejects(createJob(env, 'user_alex', 'carousel', { ...request, requestId: 'two' }), error => error.code === 'JOB_ACTIVE');
+  const row = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  await assert.rejects(deleteProject(env, 'user_alex', 'carousel', 1), error => error.code === 'JOB_ACTIVE');
+  assert.equal(await recordUsage(env, row, { generationId: 'provider-one', cost: .1 }), .4);
+  assert.equal(await recordUsage(env, row, { generationId: 'provider-one', cost: .1 }), .4);
+  await assert.rejects(recordUsage(env, row, { cost: .1 }), error => error.code === 'UNKNOWN_USAGE');
+  await finishJob(env, row, 'completed'); await finishJob(env, row, 'completed');
+  assert.equal((await account(env, 'user_alex')).credits, 490);
+  const allowance = await statement(env, 'SELECT * FROM allowances').first(); assert.equal(allowance.reserved, 0); assert.equal(allowance.spent, 100000);
+});
+test('uncertain provider usage consumes the reservation atomically and only once', async () => {
+  const { env } = fixture();
+  const saved = await saveProject(env, 'user_alex', 'carousel', project(), 0);
+  await acceptWebhook(env, 'sub', subscription());
+  const job = await createJob(env, 'user_alex', 'carousel', { prompt: 'Make slides', expectedRevision: saved.revision });
+  const row = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  await recordUsage(env, row, { generationId: 'known-before-ledger-failure', cost: .1 });
+  await finishJob(env, row, 'failed', 'Usage unavailable', { uncertainUsage: true });
+  await finishJob(env, row, 'failed', 'Usage unavailable', { uncertainUsage: true });
+  const allowance = await statement(env, 'SELECT * FROM allowances').first();
+  assert.equal(allowance.reserved, 0);
+  assert.equal(allowance.spent, 500000);
+  assert.equal((await statement(env, 'SELECT spent FROM jobs WHERE id=?', row.id).first()).spent, 500000);
+  assert.equal((await account(env, 'user_alex')).credits, 450);
+
+  const next = await createJob(env, 'user_alex', 'carousel', { prompt: 'Retry slides', expectedRevision: saved.revision });
+  const nextRow = await statement(env, 'SELECT * FROM jobs WHERE id=?', next.id).first();
+  await recordUsage(env, nextRow, { generationId: 'known-cost', cost: .1 });
+  await finishJob(env, nextRow, 'completed');
+  await finishJob(env, nextRow, 'failed', null, { uncertainUsage: true });
+  assert.equal((await account(env, 'user_alex')).credits, 440);
+});
+test('durable latest-job Undo restores canonical media after reload and leaves billing unchanged', async () => {
+  const { env } = fixture();
+  const before = await saveProject(env, 'user_alex', 'carousel', { ...project(), assets: [{ id: 'old-image', imageData: 'data:image/png;base64,AQID' }] }, 0);
+  await acceptWebhook(env, 'sub', subscription());
+  const job = await createJob(env, 'user_alex', 'carousel', { prompt: 'Replace image', expectedRevision: before.revision });
+  const row = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  await startJob(env, row);
+  await startJob(env, row); // A resumed start must not replace the original snapshot.
+  const edited = await saveProject(env, 'user_alex', 'carousel', { ...before, name: 'Generated', assets: [] }, before.revision, { jobId: row.id });
+  await recordUsage(env, row, { generationId: 'one-provider-call', cost: .1 });
+  await finishJob(env, row, 'completed');
+  const finished = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  assert.equal(await canUndoJob(env, finished), true);
+  const oldAssetId = before.assets[0].imageData.split('/').at(-1);
+  await assert.rejects(deleteAsset(env, 'user_alex', oldAssetId), error => error.code === 'ASSET_IN_USE');
+  await assert.rejects(undoJob(env, 'user_other', finished, edited.revision), error => error.status === 404);
+  const credits = (await account(env, 'user_alex')).credits;
+  const result = await undoJob(env, 'user_alex', finished, edited.revision);
+  assert.equal(result.project.name, before.name);
+  assert.equal(result.project.revision, edited.revision + 1);
+  assert.deepEqual(result.project.assets, before.assets);
+  assert.deepEqual((await loadAsset(env, 'user_alex', oldAssetId)).body, new Uint8Array([1, 2, 3]));
+  assert.equal(result.job.canUndo, false);
+  assert.equal(await canUndoJob(env, finished), false);
+  assert.equal((await account(env, 'user_alex')).credits, credits);
+  await assert.rejects(undoJob(env, 'user_alex', finished, result.project.revision), error => error.code === 'UNDO_UNAVAILABLE');
+});
+test('durable Undo rejects later edits and active or newer jobs, and retains only one snapshot', async () => {
+  const { env } = fixture();
+  const before = await saveProject(env, 'user_alex', 'carousel', project(), 0);
+  await acceptWebhook(env, 'sub', subscription());
+  const job = await createJob(env, 'user_alex', 'carousel', { prompt: 'Generate', expectedRevision: before.revision });
+  const row = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  await startJob(env, row);
+  const generated = await saveProject(env, 'user_alex', 'carousel', { ...before, name: 'Generated' }, before.revision, { jobId: row.id });
+  await assert.rejects(undoJob(env, 'user_alex', row, generated.revision), error => error.code === 'JOB_ACTIVE');
+  await finishJob(env, row, 'completed');
+  const finished = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  const manual = await saveProject(env, 'user_alex', 'carousel', { ...generated, name: 'Manual edit' }, generated.revision);
+  assert.equal(await canUndoJob(env, finished), false);
+  await assert.rejects(undoJob(env, 'user_alex', finished, manual.revision), error => error.code === 'STALE_PROJECT');
+  assert.equal((await getProject(env, 'user_alex', 'carousel')).name, 'Manual edit');
+  const next = await createJob(env, 'user_alex', 'carousel', { prompt: 'Another generation', expectedRevision: manual.revision });
+  const nextRow = await statement(env, 'SELECT * FROM jobs WHERE id=?', next.id).first();
+  await startJob(env, nextRow);
+  const snapshots = await statement(env, "SELECT job_id FROM job_events WHERE type='undo_snapshot'").all();
+  assert.deepEqual(snapshots.results.map(item => item.job_id), [next.id]);
+  assert.equal(await canUndoJob(env, finished), false);
+  await finishJob(env, nextRow, 'stopped');
+  const stopped = await statement(env, 'SELECT * FROM jobs WHERE id=?', next.id).first();
+  assert.equal(await canUndoJob(env, stopped), false); // No project edits to undo.
+});
+test('durable Undo cannot overwrite a job started between its read and restoration transaction', async () => {
+  const { env } = fixture();
+  const before = await saveProject(env, 'user_alex', 'carousel', project(), 0);
+  await acceptWebhook(env, 'sub', subscription());
+  const job = await createJob(env, 'user_alex', 'carousel', { prompt: 'Generate', expectedRevision: before.revision });
+  const row = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  await startJob(env, row);
+  const generated = await saveProject(env, 'user_alex', 'carousel', { ...before, name: 'Generated' }, before.revision, { jobId: row.id });
+  await finishJob(env, row, 'completed');
+  const finished = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  const originalBatch = env.DB.batch;
+  env.DB.batch = async queries => {
+    env.DB.batch = originalBatch;
+    await createJob(env, 'user_alex', 'carousel', { prompt: 'Concurrent new job', expectedRevision: generated.revision });
+    return originalBatch(queries);
+  };
+  await assert.rejects(undoJob(env, 'user_alex', finished, generated.revision), error => error.code === 'STALE_PROJECT');
+  assert.equal((await getProject(env, 'user_alex', 'carousel')).name, 'Generated');
+  const snapshot = JSON.parse((await statement(env, "SELECT data FROM job_events WHERE job_id=? AND id='undo'", row.id).first()).data);
+  assert.equal(snapshot.used, undefined);
+});
+test('folder moves atomically update project revisions and isolate accounts', async () => {
+  const { env } = fixture();
+  await createFolder(env, 'user_alex', { path: 'Client/Account' });
+  await saveProject(env, 'user_alex', 'carousel', { ...project(), folderPath: '/Client/Account' }, 0);
+  await createFolder(env, 'user_other', { path: 'Client/Account' });
+  await moveFolder(env, 'user_alex', { sourceFolderPath: 'Client', destinationFolderPath: 'Agency' });
+  const saved = await getProject(env, 'user_alex', 'carousel');
+  assert.equal(saved.folderPath, '/Agency/Account'); assert.equal(saved.revision, 2);
+  assert.equal((await folders(env, 'user_other'))[0].path, '/Client/Account');
+});
+test('real Clerk JWT verification rejects wrong origin, missing and forged tokens', async () => {
+  const { env } = fixture();
+  const { publicKey, privateKey } = await generateKeyPair('RS256');
+  env.CLERK_JWT_KEY = await exportSPKI(publicKey);
+  env.CLERK_PUBLISHABLE_KEY = `pk_test_${Buffer.from('test.clerk.accounts.dev$').toString('base64')}`;
+  const token = await new SignJWT({ azp: env.APP_ORIGIN, sid: 'sess_test', v: 2 }).setProtectedHeader({ alg: 'RS256', kid: 'test' }).setSubject('user_alex').setIssuer('https://test.clerk.accounts.dev').setIssuedAt().setNotBefore(Math.floor(Date.now() / 1000) - 5).setExpirationTime('5m').sign(privateKey);
+  const request = (auth, origin = env.APP_ORIGIN) => new Request('https://carousel.bot/api/account', { headers: { origin, ...(auth ? { authorization: `Bearer ${auth}` } : {}) } });
+  assert.equal((await api(request(), env)).status, 401);
+  assert.equal((await api(request(token, 'https://evil.example'), env)).status, 403);
+  assert.equal((await api(request('forged.token.signature'), env)).status, 401);
+  const signToken = (changes = {}, issuer = 'https://test.clerk.accounts.dev', expiry = '5m') => new SignJWT({ azp: env.APP_ORIGIN, sid: 'sess_test', v: 2, ...changes }).setProtectedHeader({ alg: 'RS256', kid: 'test' }).setSubject('user_alex').setIssuer(issuer).setIssuedAt().setNotBefore(Math.floor(Date.now() / 1000) - 5).setExpirationTime(expiry).sign(privateKey);
+  assert.equal((await api(request(await signToken({}, 'https://other.clerk.accounts.dev')), env)).status, 401);
+  assert.equal((await api(request(await signToken({ sid: 'm2m_token' })), env)).status, 401);
+  assert.equal((await api(request(await signToken({ azp: 'https://evil.example' })), env)).status, 401);
+  assert.equal((await api(request(await signToken({ sts: 'pending' })), env)).status, 401);
+  assert.equal((await api(request(await signToken({}, 'https://test.clerk.accounts.dev', Math.floor(Date.now() / 1000) - 60)), env)).status, 401);
+  const result = await api(request(token), env);
+  assert.equal(result.status, 200, await result.clone().text()); assert.equal((await result.json()).userId, 'user_alex');
+  const before = await saveProject(env, 'user_alex', 'carousel', { ...project(), name: 'Private before-job snapshot' }, 0);
+  await acceptWebhook(env, 'sub', subscription());
+  const job = await createJob(env, 'user_alex', 'carousel', { prompt: 'Generate', expectedRevision: before.revision });
+  const row = await statement(env, 'SELECT * FROM jobs WHERE id=?', job.id).first();
+  await startJob(env, row);
+  const edited = await saveProject(env, 'user_alex', 'carousel', { ...before, name: 'Generated' }, before.revision, { jobId: row.id });
+  await finishJob(env, row, 'completed');
+  const authenticated = (path, body) => new Request(`https://carousel.bot${path}`, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const publicJobResponse = await api(authenticated(`/api/jobs/${job.id}`), env);
+  assert.equal(publicJobResponse.status, 200);
+  const publicBody = await publicJobResponse.json();
+  assert.equal(publicBody.job.canUndo, true);
+  assert.equal(JSON.stringify(publicBody).includes('Private before-job snapshot'), false);
+  assert.equal(publicBody.events.some(event => event.type === 'undo_snapshot'), false);
+  const chatResponse = await api(authenticated('/api/projects/carousel/chat'), env);
+  const chatBody = await chatResponse.json();
+  assert.equal(chatBody.job.canUndo, true);
+  assert.equal(JSON.stringify(chatBody).includes('Private before-job snapshot'), false);
+  const undoResponse = await api(authenticated(`/api/jobs/${job.id}/undo`, { expectedRevision: edited.revision }), env);
+  assert.equal(undoResponse.status, 200, await undoResponse.clone().text());
+  const undone = await undoResponse.json();
+  assert.equal(undone.project.name, before.name);
+  assert.equal(undone.job.canUndo, false);
+  const webhook = await api(new Request('https://carousel.bot/api/billing/webhook', { method: 'POST', body: '{}' }), { ...env, POLAR_WEBHOOK_SECRET: 'whsec_test' });
+  assert.equal(webhook.status, 403);
+});
