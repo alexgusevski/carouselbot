@@ -1,12 +1,12 @@
 # CarouselBot
 
-A focused editor for creating social carousel images, with optional hosted AI generation.
+A focused editor for creating social carousel slides, with optional hosted AI assistance for text and layouts. Images come from uploads; CarouselBot does not generate images or offer generative image editing.
 
 **Canonical site:** [carousel.bot](https://carousel.bot)
 
 Editing runs in the browser. **Local mode** stores projects on the device and works with the npm MCP companion. Signing in enables private cloud projects and a hosted assistant. Local projects are copied into the account only through the explicit import action; originals stay on the device.
 
-The landing page lives at `/`, projects at `/dashboard`, and the editor at `/projects/:id`. The hosted product uses Clerk for sign-in, Polar for subscriptions, and a Cloudflare Worker with D1, private R2 storage, Workflows and Browser Run. The $19/month plan has a configurable provider-cost allowance; generation reserves a bounded amount before it starts. See [backend/README.md](backend/README.md) for provisioning, secrets and billing verification.
+The landing page lives at `/`, projects at `/dashboard`, and the editor at `/projects/:id`. The hosted product uses Clerk for sign-in, Polar for subscriptions, and a Cloudflare Worker with D1, private R2 storage, Workflows and Browser Run. The $19/month plan has a configurable provider-cost allowance; each AI request reserves a bounded amount before it starts. See [backend/README.md](backend/README.md) for provisioning, secrets and billing verification.
 
 The GitHub repository is private. Previously published versions and the npm MCP packages retain their MIT license.
 

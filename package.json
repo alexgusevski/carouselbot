@@ -5,7 +5,7 @@
   "workspaces": [
     "packages/*"
   ],
-  "description": "Carousel editor with local MCP and hosted AI generation",
+  "description": "Carousel editor with local MCP and hosted AI text and layout editing",
   "homepage": "https://carousel.bot",
   "license": "UNLICENSED",
   "repository": {

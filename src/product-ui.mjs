@@ -11,7 +11,7 @@ export function createProductUI({ client, projects, renderEditor, toast, addAsse
   const monthlyCredits = () => Number(client.config.allowanceCredits) || 500;
   const requestCredits = () => Number(client.config.jobBudgetCredits) || 50;
   function generationNotice() {
-    if (!client.config.agentAvailable) return '<p class="chat-note">AI generation is not available yet.</p>';
+    if (!client.config.agentAvailable) return '<p class="chat-note">AI assistance is not available yet.</p>';
     if (client.account?.canGenerate !== false) return '';
     if (!client.account.billing?.active) return '<p class="chat-note">Subscribe to create with AI. Manual editing is always available.</p><button class="button button--quiet chat-subscribe" data-product-action="billing" type="button">Subscribe · $19/month</button>';
     const end = Number(client.account.billing.periodEnd);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { APIConnectionTimeoutError } from 'openai';
 import { applyProjectOperations, inspectProject, solidBackground, projectImageAssetId } from '../backend/agent-model.mjs';
 import { bytesDataUrl, decodeImageDataUrl, previewProject, createJobBrowserSession } from '../backend/agent-preview.mjs';
-import { runAgent, completeConversation, providerUsage, modelCallBudget } from '../backend/agent.mjs';
+import { runAgent, completeConversation, providerUsage, modelCallBudget, AGENT_TOOLS, AGENT_SYSTEM_PROMPT } from '../backend/agent.mjs';
 
 const initial = () => ({ id: 'p1', name: 'Test', revision: 3, slides: [], assets: [], fonts: [] });
 test('hosted operations preserve editable normalized layers and atomic draft changes', () => {
@@ -34,6 +34,22 @@ test('hosted operations validate unique order and translate overlays as images o
   assert.equal(inspected.slides[0].overlays, undefined);
   assert.equal(inspected.assets[0].imageData, undefined);
   assert.equal(inspected.fonts[0].fontData, undefined);
+});
+test('uploaded photos remain unchanged while text, placement and cropping stay editable', () => {
+  const project = initial();
+  project.assets = [{ id: 'photo', name: 'Uploaded photo', width: 1080, height: 1920, imageData: '/api/assets/private-photo' }];
+  project.slides = [{ id: 's1', imageData: solidBackground(), texts: [], overlays: [] }];
+  const placed = applyProjectOperations(project, [{ type: 'image.add', slideId: 's1', assetId: 'photo', x: .1, y: .2, width: .5, height: .5 }], { uid: () => 'i1' });
+  const edited = applyProjectOperations(placed.project, [
+    { type: 'image.update', slideId: 's1', updates: [{ id: 'i1', x: .15, cropX: .1, cropY: .2, cropW: .8, cropH: .7 }] },
+    { type: 'text.add', slideId: 's1', text: 'A new caption', size: 54 },
+  ], { uid: () => 't1' });
+  assert.deepEqual(edited.project.assets, project.assets);
+  assert.equal(edited.project.slides[0].overlays[0].assetId, 'photo');
+  assert.equal(edited.project.slides[0].overlays[0].x, .15);
+  assert.equal(edited.project.slides[0].overlays[0].cropW, .8);
+  assert.equal(edited.project.slides[0].texts[0].text, 'A new caption');
+  assert.equal(placed.project.slides[0].texts.length, 0);
 });
 test('inspection keeps truthful private background metadata without exposing its pixels or URL', () => {
   const project = initial();
@@ -219,7 +235,7 @@ test('provider call budget limits output and rejects requests that cannot fit re
   assert.throws(() => modelCallBudget({}, [{role:'user',content:'hello'}], .0001), error => error.code === 'QUOTA_EXCEEDED');
 });
 test('2K image byte payload is counted once and older visual context is trimmed within the remaining budget', () => {
-  // A multi-megabyte raster payload, as returned for a 2K image, must not count as millions of text tokens.
+  // A multi-megabyte raster payload, as uploaded for a 2K image, must not count as millions of text tokens.
   const largeImage = `data:image/png;base64,${Buffer.alloc(3_000_000, 127).toString('base64')}`;
   const vision = url => ({ role: 'user', content: [{ type: 'text', text: 'Tool image for visual inspection.' }, { type: 'image_url', image_url: { url } }] });
   const large = modelCallBudget({}, [vision(largeImage)], .422005);
@@ -246,27 +262,25 @@ test('ambiguous provider timeout preserves usage reservation and never retries t
   assert.equal(cb.usages[0].cost, .5);
   assert.equal(cb.usages[0].reason, 'provider_connection_lost');
 });
-test('image generation uses the current dedicated API and fixed price provider metadata', async () => {
+test('image generation is unavailable and unsupported model calls cannot reach provider image APIs', async () => {
+  assert.deepEqual(AGENT_TOOLS.map(tool => tool.function.name), ['inspect_project', 'apply_operations', 'render_slide', 'view_image']);
+  assert.match(AGENT_SYSTEM_PROMPT, /cannot generate images or generatively edit/);
   const cb = callbacks([
-    response({ role: 'assistant', content: null, tool_calls: [{ id: 'c1', function: { name: 'generate_image', arguments: JSON.stringify({ prompt: 'A lemon on a pale background' }) } }] }),
-    response({ role: 'assistant', content: 'Image created.' }, 'gen2'),
+    response({ role: 'assistant', content: null, tool_calls: [{ id: 'c1', function: { name: 'generate_image', arguments: JSON.stringify({ prompt: 'A lemon', referenceAssetIds: ['upload1'] }) } }] }),
+    response({ role: 'assistant', content: 'Please upload the image you want to use.' }, 'gen2'),
   ]);
-  let posted;
-  cb.client.get = async path => {
-    assert.equal(path, '/images/models/bytedance-seed/seedream-4.5/endpoints');
-    return { endpoints: [{ provider_tag: 'seed', pricing: [{ billable: 'output_image', unit: 'image', cost_usd: .04 }, { billable: 'input_image', unit: 'image', cost_usd: 0 }] }] };
-  };
-  cb.client.post = async (path, request) => { posted = { path, ...request }; return { data: [{ b64_json: 'AQID', media_type: 'image/png' }], usage: { cost: .04 } }; };
-  cb.saveAsset = async asset => { assert.deepEqual(asset.body, new Uint8Array([1, 2, 3])); return { id: 'generated1', url: '/api/assets/generated1' }; };
-  cb.loadAsset = async () => ({ body: new Uint8Array([1, 2, 3]), mimeType: 'image/png' });
-  await runAgent(env, job, cb);
-  assert.equal(posted.path, '/images');
-  assert.equal(posted.body.resolution, '2K'); // Seedream 4.5 rejects 1K below its 3.7MP minimum.
-  assert.equal(posted.body.aspect_ratio, '9:16');
-  assert.deepEqual(posted.body.provider, { only: ['seed'], allow_fallbacks: false });
-  assert.equal(cb.usages[1].cost, .04);
-  assert.equal(cb.usages[1].generationId, 'image:j1:0:0');
-  assert.ok(cb.requests[1].messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === 'image_url')));
+  let providerCalls = 0, assetCalls = 0;
+  cb.client.get = cb.client.post = async () => { providerCalls++; throw new Error('Unexpected image API request'); };
+  cb.loadAsset = cb.saveAsset = async () => { assetCalls++; throw new Error('Unexpected asset operation'); };
+  const result = await runAgent(env, job, cb);
+  assert.match(result.message, /upload/);
+  assert.equal(providerCalls, 0);
+  assert.equal(assetCalls, 0);
+  assert.ok(cb.requests.every(request => request.tools.every(tool => tool.function.name !== 'generate_image')));
+  const toolMessage = cb.events.find(event => event.type === 'message' && event.data.message.role === 'tool').data.message;
+  assert.equal(JSON.parse(toolMessage.content).error, 'Unknown tool.');
+  assert.equal(cb.events.some(event => event.type === 'asset' || event.type === 'project'), false);
+  assert.deepEqual(cb.usages.map(usage => usage.generationId), ['gen1', 'gen2']);
 });
 test('view_image resolves a migrated library ID through the current project and owner store', async () => {
   const project = initial();
@@ -278,32 +292,12 @@ test('view_image resolves a migrated library ID through the current project and 
   assert.ok(loaded.length >= 1);
   assert.ok(loaded.every(id => id === 'stored-hash'));
 });
-test('ambiguous image provider timeout consumes the reservation once and terminates before another model call', async () => {
-  const cb = callbacks([
-    response({ role: 'assistant', content: null, tool_calls: [{ id: 'c1', function: { name: 'generate_image', arguments: JSON.stringify({ prompt: 'A lemon' }) } }] }),
-  ]);
-  cb.client.get = async () => ({ endpoints: [{ provider_tag: 'seed', pricing: [{ billable: 'output_image', unit: 'image', cost_usd: .04 }] }] });
-  let calls = 0;
-  cb.client.post = async () => { calls++; throw new APIConnectionTimeoutError(); };
-  await assert.rejects(runAgent(env, job, cb), error => error.code === 'UNKNOWN_USAGE');
-  assert.equal(calls, 1);
-  assert.equal(cb.requests.length, 1);
-  assert.equal(cb.usages.length, 2);
-  assert.equal(cb.usages[1].generationId, 'unknown:j1:image:0:0');
-  assert.equal(cb.usages[1].cost, .499);
-  assert.equal(cb.usages[1].estimated, true);
-  assert.equal(cb.events.some(event => event.type === 'asset'), false);
-});
-test('billing persistence failure after a priced image is fatal rather than a recoverable tool error', async () => {
-  const cb = callbacks([
-    response({ role: 'assistant', content: null, tool_calls: [{ id: 'c1', function: { name: 'generate_image', arguments: JSON.stringify({ prompt: 'A lemon' }) } }] }),
-  ]);
-  cb.client.get = async () => ({ endpoints: [{ provider_tag: 'seed', pricing: [{ billable: 'output_image', unit: 'image', cost_usd: .04 }] }] });
-  cb.client.post = async () => ({ data: [{ b64_json: 'AQID', media_type: 'image/png' }], usage: { cost: .04 } });
+test('billing persistence failure after a model response remains fatal', async () => {
+  const cb = callbacks([response({ role: 'assistant', content: 'Updated the layout.' })]);
   let records = 0;
-  cb.recordUsage = async () => { if (++records === 2) throw new Error('Database unavailable'); return .499; };
+  cb.recordUsage = async () => { records++; throw new Error('Database unavailable'); };
   await assert.rejects(runAgent(env, job, cb), error => error.code === 'USAGE_RECORD_FAILED');
-  assert.equal(records, 2);
+  assert.equal(records, 1);
   assert.equal(cb.requests.length, 1);
-  assert.equal(cb.events.some(event => event.type === 'asset'), false);
+  assert.equal(cb.events.some(event => event.type === 'message' && event.data.message.role === 'assistant'), false);
 });

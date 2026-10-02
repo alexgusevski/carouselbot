@@ -87,7 +87,7 @@ export function applyProjectOperations(original, operations, { assets = [], uid 
       case 'project.update': project.name = label(op.name, project.name); break;
       case 'asset.import': {
         const imported = assets.find(item => item.id === (op.assetId || op.mediaId));
-        if (!imported) throw new Error('Upload or generate the image first and use its assetId.');
+        if (!imported) throw new Error('Upload the image first and use its assetId.');
         if (!project.assets.some(item => item.id === imported.id)) project.assets.push({ ...imported, name: label(op.name, imported.name) });
         result = { assetId: imported.id }; break;
       }
