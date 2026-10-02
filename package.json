@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "description": "Carousel editor with local MCP and hosted AI text and layout editing",
   "homepage": "https://carousel.bot",
@@ -16,6 +17,11 @@
     "url": "https://github.com/alexgusevski/carouselbot/issues"
   },
   "scripts": {
+    "mobile:stage": "node apps/mobile/scripts/build-stage.mjs",
+    "mobile:start": "npm run mobile:stage && npm start --workspace @carouselbot/mobile",
+    "mobile:typecheck": "npm run typecheck --workspace @carouselbot/mobile",
+    "test:mobile": "node --test apps/mobile/test/*.test.mjs",
+    "test:mobile:browser": "node apps/mobile/scripts/test-browser.mjs",
     "start": "node server.mjs",
     "dev": "node server.mjs",
     "mcp": "node packages/mcp/src/cli.mjs serve",
@@ -41,6 +47,7 @@
     "deploy:product": "node scripts/deploy-product.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.28.1",
     "@modelcontextprotocol/client": "2.0.0",
     "wrangler": "^4.145.0"
   },

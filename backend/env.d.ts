@@ -12,6 +12,12 @@ interface __BaseEnv_Env {
 	AGENT_ALLOWANCE_USD: string;
 	JOB_BUDGET_USD: string;
 	CLERK_JWT_KEY: string;
+	CLERK_MOBILE_AUDIENCE?: string;
+	REVENUECAT_SECRET_KEY?: string;
+	REVENUECAT_WEBHOOK_AUTH?: string;
+	REVENUECAT_ENTITLEMENT_ID?: string;
+	REVENUECAT_PRODUCT_IDS?: string;
+	REVENUECAT_ENVIRONMENT?: 'SANDBOX' | 'PRODUCTION';
 	AGENT_WORKFLOW: Workflow<Parameters<import("./worker").CarouselAgentWorkflow['run']>[0]['payload']>;
 }
 declare namespace Cloudflare {

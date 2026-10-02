@@ -4,6 +4,7 @@ import { ApiError, fail, identifier, readJson, readBody, MAX_ASSET_BYTES, public
 import { statement, getProject, saveProject, loadAsset, saveAsset, deleteAsset, deleteProject, cleanupUnusedAssets, account, acceptWebhook, eventsForProject, displayMessages } from './store.mjs';
 import { createJob, dispatchJob, jobWithUndo, undoJob } from './jobs.mjs';
 import { folders, createFolder, moveFolder } from './folders.mjs';
+import { revenueCatWebhook, syncRevenueCat } from './revenuecat.mjs';
 const json = (body, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
 export async function authenticate(request, env) {
   if (!env.CLERK_JWT_KEY || !env.CLERK_PUBLISHABLE_KEY || !env.APP_ORIGIN) fail(503, 'NOT_CONFIGURED', 'Sign in is not configured.');
@@ -16,13 +17,18 @@ export async function authenticate(request, env) {
     issuer = `https://${host}`;
   } catch { fail(503, 'NOT_CONFIGURED', 'Sign in is not configured.'); }
   let claims;
+  const mobile = request.headers.get('x-carousel-client') === 'mobile';
+  if (mobile && !env.CLERK_MOBILE_AUDIENCE) fail(503, 'NOT_CONFIGURED', 'Mobile sign in is not configured.');
   try {
     claims = await verifyToken(request.headers.get('authorization').slice('Bearer '.length), {
-      authorizedParties: [env.APP_ORIGIN],
+      ...(!mobile ? { authorizedParties: [env.APP_ORIGIN] } : {}),
       jwtKey: env.CLERK_JWT_KEY,
+      ...(mobile ? { audience: env.CLERK_MOBILE_AUDIENCE } : {}),
     });
   } catch { fail(401, 'UNAUTHORIZED', 'Sign in to continue.'); }
-  if (claims.iss !== issuer || claims.azp !== env.APP_ORIGIN || !/^user_[\w-]+$/.test(claims.sub || '') || !/^sess_[\w-]+$/.test(claims.sid || '') || !Number.isSafeInteger(claims.exp) || claims.sts === 'pending') fail(401, 'UNAUTHORIZED', 'Sign in to continue.');
+  const partyValid = claims.azp === env.APP_ORIGIN || (mobile && claims.azp == null && (claims.aud === env.CLERK_MOBILE_AUDIENCE || Array.isArray(claims.aud) && claims.aud.includes(env.CLERK_MOBILE_AUDIENCE)));
+  if (claims.iss !== issuer || !partyValid || !/^user_[\w-]+$/.test(claims.sub || '') || !/^sess_[\w-]+$/.test(claims.sid || '') || !Number.isSafeInteger(claims.exp) || claims.sts === 'pending') fail(401, 'UNAUTHORIZED', 'Sign in to continue.');
+  if (await statement(env, 'SELECT user_id FROM deleted_accounts WHERE user_id=?', claims.sub).first()) fail(410, 'ACCOUNT_DELETED', 'This CarouselBot account has been deleted.');
   return claims.sub;
 }
 function billingClient(env) {
@@ -32,6 +38,7 @@ function billingClient(env) {
 export async function api(request, env) {
   try {
     const url = new URL(request.url); const path = url.pathname;
+    if (path === '/api/billing/revenuecat/webhook' && request.method === 'POST') { await revenueCatWebhook(request, env); return json({ received: true }); }
     if (path === '/api/config' && request.method === 'GET') return json({ clerkPublishableKey: env.CLERK_PUBLISHABLE_KEY || '', ready: Boolean(env.CLERK_JWT_KEY && env.CLERK_PUBLISHABLE_KEY && env.DB), billingAvailable: Boolean(env.POLAR_ACCESS_TOKEN && env.POLAR_PRODUCT_ID), agentAvailable: Boolean(env.OPENROUTER_API_KEY && env.AGENT_WORKFLOW && env.BROWSER), allowanceCredits: Math.floor(Number(env.AGENT_ALLOWANCE_USD || 5) * 100), jobBudgetCredits: Math.floor(Number(env.JOB_BUDGET_USD || .5) * 100) });
     if (path === '/api/billing/webhook' && request.method === 'POST') {
       if (!env.POLAR_WEBHOOK_SECRET) fail(503, 'NOT_CONFIGURED', 'Webhook is not configured.');
@@ -53,7 +60,26 @@ export async function api(request, env) {
     if ((path === '/api/account' || path === '/api/me') && request.method === 'GET') {
       try { await cleanupUnusedAssets(env, userId); }
       catch (error) { console.error('Account asset cleanup deferred', { message: error.message }); }
-      const { periodStart, ...info } = await account(env, userId); return json(info);
+      const { periodStart, subscriptionId, ...info } = await account(env, userId); return json(info);
+    }
+    if (path === '/api/billing/revenuecat/sync' && request.method === 'POST') {
+      await syncRevenueCat(env, userId, { cooldown: 2000 });
+      const { periodStart, subscriptionId, ...info } = await account(env, userId); return json(info);
+    }
+    if (path === '/api/account' && request.method === 'DELETE') {
+      if (await statement(env, "SELECT id FROM jobs WHERE user_id=? AND status IN ('queued','running') LIMIT 1", userId).first()) fail(409, 'JOB_ACTIVE', 'Stop the agent before deleting your account.');
+      const objects = await statement(env, 'SELECT object_key FROM assets WHERE user_id=?', userId).all();
+      await env.DB.batch([
+        statement(env, 'INSERT OR IGNORE INTO deleted_accounts(user_id,deleted_at) VALUES(?,?)', userId, Date.now()),
+        statement(env, 'DELETE FROM projects WHERE user_id=?', userId),
+        statement(env, 'DELETE FROM assets WHERE user_id=?', userId),
+        statement(env, 'DELETE FROM folders WHERE user_id=?', userId),
+        statement(env, 'DELETE FROM subscriptions WHERE user_id=?', userId),
+        statement(env, 'DELETE FROM allowances WHERE user_id=?', userId),
+        ...objects.results.map(row => statement(env, 'INSERT OR IGNORE INTO asset_deletions(object_key,created_at) VALUES(?,?)', row.object_key, Date.now())),
+      ]);
+      await cleanupUnusedAssets(env, userId);
+      return json({ deleted: true });
     }
     if (path === '/api/projects' && request.method === 'GET') {
       const result = await statement(env, 'SELECT document FROM projects WHERE user_id=? ORDER BY updated_at DESC', userId).all();
@@ -82,7 +108,7 @@ export async function api(request, env) {
         return json({ deleted: true });
       }
     }
-    if (path === '/api/assets' && request.method === 'POST') return json(await saveAsset(env, userId, { body: await readBody(request, MAX_ASSET_BYTES), mimeType: request.headers.get('content-type')?.split(';')[0], name: decodeURIComponent(request.headers.get('x-file-name') || 'Image') }), 201);
+    if (path === '/api/assets' && request.method === 'POST') return json(await saveAsset(env, userId, { body: await readBody(request, MAX_ASSET_BYTES), mimeType: request.headers.get('content-type')?.split(';')[0], name: decodeURIComponent(request.headers.get('x-file-name') || 'Image'), allowMedia: true }), 201);
     const assetRoute = path.match(/^\/api\/assets\/([^/]+)$/);
     if (assetRoute && request.method === 'DELETE') { await deleteAsset(env, userId, assetRoute[1]); return json({ deleted: true }); }
     if (assetRoute && request.method === 'GET') {
@@ -115,6 +141,8 @@ export async function api(request, env) {
       return json({ url: checkout.url });
     }
     if (path === '/api/billing/portal' && request.method === 'POST') {
+      const billing = (await account(env, userId)).billing;
+      if (billing.provider === 'revenuecat') return json({ url: billing.store === 'app_store' ? 'https://apps.apple.com/account/subscriptions' : 'https://play.google.com/store/account/subscriptions' });
       const session = await billingClient(env).customerSessions.create({ external_customer_id: userId, return_url: `${env.APP_ORIGIN}/dashboard` });
       return json({ url: session.customer_portal_url });
     }

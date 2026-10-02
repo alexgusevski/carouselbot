@@ -8,6 +8,7 @@ export class ApiError extends Error {
 export const fail = (status, code, message, details) => { throw new ApiError(status, code, message, details); };
 export const money = (usd) => Math.round(Number(usd) * 1_000_000);
 export const dollars = (units) => Number(units || 0) / 1_000_000;
+export const revenueCatProduct = env => `revenuecat:${env.REVENUECAT_ENTITLEMENT_ID || 'pro'}`;
 export function identifier(value, label = 'ID') {
   if (typeof value !== 'string' || !/^[\w-]{1,160}$/.test(value)) fail(400, 'INVALID_ID', `Invalid ${label}.`);
   return value;

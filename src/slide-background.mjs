@@ -1,5 +1,6 @@
 import { normalizeHexColor, slideCanvasDimensions } from "./editor-model.mjs";
 
+/** @param {string} color @param {any} project @param {any} slide */
 export function solidBackgroundDataUrl(color = "#EEEDE7", project = null, slide = null) {
   const fill = normalizeHexColor(color, "#EEEDE7");
   const canvas = slideCanvasDimensions(project, slide);

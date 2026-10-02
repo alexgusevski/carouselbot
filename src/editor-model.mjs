@@ -278,6 +278,7 @@ export function projectCanvasDimensions(project = null) {
   return { aspectRatio, width: dimensions.width, height: dimensions.height };
 }
 
+/** @param {any} project @param {any} slide */
 export function slideCanvasDimensions(project = null, slide = null) {
   const projectDimensions = projectCanvasDimensions(project);
   const aspectRatio = normalizeAspectRatio(slide?.aspectRatio, projectDimensions.aspectRatio);

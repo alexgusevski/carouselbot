@@ -1,0 +1,48 @@
+{
+  "name": "@carouselbot/mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "npm run stage && expo start --dev-client",
+    "stage": "node scripts/build-stage.mjs",
+    "eas-build-post-install": "npm run stage",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "export": "expo export --platform all"
+  },
+  "dependencies": {
+    "@clerk/expo": "^4.8.0",
+    "@expo/vector-icons": "^15.0.2",
+    "expo": "~57.0.20",
+    "expo-asset": "~57.0.15",
+    "expo-crypto": "~57.0.2",
+    "expo-dev-client": "~57.0.18",
+    "expo-document-picker": "~57.0.2",
+    "expo-file-system": "~57.0.6",
+    "expo-font": "~57.0.2",
+    "expo-haptics": "~57.0.2",
+    "expo-image-picker": "~57.0.4",
+    "expo-linking": "~57.0.9",
+    "expo-media-library": "~57.0.4",
+    "expo-router": "~57.0.19",
+    "expo-secure-store": "~57.0.2",
+    "expo-sharing": "~57.0.2",
+    "expo-splash-screen": "~57.0.8",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-purchases": "^10.7.2",
+    "react-native-purchases-ui": "^10.7.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "~0.21.0",
+    "react-native-webview": "^13.16.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}

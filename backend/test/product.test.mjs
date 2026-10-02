@@ -13,6 +13,7 @@ function fixture() {
   db.exec(readFileSync(new URL('../migrations/0001_product.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/0002_folders.sql', import.meta.url), 'utf8'));
   db.exec(readFileSync(new URL('../migrations/0003_asset_references.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0004_mobile_billing.sql', import.meta.url), 'utf8'));
   const makeStatement = (sql) => ({ bind: (...values) => {
     const statement = db.prepare(sql);
     return { sql, values, first: async () => statement.get(...values) || null, all: async () => ({ results: statement.all(...values) }), run: async () => ({ meta: statement.run(...values) }) };
