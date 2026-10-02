@@ -1,4 +1,5 @@
 import { fail, validateProject, identifier, money, dollars, IMAGE_TYPES, MEDIA_TYPES, MAX_ASSET_BYTES, normalizedSubscription } from './core.mjs';
+import { revenueCatProduct } from './core.mjs';
 export const statement = (env, sql, ...values) => env.DB.prepare(sql).bind(...values);
 export async function getProject(env, userId, id) {
   const row = await statement(env, 'SELECT document FROM projects WHERE user_id=? AND id=?', userId, id).first();
@@ -98,11 +99,11 @@ export async function loadAsset(env, userId, id) {
 }
 export async function account(env, userId) {
   const now = Date.now();
-  const subscription = await statement(env, `SELECT * FROM subscriptions WHERE user_id=? AND product_id=? AND status IN ('active','trialing') AND period_start<=? AND period_end>? ORDER BY period_start DESC LIMIT 1`, userId, env.POLAR_PRODUCT_ID || '', now, now).first();
+  const subscription = await statement(env, `SELECT * FROM subscriptions WHERE user_id=? AND ((provider='polar' AND product_id=?) OR (provider='revenuecat' AND product_id=?)) AND status IN ('active','trialing') AND period_start<=? AND period_end>? ORDER BY period_start DESC LIMIT 1`, userId, env.POLAR_PRODUCT_ID || '', revenueCatProduct(env), now, now).first();
   const allowance = subscription ? await statement(env, 'SELECT * FROM allowances WHERE user_id=? AND period_start=?', userId, subscription.period_start).first() : null;
   const remainingUnits = Math.max(0, (allowance?.allowance || 0) - (allowance?.spent || 0) - (allowance?.reserved || 0));
   const remaining = dollars(remainingUnits);
-  return { userId, credits: Math.floor(remainingUnits / 10000), canGenerate: Boolean(subscription && remainingUnits >= jobBudget(env) && env.OPENROUTER_API_KEY && env.AGENT_WORKFLOW), billing: { active: Boolean(subscription), remaining, allowance: dollars(allowance?.allowance), periodEnd: subscription?.period_end ?? null }, periodStart: subscription?.period_start };
+  return { userId, credits: Math.floor(remainingUnits / 10000), canGenerate: Boolean(subscription && remainingUnits >= jobBudget(env) && env.OPENROUTER_API_KEY && env.AGENT_WORKFLOW), billing: { active: Boolean(subscription), remaining, allowance: dollars(allowance?.allowance), periodEnd: subscription?.period_end ?? null, provider: subscription?.provider || null, store: subscription?.store || null }, periodStart: subscription?.period_start, subscriptionId: subscription?.id };
 }
 export function jobBudget(env) {
   const budget = money(env.JOB_BUDGET_USD || 0.5);
@@ -112,7 +113,7 @@ export function jobBudget(env) {
 export async function acceptWebhook(env, eventId, event) {
   const subscription = normalizedSubscription(event, env.POLAR_PRODUCT_ID);
   const statements = [statement(env, 'INSERT OR IGNORE INTO webhooks(id,type,created_at) VALUES(?,?,?)', eventId, event.type, Date.now())];
-  if (subscription) {
+  if (subscription && !await statement(env, 'SELECT user_id FROM deleted_accounts WHERE user_id=?', subscription.userId).first()) {
     const s = subscription;
     statements.push(statement(env, `INSERT INTO subscriptions(id,user_id,product_id,status,period_start,period_end,updated_at) VALUES(?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET status=excluded.status,period_start=excluded.period_start,period_end=excluded.period_end,updated_at=excluded.updated_at WHERE excluded.updated_at>subscriptions.updated_at`, s.id, s.userId, s.productId, s.status, s.periodStart, s.periodEnd, s.updatedAt));

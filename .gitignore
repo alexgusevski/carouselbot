@@ -6,3 +6,9 @@ dist/
 .env
 .env.*
 .dev.vars
+.expo/
+apps/mobile/ios/
+apps/mobile/android/
+apps/mobile/src/generated/
+apps/mobile/stage/preview.generated.html
+!apps/mobile/.env.example

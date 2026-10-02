@@ -73,7 +73,7 @@ export async function createJob(env, userId, projectId, input) {
       statement(env, `INSERT INTO jobs(id,user_id,project_id,request_id,prompt,attachments,period_start,budget,created_at,updated_at)
         SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM allowances WHERE user_id=? AND period_start=? AND allowance-spent-reserved>=?)
         AND EXISTS(SELECT 1 FROM projects WHERE user_id=? AND id=? AND revision=?)
-        AND EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND product_id=? AND period_start=? AND period_end>? AND status IN ('active','trialing'))`, id, userId, projectId, requestId, input.prompt.trim(), JSON.stringify(attachments), info.periodStart, budget, now, now, userId, info.periodStart, budget, userId, projectId, input.expectedRevision, userId, env.POLAR_PRODUCT_ID, info.periodStart, now),
+        AND EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND id=? AND period_start=? AND period_end>? AND status IN ('active','trialing'))`, id, userId, projectId, requestId, input.prompt.trim(), JSON.stringify(attachments), info.periodStart, budget, now, now, userId, info.periodStart, budget, userId, projectId, input.expectedRevision, userId, info.subscriptionId, info.periodStart, now),
       statement(env, 'UPDATE allowances SET reserved=reserved+? WHERE user_id=? AND period_start=? AND EXISTS(SELECT 1 FROM jobs WHERE id=?)', budget, userId, info.periodStart, id),
       ...attachments.map(assetId => statement(env, 'INSERT INTO job_assets(job_id,user_id,asset_id) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM jobs WHERE id=?)', id, userId, assetId, id)),
     ]);
