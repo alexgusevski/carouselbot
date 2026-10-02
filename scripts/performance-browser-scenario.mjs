@@ -131,7 +131,7 @@ export async function verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl }) {
     const { deleteProjectFromDb } = await import('/src/project-store.mjs');
     for (let index = 0; index < 4; index++) await deleteProjectFromDb('memory-fixture-' + index, { broadcast: false });
   })()`);
-  await navigate(pageUrl);
+  await navigate(pageUrl + "/dashboard");
   await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.dashboard'))`), 'Fixture cleanup did not return to dashboard');
   return { ...fixture, dashboard, dashboardJsHeapMiB: Math.round(dashboardHeap.usedSize / 1048576), warmOriginalReads: warmReads, editor, returned };
 }

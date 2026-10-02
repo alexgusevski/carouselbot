@@ -38,7 +38,6 @@ import {
   constrainOverlay,
   constrainImagePosition,
 } from "./editor-state.mjs";
-import { putProject } from "./project-store.mjs";
 import { getImageDimensions, fingerprintData } from "./slide-renderer.mjs";
 import { canonicalSolidBackgroundColor, solidBackgroundDataUrl } from "./slide-background.mjs";
 import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_WEIGHT } from "./project-fonts.mjs";
@@ -46,6 +45,7 @@ import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_WEIGHT } from "./project-fonts.mjs";
 export function createEditorActions({
   recordHistory,
   scheduleSave,
+  flushPendingSave,
   reloadProjectFromDb,
   renderEditor,
   toast,
@@ -486,16 +486,13 @@ export function createEditorActions({
         renderEditor();
         return;
       }
-      const baseRevision = Number(project.revision) || 0;
-      project.updatedAt = Date.now();
-      project.revision = baseRevision + 1;
-      await putProject(project, { expectedRevision: baseRevision });
+      scheduleSave(project);
+      await flushPendingSave();
       toast(`${added} ${added === 1 ? "asset" : "assets"} uploaded`);
       renderEditor();
     } catch (error) {
       console.error(error);
-      if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
-      toast("One of those files couldn’t be added.");
+      toast(error.message || "One of those files couldn’t be added.");
       renderEditor();
     }
   }

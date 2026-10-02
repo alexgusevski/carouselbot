@@ -39,6 +39,8 @@ const env = sharedDaemon ? process.env : {
   CAROUSELBOT_ALLOWED_ORIGINS: [process.env.CAROUSELBOT_ALLOWED_ORIGINS, new URL(pageUrl).origin].filter(Boolean).join(","),
 };
 const browserPageUrl = sharedDaemon ? pageUrl : `${pageUrl}${pageUrl.includes("?") ? "&" : "?"}__mcpBridgePort=${bridgePort}`;
+const editorPageUrl = new URL(browserPageUrl);
+editorPageUrl.pathname = "/dashboard";
 const web = localPagePort
   ? spawn(process.execPath, ["server.mjs"], {
     cwd: root,
@@ -346,7 +348,7 @@ try {
   await cdp.send("Runtime.enable");
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1800, deviceScaleFactor: 1, mobile: false });
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
-  await cdp.send("Page.navigate", { url: browserPageUrl });
+  await cdp.send("Page.navigate", { url: editorPageUrl.href });
   await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent) && Boolean(document.querySelector('[data-action=\"connect-agent\"]'))"), "Editor scripts did not load.");
   await evaluate(cdp, "window.carouselBotReady");
   const initialConnection = await evaluate(cdp, `({
@@ -431,7 +433,7 @@ try {
     const value = { pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), composedCover: Boolean(card?.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')) };
     return value.composedCover ? value : false;
   })()`), "Adding a slide did not update the folder mosaic.");
-  if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.composedCover) throw new Error(`Adding a slide changed the dashboard folder view: ${JSON.stringify(dashboardAfterSlide)}`);
+  if (dashboardAfterSlide.pathname !== "/dashboard" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.composedCover) throw new Error(`Adding a slide changed the dashboard folder view: ${JSON.stringify(dashboardAfterSlide)}`);
   await tool("move_project", { projectId: createdProject.projectId, folderPath: "/Client/Account" });
   const nestedInspection = (await tool("inspect_editor")).structuredContent;
   if (!nestedInspection.folders.some((folder) => folder.path === "/Client" && folder.projectCount === 1)
@@ -730,17 +732,16 @@ try {
   const compactToolbar = await waitFor(() => evaluate(cdp, `(() => {
     const projectIdentity = document.querySelector(".project-identity");
     const airdrop = document.querySelector(".airdrop-icon");
-    const github = document.querySelector(".github-mark");
-    if (!projectIdentity || !airdrop || !github) return null;
+    if (!projectIdentity || !airdrop) return null;
     return {
       projectTitleDisplay: getComputedStyle(projectIdentity).display,
       hasMobileEditButton: Boolean(document.querySelector(".mobile-edit-button")),
       airdropWidth: getComputedStyle(airdrop).width,
       airdropRadius: getComputedStyle(airdrop).borderRadius,
-      githubWidth: getComputedStyle(github).width,
+      hasRepositoryLink: Boolean(document.querySelector(".github-link")),
     };
   })()`), "Compact editor toolbar did not render.");
-  if (compactToolbar.projectTitleDisplay !== "none" || compactToolbar.hasMobileEditButton || compactToolbar.airdropWidth !== "25px" || compactToolbar.airdropRadius !== "50%" || compactToolbar.githubWidth !== "25px") throw new Error(`Compact toolbar regression: ${JSON.stringify(compactToolbar)}`);
+  if (compactToolbar.projectTitleDisplay !== "none" || compactToolbar.hasMobileEditButton || compactToolbar.airdropWidth !== "25px" || compactToolbar.airdropRadius !== "50%" || compactToolbar.hasRepositoryLink) throw new Error(`Compact toolbar regression: ${JSON.stringify(compactToolbar)}`);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1800, deviceScaleFactor: 1, mobile: false });
 
   for (const [align, expectedAlignItems] of [["left", "flex-start"], ["right", "flex-end"]]) {
@@ -1018,14 +1019,14 @@ try {
 
   const inspected = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).structuredContent;
   if (inspected.project.name !== "Full MCP verified" || inspected.project.slides.length !== 1 || inspected.slide.texts.length !== 2 || inspected.slide.images.length !== 1 || inspected.slide.images[0].id !== image.createdImageId || inspected.view.showTikTokOverlay !== true) throw new Error(`Unexpected final state: ${JSON.stringify(inspected)}`);
-  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: browserPageUrl });
+  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: editorPageUrl.href });
   const secondPage = await waitFor(async () => (await waitForJson("/json/list")).find((page) => page.id === secondTargetId), "Second editor tab did not open.");
   secondCdp = connectCdp(secondPage.webSocketDebuggerUrl);
   await secondCdp.ready;
   await secondCdp.send("Runtime.enable");
   await waitFor(() => evaluate(secondCdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Second editor did not restore the remembered connection.");
   for (let index = 0; index < 5; index += 1) {
-    const { targetId } = await cdp.send("Target.createTarget", { url: browserPageUrl });
+    const { targetId } = await cdp.send("Target.createTarget", { url: editorPageUrl.href });
     const page = await waitFor(async () => (await waitForJson("/json/list")).find((item) => item.id === targetId), `Stress editor ${index + 3} did not open.`);
     const extraCdp = connectCdp(page.webSocketDebuggerUrl);
     await extraCdp.ready;

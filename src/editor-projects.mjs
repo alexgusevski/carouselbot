@@ -46,6 +46,7 @@ import {
   PROJECT_SYNC_STORAGE_KEY,
   projectChannel,
   projectChannelSource,
+  isCurrentAccountEvent,
   getAllProjects,
   getAllFolders,
   createFolderInDb,
@@ -119,12 +120,14 @@ export function createEditorProjects({
   domainMigration,
   renderDashboard,
   renderEditor,
+  renderLanding = () => {},
   clearLayerSelection,
   toast,
   scheduleThumbnailRefresh,
   clearProjectCover,
   clearSlideThumbnail,
   pruneSlideThumbnails,
+  onSaveStatus = () => {},
 }) {
   let migrationModalDismissed = false;
   let dashboardRefreshPromise = null;
@@ -209,12 +212,12 @@ export function createEditorProjects({
 
   function showShareRouteStatus(title, message, { loading = true } = {}) {
     app.innerHTML = `
-      <header class="app-header"><a class="brand" href="/" aria-label="Go to projects"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span></a></header>
+      <header class="app-header"><a class="brand" href="/dashboard" aria-label="Go to projects"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span></a></header>
       <main class="share-import-page"><section class="share-import-card" role="status" aria-live="polite" data-state="${loading ? "loading" : "error"}">
         <div class="share-import-indicator" aria-hidden="true"><span class="share-import-spinner"></span></div>
         <p class="share-import-eyebrow">Shared project</p>
         <h1>${escapeHtml(title)}</h1><p class="share-import-message" data-share-status>${escapeHtml(message)}</p>
-        <a class="button button--quiet" href="/">Go to projects</a>
+        <a class="button button--quiet" href="/dashboard">Go to projects</a>
       </section></main>`;
     document.title = `${title} · CarouselBot`;
   }
@@ -296,7 +299,7 @@ export function createEditorProjects({
   function leaveMissingActiveFolder({ notify = false } = {}) {
     if (!state.activeFolderPath || folderExists(state.activeFolderPath)) return false;
     state.activeFolderPath = null;
-    updateBrowserRoute("/", "replace");
+    updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", "replace");
     if (notify) toast("That folder is empty now, so it was removed.");
     return true;
   }
@@ -347,6 +350,10 @@ export function createEditorProjects({
     if (!snapshot) return;
     history.future.push(cloneProject(project));
     return applyHistorySnapshot(snapshot);
+  }
+
+  function hasUndo() {
+    return history.past.some((snapshot) => snapshot.id === state.activeProjectId);
   }
 
   function redo() {
@@ -417,7 +424,7 @@ export function createEditorProjects({
         state.activeFolderPath = null;
         state.activeProjectId = null;
         state.activeSlideId = null;
-        updateBrowserRoute("/", "replace");
+        updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", "replace");
       }
     } else if (index >= 0) {
       const latestSlideIds = new Set(latest.slides.map((slide) => slide.id));
@@ -437,6 +444,7 @@ export function createEditorProjects({
   }
 
   async function handleExternalProjectEvent(data) {
+    if (!data || !isCurrentAccountEvent(data)) return;
     if (state.db && data?.type === "folders.updated" && data.source !== projectChannelSource) {
       state.folders = await getAllFolders();
       if (!state.activeProjectId) { leaveMissingActiveFolder(); renderDashboard(); }
@@ -466,6 +474,7 @@ export function createEditorProjects({
       project.revision = baseRevision + 1;
       await putProject(project, { expectedRevision: baseRevision });
       if (dirtySaveProjects.get(project.id)?.project === project) dirtySaveProjects.delete(project.id);
+      onSaveStatus(dirtySaveProjects.values().next().value?.error || null);
       releaseInactiveProjects();
     } catch (error) {
       // A failed transaction did not advance the stored revision. Keep the
@@ -479,8 +488,9 @@ export function createEditorProjects({
         toast("This project changed in another tab. Reloaded the latest version.");
       } else {
         dirtySaveProjects.set(project.id, { project, error });
-        toast("Couldn’t save this project in your browser.");
+        toast("Couldn’t save this project. Your changes are still open.");
       }
+      onSaveStatus(dirtySaveProjects.values().next().value?.error || null);
       throw error;
     }
   }
@@ -512,8 +522,7 @@ export function createEditorProjects({
     if (dirtySaveProjects.size) throw dirtySaveProjects.values().next().value.error;
   }
 
-  function scheduleSave() {
-    const project = activeProject();
+  function scheduleSave(project = activeProject()) {
     if (!project) return;
     project.updatedAt = Date.now();
     scheduleThumbnailRefresh();
@@ -1060,12 +1069,17 @@ export function createEditorProjects({
   function openDashboard({ historyMode = "push" } = {}) {
     navigationGeneration += 1;
     state.activeFolderPath = null;
-    updateBrowserRoute("/", historyMode);
+    updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", historyMode);
     renderDashboard();
   }
 
   async function renderCurrentRoute() {
     const route = routeFromPathname();
+    if (route.view === "landing" && !domainMigration.isLegacyOrigin) {
+      await flushPendingSave();
+      renderLanding();
+      return;
+    }
     if (route.view === "share") {
       void openSharedProject(route.shareId);
       return;
@@ -1075,7 +1089,7 @@ export function createEditorProjects({
     const missingProject = route.view === "project";
     const missingFolder = route.view === "folder";
     state.activeFolderPath = null;
-    updateBrowserRoute("/", "replace");
+    updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", "replace");
     renderDashboard();
     if (missingProject) toast("This project isn’t available in this browser.");
     else if (missingFolder) toast("This folder isn’t available in this browser.");
@@ -1097,9 +1111,15 @@ export function createEditorProjects({
     };
     state.projects.push(project);
     openProject(project.id);
-    putProject(project).catch((error) => {
+    const initialSave = putProject(project);
+    saveInFlight = initialSave;
+    initialSave.finally(() => { if (saveInFlight === initialSave) saveInFlight = null; }).catch(() => {});
+    initialSave.then(() => onSaveStatus(dirtySaveProjects.values().next().value?.error || null), () => {});
+    initialSave.catch((error) => {
+      dirtySaveProjects.set(project.id, { project, error });
+      onSaveStatus(error);
       console.error(error);
-      toast("Couldn’t save this project in your browser.");
+      toast("Couldn’t save this project. Your changes are still open.");
     });
   }
 
@@ -1262,6 +1282,7 @@ export function createEditorProjects({
   }
 
   function refreshDashboardProjects() {
+    if (["/", "/index.html"].includes(location.pathname) && !domainMigration.isLegacyOrigin) return Promise.resolve();
     if (!state.db || state.activeProjectId) return Promise.resolve();
     if (dashboardRefreshPromise) return dashboardRefreshPromise;
     dashboardRefreshPromise = flushPendingSave()
@@ -1289,6 +1310,7 @@ export function createEditorProjects({
     releaseInactiveProjects,
     domainMigration,
     recordHistory,
+    hasUndo,
     undo,
     redo,
     updateBrowserRoute,
@@ -1297,6 +1319,7 @@ export function createEditorProjects({
     handleExternalProjectEvent,
     scheduleSave,
     flushPendingSave,
+    hasPendingSave: () => Boolean(pendingSaveProject || saveInFlight || dirtySaveProjects.size),
     showProjectMenu,
     showFolderMenu,
     closeProjectDeleteConfirmation,

@@ -14,8 +14,9 @@ applied to the latest release line.
 ## Active security controls
 
 - **Repository:** protected `main`, pull-request checks, linear history, immutable
-  GitHub Action SHAs, least-privilege workflow permissions, Dependabot, CodeQL,
-  dependency review, secret scanning, and push protection.
+  GitHub Action SHAs, least-privilege workflow permissions and Dependabot.
+  CodeQL, dependency review, secret scanning and push protection depend on the
+  features available to this private repository; their workflow definitions remain checked in.
 - **npm releases:** exact `v<semver>` tags, release commits verified against
   protected `main`, matching package versions, tests before publishing, and an
   `npm-release` environment restricted to release tags.
@@ -26,12 +27,19 @@ applied to the latest release line.
   compatibility publish can be retried without republishing the canonical package.
 - **Installed MCP version:** setup writes an exact package version into the local
   MCP configuration. Users update deliberately by rerunning `npx carouselbot@latest setup`.
-- **Application:** user projects stay in browser storage unless the user clicks
+- **Local application:** local projects stay in browser storage unless the user clicks
   **Share link**, which uploads a compressed project snapshot to a private
   Cloudflare KV namespace for 24 hours. Possession of its signed link grants
   access to all slides, source assets, and imported fonts in that snapshot.
   Recipients save independent local copies. The optional MCP companion binds to loopback,
   checks the browser origin, and uses random local bearer tokens.
+
+- **Hosted product:** Clerk session JWTs are verified with the instance public key,
+  expected issuer and application origin. D1 and private R2 reads/writes bind the
+  authenticated owner. Cloud projects are kept out of local IndexedDB. Polar
+  signed webhooks establish subscription periods; atomic reservations bound model
+  usage. OpenRouter credentials are server secrets. Hosted AI requests send only
+  the current project conversation and selected images to the model provider.
 
 The release workflow has no npm-token fallback: if the npm Trusted Publisher
 configuration does not match this repository, `.github/workflows/publish.yml`,
@@ -50,10 +58,7 @@ does not expose a public network service or upload projects to CarouselBot.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a suspected vulnerability. Use GitHub's
-[private vulnerability reporting](https://github.com/alexgusevski/carouselbot/security/advisories/new)
-so reports, reproduction steps, and proposed fixes remain confidential until a
-coordinated release is ready.
+Email [kontakt@beundraab.se](mailto:kontakt@beundraab.se) for suspected vulnerabilities. The repository is private; do not post sensitive reports publicly.
 
 Include the affected component and version, the expected impact, reproduction
 steps or a proof of concept, and any suggested mitigation. You should receive an

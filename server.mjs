@@ -11,6 +11,7 @@ const files = new Map([
   ["/assets/mediabunny-1.60.0.min.mjs", ["node_modules/mediabunny/dist/bundles/mediabunny.min.mjs", "text/javascript; charset=utf-8"]],
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/dashboard", ["index.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/app-config.js", ["app-config.js", "text/javascript; charset=utf-8"]],
   ["/domain-migration.js", ["domain-migration.js", "text/javascript; charset=utf-8"]],

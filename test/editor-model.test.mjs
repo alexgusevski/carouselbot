@@ -191,8 +191,9 @@ test("finds adjacent slides without wrapping past either end", () => {
 });
 
 test("routes dashboard and encoded project URLs", () => {
-  assert.deepEqual(routeFromPathname("/"), { view: "dashboard" });
-  assert.deepEqual(routeFromPathname("/index.html"), { view: "dashboard" });
+  assert.deepEqual(routeFromPathname("/"), { view: "landing" });
+  assert.deepEqual(routeFromPathname("/index.html"), { view: "landing" });
+  assert.deepEqual(routeFromPathname("/dashboard"), { view: "dashboard" });
   assert.deepEqual(routeFromPathname("/projects/a%20b/"), { view: "project", projectId: "a b" });
   assert.deepEqual(routeFromPathname("/projects/%E0%A4%A"), { view: "not-found" });
   assert.deepEqual(routeFromPathname("/unknown"), { view: "not-found" });
@@ -232,7 +233,7 @@ test("normalizes virtual folder paths with one leading slash and a bounded lengt
 });
 
 test("builds and parses encoded virtual folder routes", () => {
-  assert.equal(folderRoutePath(null), "/");
+  assert.equal(folderRoutePath(null), "/dashboard");
   assert.equal(folderRoutePath("/my folder"), "/folders/my%20folder");
   assert.equal(folderRoutePath(" /Campaign 2026/Q4 "), "/folders/Campaign%202026%2FQ4");
   assert.deepEqual(routeFromPathname("/folders/my%20folder"), { view: "folder", folderPath: "/my folder" });

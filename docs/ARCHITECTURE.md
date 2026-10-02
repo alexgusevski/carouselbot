@@ -1,6 +1,6 @@
 # Editor architecture
 
-CarouselBot is a local-first browser application. Projects and imported images remain in IndexedDB unless the user explicitly creates a 24-hour share link. Two Pages Functions store and retrieve compressed, immutable snapshots from Workers KV; the recipient imports an independent IndexedDB project. The optional MCP companion communicates with the open browser over loopback.
+CarouselBot is a browser application with a local mode and an authenticated cloud mode. Local projects and imported images remain in IndexedDB unless the user explicitly creates a 24-hour share link or imports them into an account. Two Pages Functions store and retrieve compressed, immutable snapshots from Workers KV; the recipient imports an independent IndexedDB project. The optional MCP companion communicates with the open browser over loopback.
 
 The editor deliberately uses a small ES-module graph rather than a framework or bundler. Each module represents a stable responsibility, while `editor.mjs` remains the composition root and compatibility facade.
 
@@ -97,10 +97,10 @@ An import resolves one selected face inside the companion and transfers its byte
 - Overlay crop rectangles are normalized within the source image and have a minimum 5% size.
 - Layer `z` values determine one combined ordering across text and overlays.
 - Text wrapping and boxed-line geometry must agree between DOM previews and exported canvas images.
-- Imported font bytes remain local, and font metadata returned to agents never contains a filesystem path or stored bytes.
+- Local-mode font bytes remain on the device; authenticated cloud projects save private font bytes in R2. Font metadata returned to agents never contains a filesystem path or stored bytes.
 - A text layer using a project font is measured and rendered only after that exact face has loaded.
 - TikTok placement chrome is preview-only and is never exported.
-- Project images stay embedded in the local project record except when the user explicitly shares the entire project through a temporary link.
+- Local-mode project images stay embedded in the local project record except during an explicit share or account import. Cloud projects use authenticated private R2 references.
 - Layer geometry is applied with dynamic style attributes. The deployment CSP permits style attributes while keeping stylesheet and script sources restricted to the application origin.
 
 ## Testing strategy
@@ -181,3 +181,13 @@ previews can be restored without decoding source photos. The disposable disk cac
 is capped at 128 entries. Render-owned image bitmaps
 are closed after drawing; encoded canvases release their pixel buffers. Export
 continues to use original images and the existing canvas dimensions.
+
+## Hosted product
+
+`product-client.mjs` owns same-origin API requests, Clerk session tokens, account-scoped project persistence and hydration of private media. `product-ui.mjs` owns the landing page, account controls, subscription links and per-project chat. The store selects one persistence adapter at a time. Authenticated documents never enter the shared local IndexedDB project store. Signing out clears in-memory account data before restoring local mode.
+
+The Cloudflare Worker verifies Clerk session tokens for every private request. D1 stores owner-scoped project documents, revisions, conversations, jobs, billing periods and usage reservations. R2 holds private image, video and font bytes; downloads require the same owner check. Existing editor geometry, rendering and local MCP aliases remain shared across both modes.
+
+One Workflow runs each hosted request. The agent has a short system prompt and a bounded tool loop using the OpenAI SDK against OpenRouter. It edits through validated operations and revision checks, previews through the native browser canvas renderer, and checkpoints operations and provider usage. Stop is cooperative: saved changes remain, in-flight calls are charged, and no further edits start. Chat history belongs to a single project.
+
+Polar checkout redirects never grant access. Only verified, idempotently handled webhooks establish a subscription period. Each job reserves its maximum cost atomically; settlement returns unused allowance and keeps actual provider charges. Prompt caching uses OpenRouter's model caching controls and a project-scoped session.

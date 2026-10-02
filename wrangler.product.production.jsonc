@@ -1,0 +1,55 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Preparation template: no traffic routes until live services and bindings are verified.
+  "name": "carouselbot-product",
+  "account_id": "0013d6c77fa95280762f403d53c52869",
+  "main": "backend/worker.mjs",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [],
+  // Cutover route after validation: { "pattern": "carousel.bot/*", "zone_name": "carousel.bot" }
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application"
+  },
+  "browser": { "binding": "BROWSER" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "carouselbot-product",
+      "database_id": "aad4c84f-495f-4374-a2b4-fc9e330da1e3",
+      "migrations_dir": "backend/migrations"
+    },
+    {
+      // Existing Pages share budget database: preserve its signing_key row and quotas.
+      "binding": "SHARE_BUDGETS",
+      "database_name": "carouselbot-share-budgets",
+      "database_id": "0c23bce1-e55b-44c7-bd97-e4ca0f233802"
+    }
+  ],
+  "kv_namespaces": [
+    { "binding": "SHARES", "id": "907668f59e2b401b96ac15bf2c09437e" }
+  ],
+  "r2_buckets": [
+    { "binding": "ASSETS_BUCKET", "bucket_name": "carouselbot-product" }
+  ],
+  "workflows": [
+    { "name": "carouselbot-agent", "binding": "AGENT_WORKFLOW", "class_name": "CarouselAgentWorkflow" }
+  ],
+  "vars": {
+    "APP_ORIGIN": "https://carousel.bot",
+    "CLERK_PUBLISHABLE_KEY": "pk_live_Y2xlcmsuY2Fyb3VzZWwuYm90JA",
+    "CLERK_JWT_KEY": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7fPiPlAy/uCK7aYyVtps\nRxp+6KOzCd6ZPsw1gSqG9+jZwmxkRShY/fIGmV9Yk1VPE0KkVA0oN8s99iyt16f8\n7bK5Bi4FsiBKMxC+bOJWQ0BXTNATT9BxJYHoSJX1UOm14TPguOCr2N1kDApnHC2e\npZll6pisLp1X4T+9kxNX02yBrCObDn6Og3WgkQ8n8MFiz8KacvotYhgGNqMgb7Kt\nrs8nxArqeTdWW3glnsnBQDV4hEVAV6sX6qBiDQROci8W33sK2S2ZN/2PdhPyUjN0\n3+dfgDADgUrwKKDfptx+CguR/akQ5hPyI+eJ1u5yMGB4KHWjZRhJgM4cUkmTOK40\nGQIDAQAB\n-----END PUBLIC KEY-----\n",
+    "POLAR_PRODUCT_ID": "cd39dfb0-6110-4e40-ae3c-85a8405ac2a0",
+    "POLAR_ENVIRONMENT": "production",
+    "AGENT_ALLOWANCE_USD": "5",
+    "JOB_BUDGET_USD": "0.5",
+    "PRODUCT_SHARING_MODE": "direct",
+    "SHARING_ENABLED": "true",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAFDBOVqLSqypczL7"
+  },
+  "observability": { "enabled": true }
+}

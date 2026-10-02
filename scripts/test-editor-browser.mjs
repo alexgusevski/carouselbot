@@ -1,6 +1,8 @@
 import { verifySelectedLayerPriority } from "./selection-browser-scenario.mjs";
 import { verifyEditorMemory } from "./performance-browser-scenario.mjs";
 import { verifyInlineTextRows } from "./inline-text-browser-scenario.mjs";
+import { verifyHostedAgentPreview } from "./hosted-agent-browser-scenario.mjs";
+import { verifyCloudProjectCreation, verifyProductChat } from "./product-browser-scenario.mjs";
 import { verifyVideoSlides } from "./video-browser-scenario.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -65,7 +67,7 @@ if (!pageUrl) {
       response.end(share.payload);
       return;
     }
-    const relativePath = url.pathname === "/" || /^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname)
+    const relativePath = ["/", "/dashboard"].includes(url.pathname) || /^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname)
       ? "index.html"
       : url.pathname.slice(1);
     if (!/^(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+$/.test(relativePath)) {
@@ -243,6 +245,13 @@ try {
     "The modular editor did not finish loading.",
   );
   await evaluate(cdp, "window.carouselBotReady");
+  const landing = await evaluate(cdp, `({ visible: Boolean(document.querySelector('.product-landing')), headline: document.querySelector('.landing-intro h1')?.textContent, destination: document.querySelector('.landing-actions a')?.getAttribute('href'), plan: document.querySelector('.landing-plan')?.textContent, readyAlias: window.carouselBotReady === window.slideStudioReady })`);
+  if (!landing.visible || landing.headline !== 'Make a carousel.Just describe it.' || landing.destination !== '/dashboard' || !landing.plan?.includes('$19 / month') || !landing.plan?.includes('500 AI credits') || !landing.readyAlias) throw new Error(`Landing page regression: ${JSON.stringify(landing)}`);
+  await cdp.send('Page.navigate', { url: `${pageUrl}/dashboard` });
+  await waitFor(() => evaluate(cdp, `Boolean(window.carouselBotAgent) && Boolean(document.querySelector('.dashboard'))`), 'Dashboard deep route did not load');
+  await evaluate(cdp, 'window.carouselBotReady');
+  await verifyCloudProjectCreation({ cdp, evaluate, waitFor });
+
   const preserved = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.some((project) => project.id === 'upgrade-preserved' && project.name === 'Upgrade preserved project')`);
   if (!preserved) throw new Error('Database upgrade lost the existing project');
   await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: 'upgrade-preserved' })`);
@@ -1796,7 +1805,7 @@ try {
 
   await cdp.send("Page.navigate", { url: `${pageUrl}/projects/missing-project` });
   await waitFor(
-    () => evaluate(cdp, `document.readyState === 'complete' && location.pathname === '/' && document.querySelector('.toast')?.textContent.includes('isn’t available')`),
+    () => evaluate(cdp, `document.readyState === 'complete' && location.pathname === '/dashboard' && document.querySelector('.toast')?.textContent.includes('isn’t available')`),
     "A missing deep route did not return to the dashboard with feedback.",
   );
 
@@ -1909,7 +1918,7 @@ try {
       ? { pathname: location.pathname, scrollLeft: strip.scrollLeft }
       : false;
   })()`), "The project filmstrip did not scroll right or reveal its previous control.");
-  if (filmstripAfterNext.pathname !== "/") throw new Error(`The filmstrip control opened the project: ${JSON.stringify(filmstripAfterNext)}`);
+  if (filmstripAfterNext.pathname !== "/dashboard") throw new Error(`The filmstrip control opened the project: ${JSON.stringify(filmstripAfterNext)}`);
   const revealedPixel = await evaluate(cdp, `(async () => {
     const image = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[3])}] img.thumb-rendered');
     await image.decode();
@@ -2039,7 +2048,7 @@ try {
   await evaluate(cdp, `document.querySelector('.folder-breadcrumb').click()`);
   await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Created%20empty%20folder' && document.querySelectorAll('.folder-breadcrumb').length === 1 && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Home'`), 'Back from a nested folder must open its parent and show Home');
   await evaluate(cdp, `document.querySelector('.folder-breadcrumb').click()`);
-  await waitFor(() => evaluate(cdp, `location.pathname === '/' && !document.querySelector('.folder-dashboard-title')`), 'Second back click must open Home');
+  await waitFor(() => evaluate(cdp, `location.pathname === '/dashboard' && !document.querySelector('.folder-dashboard-title')`), 'Second back click must open Home');
   await waitFor(() => evaluate(cdp, `(() => {
     const tile = document.querySelector('.folder-card[data-folder-path="/Created empty folder"] .folder-preview-subfolder');
     return tile?.title === 'Empty child' && tile.querySelectorAll('.folder-preview-mini').length === 4 && Boolean(tile.querySelector('.folder-preview-folder-mark svg'));
@@ -2179,7 +2188,7 @@ try {
   })()`);
   await waitFor(
     () => callPageFunction(cdp, `function(projectId) {
-      return location.pathname === '/'
+      return location.pathname === '/dashboard'
         && !document.querySelector('.folder-card[data-folder-path="/native-folder"]')
         && this.carouselBotAgent.inspect().projects.find((item) => item.id === projectId)?.folderPath === null;
     }`, [folderUiProject.projectId]),
@@ -2192,7 +2201,7 @@ try {
   );
   await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
   await waitFor(
-    () => evaluate(cdp, `location.pathname === '/' && Boolean(document.querySelector('.dashboard'))`),
+    () => evaluate(cdp, `location.pathname === '/dashboard' && Boolean(document.querySelector('.dashboard'))`),
     "The slide sidebar Home link did not return home.",
   );
   await callPageFunction(cdp, `function(projectId) {
@@ -2361,6 +2370,11 @@ try {
     await cdp.send("Page.navigate", { url: firstShareUrl });
     await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.project-title-input'))`), "Memory fixture did not restore the test project");
   }
+
+  await verifyHostedAgentPreview({ cdp, evaluate });
+  await verifyProductChat({ cdp, evaluate, waitFor });
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.project-title-input'))`), "Hosted chat fixture did not restore the test project");
 
   const errorsBeforeSecurityFixture = runtimeErrors.length;
   // Existing IndexedDB documents must remain safe even if they predate the

@@ -307,11 +307,12 @@ export function initialTextBoxHeight(project = null, size = 64, slide = null) {
 
 export function folderRoutePath(value) {
   const folderPath = normalizeFolderPath(value);
-  return folderPath ? `/folders/${encodeURIComponent(folderPath.slice(1))}` : "/";
+  return folderPath ? `/folders/${encodeURIComponent(folderPath.slice(1))}` : "/dashboard";
 }
 
 export function routeFromPathname(pathname = window.location.pathname) {
-  if (pathname === "/" || pathname === "/index.html") return { view: "dashboard" };
+  if (pathname === "/" || pathname === "/index.html") return { view: "landing" };
+  if (/^\/dashboard\/?$/.test(pathname)) return { view: "dashboard" };
   const shareMatch = pathname.match(/^\/share\/([^/]+)\/?$/);
   if (shareMatch) {
     try {

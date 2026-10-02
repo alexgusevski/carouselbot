@@ -16,6 +16,10 @@ export const projectChannel = typeof BroadcastChannel === "function" ? new Broad
 
 export const projectChannelSource = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 
+let cloudStore = null;
+export function configureCloudStore(store) { cloudStore = store; }
+export function isCurrentAccountEvent(event) { return (event.accountId || null) === (cloudStore?.accountId || null); }
+
 export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersionChange = async () => {}, onVersionChange = () => {} } = {}) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName, DB_VERSION);
@@ -68,6 +72,7 @@ export function openDatabase(databaseName, { onBlocked = () => {}, beforeVersion
 
 export async function getAllProjects() {
   state.folders = await getAllFolders();
+  if (cloudStore) return cloudStore.list();
   return new Promise((resolve, reject) => {
     const request = state.db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll();
     request.onsuccess = () => resolve(request.result || []);
@@ -77,6 +82,7 @@ export async function getAllProjects() {
 
 export async function getProjectCatalog() {
   state.folders = await getAllFolders();
+  if (cloudStore) return (await cloudStore.list()).map(projectCatalogEntry);
   return new Promise((resolve, reject) => {
     const request = state.db.transaction(CATALOG_STORE).objectStore(CATALOG_STORE).getAll();
     request.onsuccess = () => resolve(request.result || []);
@@ -120,6 +126,7 @@ export function storePreview(key, signature, blob, project) {
 }
 
 export function getAllFolders() {
+  if (cloudStore) return cloudStore.folders();
   return new Promise((resolve, reject) => {
     const request = state.db.transaction("folders", "readonly").objectStore("folders").getAll();
     request.onsuccess = () => resolve(request.result || []);
@@ -128,6 +135,7 @@ export function getAllFolders() {
 }
 
 export function createFolderInDb(path) {
+  if (cloudStore) return cloudStore.createFolder(path).then(() => announceProjectEvent({ type: "folders.updated", source: projectChannelSource }));
   return new Promise((resolve, reject) => {
     const transaction = state.db.transaction("folders", "readwrite");
     transaction.objectStore("folders").add({ path, updatedAt: Date.now() });
@@ -141,6 +149,7 @@ export function createFolderInDb(path) {
 }
 
 export function getProjectMetadataFromDb(projectId) {
+  if (cloudStore) return cloudStore.get(projectId).then((project) => project ? projectCatalogEntry(project) : null);
   return new Promise((resolve, reject) => {
     const request = state.db.transaction(CATALOG_STORE).objectStore(CATALOG_STORE).get(projectId);
     request.onsuccess = () => resolve(request.result || null);
@@ -149,6 +158,7 @@ export function getProjectMetadataFromDb(projectId) {
 }
 
 export function getProjectFromDb(projectId) {
+  if (cloudStore) return cloudStore.get(projectId);
   return new Promise((resolve, reject) => {
     const request = state.db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(projectId);
     request.onsuccess = () => resolve(request.result || null);
@@ -165,6 +175,7 @@ export function staleProjectError(projectId, expectedRevision, actualRevision) {
 }
 
 export function announceProjectEvent(event) {
+  event = { ...event, accountId: cloudStore?.accountId || null };
   projectChannel?.postMessage(event);
   try {
     localStorage.setItem(PROJECT_SYNC_STORAGE_KEY, JSON.stringify({ ...event, nonce: uid() }));
@@ -177,6 +188,11 @@ export function announceProjectChange(type, project) {
 
 export function putProject(project, { expectedRevision = null, broadcast = true } = {}) {
   if (project.__catalog) return Promise.reject(new Error("Cannot save an unloaded project."));
+  if (cloudStore) return cloudStore.put(project, expectedRevision).then((saved) => {
+    project.revision = saved.revision;
+    project.updatedAt = saved.updatedAt;
+    if (broadcast) announceProjectChange("project.updated", project);
+  });
   return new Promise((resolve, reject) => {
     const transaction = state.db.transaction([STORE_NAME, CATALOG_STORE, PREVIEW_STORE], "readwrite");
     const store = transaction.objectStore(STORE_NAME);
@@ -203,6 +219,9 @@ export function putProject(project, { expectedRevision = null, broadcast = true 
 }
 
 export function deleteProjectFromDb(projectId, { expectedRevision = null, broadcast = true } = {}) {
+  if (cloudStore) return cloudStore.delete(projectId, expectedRevision).then(() => {
+    if (broadcast) announceProjectEvent({ type: "project.deleted", source: projectChannelSource, projectId });
+  });
   return new Promise((resolve, reject) => {
     const transaction = state.db.transaction([STORE_NAME, CATALOG_STORE, PREVIEW_STORE], "readwrite");
     const store = transaction.objectStore(STORE_NAME);
@@ -236,6 +255,11 @@ export function deleteProjectFromDb(projectId, { expectedRevision = null, broadc
 }
 
 export function moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath = null) {
+  if (cloudStore) return cloudStore.moveFolder(sourceFolderPath, destinationFolderPath).then((projects) => {
+    announceProjectEvent({ type: "folders.updated", source: projectChannelSource });
+    projects.forEach((project) => announceProjectChange("project.updated", project));
+    return projects;
+  });
   return new Promise((resolve, reject) => {
     const transaction = state.db.transaction([STORE_NAME, "folders", CATALOG_STORE], "readwrite");
     const store = transaction.objectStore(STORE_NAME);

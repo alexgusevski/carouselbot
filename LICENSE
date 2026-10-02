@@ -1,21 +1,14 @@
-MIT License
+CarouselBot product source
 
-Copyright (c) 2026 Alexander Gusev
+Copyright (c) 2026 Alexander Gusev. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+New product code and modifications first added after the public commit
+4a9cddcd766f7e2f123c643f8c530281129e76de are proprietary. No permission to
+copy, modify, distribute, sublicense, or use those additions is granted
+except by a separate written agreement with the copyright holder.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Previously published code remains available under its original MIT license,
+reproduced in licenses/legacy-MIT.txt. This notice does not revoke rights
+already granted for those versions. The MCP packages remain MIT licensed,
+as stated in their own LICENSE files. Third-party assets and dependencies
+retain their respective licenses.
