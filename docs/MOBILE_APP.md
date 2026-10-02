@@ -100,6 +100,20 @@ and production public keys separately, with the correct Clerk/backend instance.
 
 ## Required release verification
 
+Verified locally: the full repository editor/Node/build/browser/migration/MCP
+gate, mobile TypeScript and autosave tests, signed mobile identity and billing
+ledger tests, mobile Chrome touch editing/PNG export, Worker bundle dry-run,
+and iOS/Android JavaScript exports pass. An iPhone Release simulator build runs
+the actual app: live slide rendering, text inspector with automatic fitting,
+keyboard-aware composer, send dismissing the keyboard, all-slide save to Photos
+and the native PNG share sheet were exercised successfully. The separate test
+simulator was shut down afterward.
+
+Android internal APK build from implementation commit `bcdabe9` is queued in
+[Expo](https://expo.dev/accounts/alexgusevski/projects/carouselbot/builds/2f3d701f-dbdb-4744-ae12-8666dab8dbc1).
+It does not yet contain live Clerk/RevenueCat configuration and exposes the
+manual demo. No Android installation or store purchase is claimed verified.
+
 Implementation is not a claim of store launch readiness. Remaining external
 checks are native Google/Apple/email sign-in, valid audience tokens against the
 deployed backend, store sandbox purchase/cancel/restore, native hosted paywall
