@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { generateKeyPairSync } from "node:crypto";
+import { validateCleanMain, validateMatchingMain, validateProductProductionConfig } from "../scripts/deploy-product.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sourceDirectory = join(root, "src");
@@ -12,6 +14,7 @@ test("every local module import resolves to a committed source file", async () =
   const moduleNames = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs"));
   assert.deepEqual(moduleNames.sort(), [
     "agent-commands.mjs",
+    "agent-font-patch.mjs",
     "editor-actions.mjs",
     "editor-model.mjs",
     "editor-output.mjs",
@@ -22,9 +25,18 @@ test("every local module import resolves to a committed source file", async () =
     "editor.mjs",
     "layer-interactions.mjs",
     "main.mjs",
+    "product-client.mjs",
+    "product-ui.mjs",
+    "project-fonts.mjs",
+    "project-share-codec.mjs",
+    "project-share-schema.mjs",
     "project-store.mjs",
+    "share-verification.mjs",
+    "slide-background.mjs",
     "slide-renderer.mjs",
+    "video-audio.mjs",
     "video-export.mjs",
+    "video-frame.mjs",
     "video-media.mjs",
     "video-playback.mjs",
     "video-sample.mjs",
@@ -83,6 +95,12 @@ test("the production build copies the complete module graph and versions the ent
   const sourceModules = (await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs")).sort();
   const builtModules = (await readdir(join(root, "dist", "src"))).filter((name) => name.endsWith(".mjs")).sort();
   assert.deepEqual(builtModules, sourceModules);
+  const { dependencies } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  const videoLibrary = `assets/mediabunny-${dependencies.mediabunny}.min.mjs`;
+  assert.deepEqual(await readFile(join(root, "dist", videoLibrary)), await readFile(join(root, "node_modules/mediabunny/dist/bundles/mediabunny.min.mjs")));
+  assert.ok((await readFile(join(root, "src/video-media.mjs"), "utf8")).includes(`/${videoLibrary}`));
+  assert.ok((await readFile(join(root, "server.mjs"), "utf8")).includes(`/${videoLibrary}`));
+  await access(join(root, "dist/assets/mediabunny-LICENSE.txt"));
 
   const index = await readFile(join(root, "dist", "index.html"), "utf8");
   assert.doesNotMatch(index, /\?v=dev/);
@@ -98,6 +116,51 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   }));
   const contentSecurityPolicy = blocks.get("/*")?.find((rule) => rule.startsWith("Content-Security-Policy:"));
   assert.match(contentSecurityPolicy, /style-src 'self'; style-src-attr 'unsafe-inline'/);
+  assert.match(contentSecurityPolicy, /connect-src 'self' http:\/\/127\.0\.0\.1:43117/);
   assert.ok(blocks.get("/src/*")?.includes("Cache-Control: no-cache"));
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
+});
+
+test("Pages deployments bind the temporary share namespace", async () => {
+  const source = await readFile(join(root, "wrangler.jsonc"), "utf8");
+  const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
+  assert.deepEqual(config.kv_namespaces, [{
+    binding: "SHARES",
+    id: "907668f59e2b401b96ac15bf2c09437e",
+  }]);
+  assert.deepEqual(config.env.preview.kv_namespaces, []);
+});
+
+test("product production deployment requires clean remote main and live, correctly routed services", async () => {
+  assert.throws(() => validateCleanMain("alex/product", ""), /not “main”/);
+  assert.throws(() => validateCleanMain("main", " M index.html"), /uncommitted/);
+  assert.throws(() => validateMatchingMain("local", "remote"), /origin\/main/);
+  assert.throws(() => validateMatchingMain("", ""), /origin\/main/);
+  assert.doesNotThrow(() => validateCleanMain("main", ""));
+  assert.doesNotThrow(() => validateMatchingMain("same", "same"));
+
+  // Parse the preparation template through Wrangler, preserving JSONC semantics.
+  const { unstable_readConfig } = await import("wrangler");
+  const config = unstable_readConfig({ config: join(root, "wrangler.product.production.jsonc") }, { hideWarnings: true, preserveOriginalMain: true });
+  const preparation = structuredClone(config);
+  preparation.routes = [];
+  assert.throws(() => validateProductProductionConfig(preparation), /route/);
+  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const live = structuredClone(config);
+  live.routes = [{ pattern: "carousel.bot/*", zone_name: "carousel.bot" }];
+  live.vars.CLERK_PUBLISHABLE_KEY = `pk_live_${Buffer.from("clerk.carousel.bot$").toString("base64")}`;
+  live.vars.CLERK_JWT_KEY = publicKey.export({ type: "spki", format: "pem" });
+  live.vars.POLAR_PRODUCT_ID = "11111111-1111-4111-8111-111111111111";
+  assert.doesNotThrow(() => validateProductProductionConfig(live));
+  const mutate = (change, pattern) => {
+    const invalid = structuredClone(live); change(invalid);
+    assert.throws(() => validateProductProductionConfig(invalid), pattern);
+  };
+  mutate(value => { value.vars.CLERK_PUBLISHABLE_KEY = "pk_test_example"; }, /live Clerk/);
+  mutate(value => { value.vars.APP_ORIGIN = "https://preview.example"; }, /APP_ORIGIN/);
+  mutate(value => { value.routes.push({ pattern: "*/*" }); }, /route/);
+  mutate(value => { value.vars.POLAR_ENVIRONMENT = "sandbox"; }, /live Polar/);
+  mutate(value => { value.vars.JOB_BUDGET_USD = "50"; }, /50-credit/);
+  mutate(value => { value.kv_namespaces = []; }, /share namespace/);
+  mutate(value => { value.vars.CLERK_JWT_KEY = "placeholder"; }, /PEM/);
 });

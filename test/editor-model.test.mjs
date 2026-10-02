@@ -2,40 +2,182 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ASPECT_RATIO_PRESETS,
+  ASPECT_RATIO_INPUT_MAX_LENGTH,
+  DEFAULT_ASPECT_RATIO,
+  DEFAULT_OUTLINE_WIDTH,
+  OUTLINE_RATIO,
+  SUPPORTED_ASPECT_RATIOS,
+  aspectRatioFromDimensions,
+  allSlideTexts,
   adjacentSlideId,
   applyCropValues,
   cloneProject,
   ensureBoxedTextContrast,
   escapeHtml,
+  folderRoutePath,
+  folderDisplayName,
+  duplicateProjectData,
+  folderParentPath,
+  folderAncestors,
+  folderPreviewItems,
+  folderContains,
+  movedFolderPath,
+  normalizeStoredFolderPath,
   fontSizeFromSliderPosition,
   formatFontSize,
   formatRgb,
   getImageLayout,
   initialOverlayWidth,
+  initialTextBoxHeight,
   isCopiedLayer,
   isImageFile,
   layerClipCss,
+  clampLayerCoordinate,
   layerKey,
   layerStageInset,
   normalizePerLineBackgroundWidths,
   nextLayerZ,
+  normalizeAspectRatio,
+  normalizeFolderPath,
   normalizeHexColor,
   outlineColorFor,
+  outlineWidthForFontSize,
   overlayCrop,
   parseCopiedLayer,
   parseLayerKey,
+  projectCanvasDimensions,
+  remapLayerGeometryBetweenCanvases,
   projectPath,
+  sharePath,
   rgbToHex,
   rotateDelta,
   perLineBackgroundSvgPath,
   routeFromPathname,
   safeFilename,
+  scaleCanvasDimensions,
+  slideCanvasDimensions,
   slideItems,
   sliderPositionFromFontSize,
   textAlignment,
   textColor,
   wrapText,
 } from "../src/editor-model.mjs";
+
+test("normalizes supported project formats and resolves their exact canvas dimensions", () => {
+  assert.equal(DEFAULT_ASPECT_RATIO, "9:16");
+  assert.deepEqual(SUPPORTED_ASPECT_RATIOS, ["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "16:9"]);
+  assert.deepEqual(ASPECT_RATIO_PRESETS["9:16"], { width: 1080, height: 1920 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["2:3"], { width: 1080, height: 1620 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["3:4"], { width: 1080, height: 1440 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["4:5"], { width: 1080, height: 1350 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["1:1"], { width: 1080, height: 1080 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["4:3"], { width: 1080, height: 810 });
+  assert.deepEqual(ASPECT_RATIO_PRESETS["16:9"], { width: 1080, height: 608 });
+  assert.equal(normalizeAspectRatio(" 4:5 "), "4:5");
+  assert.equal(normalizeAspectRatio("08:012"), "2:3");
+  assert.equal(normalizeAspectRatio("1:7"), "9:16");
+  assert.equal(normalizeAspectRatio(`${"9".repeat(ASPECT_RATIO_INPUT_MAX_LENGTH + 1)}:9`), "9:16");
+  assert.equal(normalizeAspectRatio(null, "1:1"), "1:1");
+  assert.deepEqual(projectCanvasDimensions(), { aspectRatio: "9:16", width: 1080, height: 1920 });
+  assert.deepEqual(projectCanvasDimensions({ aspectRatio: "3:4" }), { aspectRatio: "3:4", width: 1080, height: 1440 });
+  assert.deepEqual(projectCanvasDimensions({ aspectRatio: "32:9" }), { aspectRatio: "32:9", width: 1080, height: 304 });
+  assert.deepEqual(scaleCanvasDimensions({ aspectRatio: "2:3" }, 360), { aspectRatio: "2:3", width: 360, height: 540 });
+  assert.equal(aspectRatioFromDimensions(600, 900), "2:3");
+  assert.equal(aspectRatioFromDimensions(1600, 400), "4:1");
+  assert.equal(aspectRatioFromDimensions(500, 1600), "5:16");
+  assert.equal(aspectRatioFromDimensions(0, 900, "1:1"), "1:1");
+});
+
+test("lets a slide override its project's default canvas format", () => {
+  const project = { aspectRatio: "3:4" };
+  assert.deepEqual(slideCanvasDimensions(project), { aspectRatio: "3:4", width: 1080, height: 1440 });
+  assert.deepEqual(
+    slideCanvasDimensions(project, { aspectRatio: "08:08" }),
+    { aspectRatio: "1:1", width: 1080, height: 1080 },
+  );
+  assert.deepEqual(
+    slideCanvasDimensions(project, { aspectRatio: "invalid" }),
+    { aspectRatio: "3:4", width: 1080, height: 1440 },
+  );
+  assert.deepEqual(
+    scaleCanvasDimensions(project, 360, { aspectRatio: "4:3" }),
+    { aspectRatio: "4:3", width: 360, height: 270 },
+  );
+  assert.deepEqual(projectCanvasDimensions(project), { aspectRatio: "3:4", width: 1080, height: 1440 });
+});
+
+test("sizes native text boxes for readable one-line text on landscape canvases", () => {
+  assert.equal(initialTextBoxHeight({ aspectRatio: "9:16" }, 64), 0.08);
+  const landscapeHeight = initialTextBoxHeight({ aspectRatio: "16:9" }, 64);
+  assert.ok(landscapeHeight > 0.15);
+  assert.ok(landscapeHeight * 608 >= 64 * (1.12 + 0.28) + 4);
+  assert.equal(
+    initialTextBoxHeight({ aspectRatio: "9:16" }, 64, { aspectRatio: "16:9" }),
+    landscapeHeight,
+  );
+});
+
+test("remaps copied layer height between canvas formats while preserving its normalized center", () => {
+  const original = { x: 0.2, y: 0.4, width: 0.5, height: 0.1 };
+  const remapped = remapLayerGeometryBetweenCanvases(
+    original,
+    { aspectRatio: "9:16", width: 1080, height: 1920 },
+    { aspectRatio: "16:9", width: 1080, height: 608 },
+  );
+  assert.equal(remapped.x, original.x);
+  assert.equal(remapped.width, original.width);
+  assert.ok(Math.abs(remapped.height - (0.1 * 1920 / 608)) < 1e-12);
+  assert.ok(Math.abs((remapped.y + remapped.height / 2) - (original.y + original.height / 2)) < 1e-12);
+  assert.equal(clampLayerCoordinate(-0.2, 0.5), 0);
+  assert.equal(clampLayerCoordinate(0.2, 1.4), 0);
+});
+
+test("scales capped cross-format layers uniformly instead of distorting or clipping them", () => {
+  const original = { x: 0.2, y: 0.1, width: 0.5, height: 1, size: 64, outlineWidth: 12 };
+  const remapped = remapLayerGeometryBetweenCanvases(
+    original,
+    { aspectRatio: "9:16", width: 1080, height: 1920 },
+    { aspectRatio: "16:9", width: 1080, height: 608 },
+    { maxHeight: 2.4 },
+  );
+  const desiredHeight = 1920 / 608;
+  const scale = 2.4 / desiredHeight;
+  assert.ok(Math.abs(remapped.height - 2.4) < 1e-12);
+  assert.ok(Math.abs(remapped.width - original.width * scale) < 1e-12);
+  assert.ok(Math.abs(remapped.size - original.size * scale) < 1e-12);
+  assert.equal(remapped.outlineWidth, original.outlineWidth);
+  assert.ok(Math.abs((remapped.x + remapped.width / 2) - (original.x + original.width / 2)) < 1e-12);
+  assert.ok(Math.abs((remapped.y + remapped.height / 2) - (original.y + original.height / 2)) < 1e-12);
+});
+
+test("keeps outline thickness proportional to font size", () => {
+  assert.equal(OUTLINE_RATIO, 0.144);
+  for (const size of [20, 64, 180]) {
+    const width = outlineWidthForFontSize(size);
+    assert.ok(Math.abs(width / size - OUTLINE_RATIO) < Number.EPSILON);
+  }
+  assert.equal(outlineWidthForFontSize(64, 0), 0);
+  assert.ok(Math.abs(
+    outlineWidthForFontSize(120, 40) / 120
+      - OUTLINE_RATIO * (40 / DEFAULT_OUTLINE_WIDTH),
+  ) < Number.EPSILON);
+  assert.equal(outlineWidthForFontSize("invalid"), 0);
+});
+
+test("keeps extreme custom-format remaps within the layer height limit", () => {
+  const original = { x: 0.1, y: 0, width: 0.8, height: 1, size: 64 };
+  const remapped = remapLayerGeometryBetweenCanvases(
+    original,
+    { aspectRatio: "9:32", width: 1080, height: 3840 },
+    { aspectRatio: "6:1", width: 1080, height: 180 },
+    { maxHeight: 2.4 },
+  );
+
+  assert.equal(remapped.height, 2.4);
+  assert.ok(remapped.size < 20, "the explicit geometry cap wins when both constraints cannot be satisfied");
+  assert.ok(Math.abs((remapped.y + remapped.height / 2) - 0.5) < 1e-12);
+});
 
 test("finds adjacent slides without wrapping past either end", () => {
   const slides = [{ id: "first" }, { id: "middle" }, { id: "final" }];
@@ -49,12 +191,60 @@ test("finds adjacent slides without wrapping past either end", () => {
 });
 
 test("routes dashboard and encoded project URLs", () => {
-  assert.deepEqual(routeFromPathname("/"), { view: "dashboard" });
-  assert.deepEqual(routeFromPathname("/index.html"), { view: "dashboard" });
+  assert.deepEqual(routeFromPathname("/"), { view: "landing" });
+  assert.deepEqual(routeFromPathname("/index.html"), { view: "landing" });
+  assert.deepEqual(routeFromPathname("/dashboard"), { view: "dashboard" });
   assert.deepEqual(routeFromPathname("/projects/a%20b/"), { view: "project", projectId: "a b" });
   assert.deepEqual(routeFromPathname("/projects/%E0%A4%A"), { view: "not-found" });
   assert.deepEqual(routeFromPathname("/unknown"), { view: "not-found" });
   assert.equal(projectPath("a b/c"), "/projects/a%20b%2Fc");
+  const shareId = "mpt5n1hd-0123456789abcdef0123456789abcdef";
+  assert.equal(sharePath(shareId), `/share/${shareId}`);
+  assert.deepEqual(routeFromPathname(`/share/${shareId}`), { view: "share", shareId });
+  const signedShareId = `${shareId}.${"a".repeat(64)}`;
+  assert.deepEqual(routeFromPathname(sharePath(signedShareId)), { view: "share", shareId: signedShareId });
+  assert.deepEqual(routeFromPathname(`${sharePath(signedShareId)}/`), { view: "share", shareId: signedShareId });
+  for (const signature of ["a".repeat(63), "a".repeat(65), "g".repeat(64)]) {
+    assert.deepEqual(routeFromPathname(`/share/${shareId}.${signature}`), { view: "not-found" });
+  }
+  assert.deepEqual(routeFromPathname("/share/not-a-share"), { view: "not-found" });
+});
+
+test("normalizes virtual folder paths with one leading slash and a bounded length", () => {
+  assert.equal(normalizeFolderPath(null), null);
+  assert.equal(normalizeFolderPath(undefined), null);
+  assert.equal(normalizeFolderPath(""), null);
+  assert.equal(normalizeFolderPath("   "), null);
+  assert.equal(normalizeFolderPath("/"), null);
+  assert.equal(normalizeFolderPath(" /// "), null);
+  assert.equal(normalizeFolderPath("/."), null);
+  assert.equal(normalizeFolderPath("/.."), null);
+  assert.equal(normalizeFolderPath("my-folder"), "/my-folder");
+  assert.equal(normalizeFolderPath(" /my-folder "), "/my-folder");
+  assert.equal(normalizeFolderPath(" ///   my-folder   "), "/my-folder");
+  assert.equal(normalizeFolderPath(" /Campaign 2026/Q4 "), "/Campaign 2026/Q4");
+  const bounded = normalizeFolderPath(`/${"x".repeat(200)}`);
+  assert.equal(bounded, `/${"x".repeat(159)}`);
+  assert.equal(bounded.length, 160);
+  const emojiBoundary = normalizeFolderPath(`${"x".repeat(158)}😀`);
+  assert.equal(emojiBoundary, `/${"x".repeat(158)}`);
+  assert.doesNotThrow(() => folderRoutePath(emojiBoundary));
+  assert.equal(normalizeFolderPath(`safe\uD800path`), "/safe�path");
+});
+
+test("builds and parses encoded virtual folder routes", () => {
+  assert.equal(folderRoutePath(null), "/dashboard");
+  assert.equal(folderRoutePath("/my folder"), "/folders/my%20folder");
+  assert.equal(folderRoutePath(" /Campaign 2026/Q4 "), "/folders/Campaign%202026%2FQ4");
+  assert.deepEqual(routeFromPathname("/folders/my%20folder"), { view: "folder", folderPath: "/my folder" });
+  assert.deepEqual(routeFromPathname("/folders/Campaign%202026%2FQ4/"), { view: "folder", folderPath: "/Campaign 2026/Q4" });
+  assert.deepEqual(routeFromPathname("/folders/%2Fmy-folder"), { view: "folder", folderPath: "/my-folder" });
+  assert.deepEqual(routeFromPathname("/folders/%20"), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/%2F"), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/."), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/.."), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/%E0%A4%A"), { view: "not-found" });
+  assert.deepEqual(routeFromPathname("/folders/unencoded/nested"), { view: "not-found" });
 });
 
 test("escapes every HTML-significant character", () => {
@@ -78,7 +268,7 @@ test("preserves legacy text defaults and boxed contrast", () => {
   assert.equal(textColor({ style: "boxed", background: "white" }), "#111111");
   assert.equal(textColor({ style: "plain" }), "#FFFFFF");
   assert.equal(outlineColorFor("#111111"), "#FFFFFF");
-  assert.equal(outlineColorFor("#FFFFFF"), "#111111");
+  assert.equal(outlineColorFor("#FFFFFF"), "#000000");
   const lightBox = { style: "boxed", background: "white", color: "#FFFFFF" };
   const darkBox = { style: "boxed", background: "black", color: "#111111" };
   ensureBoxedTextContrast(lightBox);
@@ -91,14 +281,23 @@ test("clones nested project data without retaining aliases", () => {
   const original = {
     id: "project",
     assets: [{ id: "asset", name: "Original" }],
-    slides: [{ id: "slide", texts: [{ id: "text", text: "One" }], overlays: [{ id: "image", x: 0.1 }] }],
+    fonts: [{ id: "font", fontData: "data:font/ttf;base64,AA==", variableAxes: [{ tag: "wght", default: 400 }] }],
+    slides: [{
+      id: "slide",
+      texts: [{ id: "text", text: "One", fontVariationSettings: { wght: 500 } }],
+      overlays: [{ id: "image", x: 0.1 }],
+    }],
   };
   const copy = cloneProject(original);
   copy.assets[0].name = "Changed";
+  copy.fonts[0].variableAxes[0].default = 700;
   copy.slides[0].texts[0].text = "Two";
+  copy.slides[0].texts[0].fontVariationSettings.wght = 700;
   copy.slides[0].overlays[0].x = 0.5;
   assert.equal(original.assets[0].name, "Original");
+  assert.equal(original.fonts[0].variableAxes[0].default, 400);
   assert.equal(original.slides[0].texts[0].text, "One");
+  assert.equal(original.slides[0].texts[0].fontVariationSettings.wght, 500);
   assert.equal(original.slides[0].overlays[0].x, 0.1);
 });
 
@@ -140,6 +339,12 @@ test("fits initial overlays without upscaling large or small assets incorrectly"
   assert.equal(initialOverlayWidth(null), 0.34);
   assert.equal(initialOverlayWidth({ width: 108, height: 192 }), 0.1);
   assert.equal(initialOverlayWidth({ width: 2160, height: 3840 }), 0.82);
+  assert.ok(Math.abs(initialOverlayWidth({ width: 1080, height: 1920 }, { aspectRatio: "1:1" }) - 0.46125) < Number.EPSILON);
+  assert.ok(Math.abs(initialOverlayWidth(
+    { width: 1080, height: 1920 },
+    { aspectRatio: "9:16" },
+    { aspectRatio: "1:1" },
+  ) - 0.46125) < Number.EPSILON);
 });
 
 test("maps the nonlinear font-size slider at its defined stops", () => {
@@ -161,6 +366,18 @@ test("calculates cover-image layout and clamps pan offsets", () => {
   assert.equal(layout.top, 0);
   assert.equal(layout.maxOffsetX, 0.5);
   assert.equal(layout.maxOffsetY, 0);
+});
+
+test("fits a source-ratio image exactly to the canvas width without export padding", () => {
+  const layout = getImageLayout({ width: 1600, height: 400, imageScale: 1, imageX: 0, imageY: 0 }, 1080, 270);
+  assert.deepEqual(layout, {
+    width: 1080,
+    height: 270,
+    left: 0,
+    top: 0,
+    maxOffsetX: 0,
+    maxOffsetY: 0,
+  });
 });
 
 test("merges only text-row steps that cannot hold uniform corners", () => {
@@ -198,6 +415,7 @@ test("rotates pointer deltas into layer-local axes", () => {
 test("wraps paragraphs, explicit blank lines, and overlong words", () => {
   const context = { measureText: (value) => ({ width: [...value].length * 10 }) };
   assert.deepEqual(wrapText(context, "one two\n\nabcdef", 35), ["one", "two", "", "abc", "def"]);
+  assert.deepEqual(wrapText(context, "one abcdef", 35), ["one", "abc", "def"]);
 });
 
 test("normalizes filenames and text alignment", () => {
@@ -208,11 +426,12 @@ test("normalizes filenames and text alignment", () => {
 });
 
 test("validates canonical and legacy copied-layer payloads", () => {
-  const copied = { token: "token", layers: [{ kind: "text", item: { id: "text" } }] };
+  const copied = { token: "token", sourceCanvas: { aspectRatio: "3:4", width: 1080, height: 1440 }, layers: [{ kind: "text", item: { id: "text" } }] };
   assert.equal(isCopiedLayer(copied), true);
   assert.deepEqual(parseCopiedLayer(JSON.stringify(copied)), copied);
   assert.equal(parseCopiedLayer("not json"), null);
   assert.equal(isCopiedLayer({ token: "token", layers: [{ kind: "video", item: {} }] }), false);
+  assert.equal(isCopiedLayer({ ...copied, sourceCanvas: { aspectRatio: "3:4", width: 1080, height: 0 } }), false);
 });
 
 test("recognizes image MIME types and supported filename extensions", () => {
@@ -220,4 +439,99 @@ test("recognizes image MIME types and supported filename extensions", () => {
   assert.equal(isImageFile({ type: "", name: "photo.AVIF" }), true);
   assert.equal(isImageFile({ type: "text/plain", name: "notes.txt" }), false);
   assert.equal(isImageFile(null), false);
+});
+
+test("folder display names omit the canonical prefix without changing stored paths", () => {
+  assert.equal(folderDisplayName("/Newly"), "Newly");
+  assert.equal(folderDisplayName("///Campaign"), "Campaign");
+  assert.equal(folderDisplayName(null), "");
+  assert.equal(folderDisplayName("/Client/Campaign"), "Client/Campaign");
+});
+
+
+test("folders have two levels and subtree moves preserve account names", () => {
+  for (const path of ["/Client/Account/Campaign", "/Client//Account", "/Client/", "/Client/..", "/Client/.", "/Client/ Account"]) {
+    assert.equal(normalizeFolderPath(path), null, path);
+  }
+  assert.equal(normalizeStoredFolderPath("/Client/Account/Campaign"), "/Client/Account ∕ Campaign");
+  assert.deepEqual(folderAncestors("/Client/Account"), ["/Client", "/Client/Account"]);
+  assert.equal(folderParentPath("/Client"), null);
+  assert.equal(folderContains("/Client", "/Client/Account"), true);
+  assert.equal(folderContains("/Client", "/Client2/Account"), false);
+  assert.equal(movedFolderPath("/Client/Account", "/Client", "/Renamed"), "/Renamed/Account");
+  assert.equal(movedFolderPath("/Client/Account", "/Client", null), null);
+  assert.throws(() => movedFolderPath("/Client/Account", "/Client", "/Other/Subfolder"), /two folder levels/);
+});
+
+
+test("duplicates entire projects with independent IDs and preserved content", () => {
+  const source = { id: "project", name: "Original", folderPath: "/Client", revision: 9, createdAt: 1, updatedAt: 2,
+    assets: [{ id: "asset", data: "image bytes", width: 100 }],
+    fonts: [{ id: "font", data: "font bytes", variableAxes: [{ tag: "wght", min: 100 }] }],
+    slides: [{ id: "slide", imageData: "background bytes", aspectRatio: "4:5",
+      texts: [{ id: "text", fontId: "font", text: "Keep me", fontVariationSettings: { wght: 700 } }],
+      overlays: [{ id: "image", assetId: "asset", x: 0.25, cropW: 0.5 }] }] };
+  const copy = duplicateProjectData(source, { name: source.name, folderPath: "/Client/Variant" });
+  assert.notEqual(copy.id, source.id);
+  assert.equal(copy.revision, 1);
+  assert.equal(copy.folderPath, "/Client/Variant");
+  assert.equal(copy.name, source.name);
+  assert.equal(copy.slides[0].imageData, source.slides[0].imageData);
+  assert.notEqual(copy.slides[0].id, source.slides[0].id);
+  assert.notEqual(copy.slides[0].texts[0].id, source.slides[0].texts[0].id);
+  assert.notEqual(copy.assets[0].id, source.assets[0].id);
+  assert.notEqual(copy.fonts[0].id, source.fonts[0].id);
+  assert.equal(copy.slides[0].texts[0].fontId, copy.fonts[0].id);
+  assert.equal(copy.slides[0].overlays[0].assetId, copy.assets[0].id);
+  copy.slides[0].texts[0].fontVariationSettings.wght = 400;
+  copy.fonts[0].variableAxes[0].min = 200;
+  assert.equal(source.slides[0].texts[0].fontVariationSettings.wght, 700);
+  assert.equal(source.fonts[0].variableAxes[0].min, 100);
+  assert.equal(source.revision, 9);
+  assert.equal(duplicateProjectData(source).folderPath, "/Client");
+  assert.equal(duplicateProjectData(source, { folderPath: null }).folderPath, null);
+  assert.throws(() => duplicateProjectData(source, { folderPath: "/a/b/c" }), /two folder levels/);
+});
+
+
+test("folder previews represent direct children without flattening subfolder projects", () => {
+  const projects = [
+    { id: "direct", folderPath: "/Client", updatedAt: 99 },
+    { id: "a1", folderPath: "/Client/A", updatedAt: 1 },
+    { id: "a2", folderPath: "/Client/A", updatedAt: 3 },
+    { id: "b1", folderPath: "/Client/B", updatedAt: 2 },
+    { id: "other", folderPath: "/Client2", updatedAt: 100 },
+  ];
+  const items = folderPreviewItems(projects, "/Client");
+  assert.deepEqual(items.map(item => item.path || item.project.id), ["/Client/A", "/Client/B", "direct"]);
+  assert.deepEqual(items[0].projects.map(project => project.id), ["a2", "a1"]);
+  assert.deepEqual(folderPreviewItems(projects, "/Client/A").map(item => item.project.id), ["a2", "a1"]);
+  assert.equal(projects[1].id, "a1");
+  const empty = folderPreviewItems([], "/Client", [{ path: "/Client/Empty", updatedAt: 4 }, { path: "/Other/Empty", updatedAt: 5 }]);
+  assert.equal(empty.length, 1);
+  assert.equal(empty[0].path, "/Client/Empty");
+  assert.deepEqual(empty[0].projects, []);
+});
+
+
+test("folder previews sort by last change regardless of creation order", () => {
+  const projects = [
+    { id: "newer", folderPath: "/Client/Account", createdAt: 20, updatedAt: 20 },
+    { id: "older-edited", folderPath: "/Client/Account", createdAt: 10, updatedAt: 30 },
+  ];
+  assert.deepEqual(folderPreviewItems(projects, "/Client/Account").map(item => item.project.id), ["older-edited", "newer"]);
+  assert.deepEqual(folderPreviewItems(projects, "/Client")[0].projects.map(project => project.id), ["older-edited", "newer"]);
+});
+
+test("all slide texts use one row per layer and one blank row between nonempty slides", () => {
+  const slides = [
+    { texts: [{ text: " First\nline " }, { text: "Second\r\n\nline" }, { text: " " }] },
+    { texts: [] }, {},
+    { texts: [{ text: "Third 🦊" }, { text: "Fourth\u2028line" }] },
+  ];
+  const before = structuredClone(slides);
+  assert.equal(allSlideTexts(slides), "First line\nSecond line\n\nThird 🦊\nFourth line");
+  assert.deepEqual(slides, before);
+  assert.equal(allSlideTexts(), "");
+  assert.equal(allSlideTexts([{ texts: [{ text: "\n" }] }]), "");
 });

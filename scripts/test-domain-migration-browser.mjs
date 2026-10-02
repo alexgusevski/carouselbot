@@ -94,22 +94,20 @@ try {
   await legacyCdp.send("Page.navigate", { url: legacyUrl });
   await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && Boolean(window.carouselBotReady)"), "Legacy editor did not load.");
 
-  await evaluate(legacyCdp, `new Promise((resolve, reject) => {
-    const request = indexedDB.open("slide-studio-db", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("projects", { keyPath: "id" });
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const transaction = request.result.transaction("projects", "readwrite");
-      transaction.objectStore("projects").put({
-        id: "migration-browser-project", name: "Migration browser project", createdAt: 1, updatedAt: 2, revision: 3,
-        assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
-        slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
-      });
-      transaction.oncomplete = () => resolve(true);
-      transaction.onerror = () => reject(transaction.error);
-    };
-  })`);
+  await evaluate(legacyCdp, "window.carouselBotReady");
+
+  await evaluate(legacyCdp, `(async () => {
+    const { putProject } = await import('/src/project-store.mjs');
+    await putProject({
+      id: "migration-browser-project", name: "Migration browser project", folderPath: "/migrated-folder", createdAt: 1, updatedAt: 2, revision: 3,
+      assets: [{ id: "asset-1", name: "Pixel", imageData: "data:image/png;base64,iVBORw0KGgo=", width: 1, height: 1 }],
+      slides: [{ id: "slide-1", name: "Slide 1", width: 1080, height: 1920, imageData: null, texts: [], overlays: [] }]
+    }, { broadcast: false });
+  })()`);
+  await evaluate(legacyCdp, "window.__migrationReloadPending = true");
   await legacyCdp.send("Page.reload");
+  await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && !window.__migrationReloadPending && Boolean(window.carouselBotReady)"), "Migration page did not reload.");
+  await evaluate(legacyCdp, "window.carouselBotReady");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-action=\"migrate-projects\"]')?.textContent.includes('project')"), "Migration prompt did not find the legacy project.");
   const modalState = await evaluate(legacyCdp, `(() => {
     const modal = document.querySelector('[data-migration-modal] [role="dialog"]');
@@ -119,7 +117,10 @@ try {
   if (!modalState.visible || modalState.modal !== "true" || !modalState.hasClose) throw new Error(`Migration notice is not an accessible, closeable modal: ${JSON.stringify(modalState)}`);
   await evaluate(legacyCdp, `document.querySelector('[data-action="close-migration-modal"]').click()`);
   await waitFor(() => evaluate(legacyCdp, `!document.querySelector('[data-migration-modal]')`), "Migration modal did not close.");
+  await evaluate(legacyCdp, "window.__migrationReloadPending = true");
   await legacyCdp.send("Page.reload");
+  await waitFor(() => evaluate(legacyCdp, "document.readyState === 'complete' && !window.__migrationReloadPending && Boolean(window.carouselBotReady)"), "Migration page did not reload.");
+  await evaluate(legacyCdp, "window.carouselBotReady");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-action=\"migrate-projects\"]')?.textContent.includes('project')"), "Migration modal did not return after a fresh page load.");
   await evaluate(legacyCdp, `(() => {
     document.querySelector('[data-action="migrate-projects"]').scrollIntoView({ block: "center" });
@@ -157,7 +158,7 @@ try {
       item.onsuccess = () => resolve(item.result || null);
     };
   })`), "Canonical IndexedDB did not receive the project.");
-  if (imported.name !== "Migration browser project" || imported.assets?.[0]?.id !== "asset-1") throw new Error("Migrated project data did not match the legacy record.");
+  if (imported.name !== "Migration browser project" || imported.folderPath !== "/migrated-folder" || imported.assets?.[0]?.id !== "asset-1") throw new Error("Migrated project data did not match the legacy record.");
   await waitFor(() => evaluate(legacyCdp, "document.querySelector('[data-migration-status]')?.textContent.includes('Copied 1 project')"), "Legacy origin did not receive completion acknowledgement.");
   process.stdout.write(`${JSON.stringify({ copied: true, legacyOrigin, canonicalOrigin, projectId: imported.id, assets: imported.assets.length })}\n`);
 } finally {
@@ -166,5 +167,5 @@ try {
   chrome.kill("SIGTERM");
   legacyWeb.kill("SIGTERM");
   canonicalWeb.kill("SIGTERM");
-  await rm(profile, { recursive: true, force: true });
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

@@ -1,8 +1,10 @@
+import { request as httpRequest } from "node:http";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 test("shares one daemon while preserving per-agent editor selection", async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-shared-"));
@@ -11,6 +13,7 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   process.env.CAROUSELBOT_BRIDGE_PORT = String(port);
   process.env.CAROUSELBOT_EDITOR_TTL_MS = "1000";
   process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS = "2000";
+  process.env.CAROUSELBOT_FONT_DIRS = fileURLToPath(new URL("../../../assets", import.meta.url));
   const { companionRestart, createCompanion } = await import(`../src/companion.mjs?shared=${port}`);
   const first = await createCompanion("Claude Code", "test");
   const second = await createCompanion("Codex", "test");
@@ -30,10 +33,71 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const editorA = await connect("editor-a");
   const editorB = await connect("editor-b");
   try {
+    for (const wait of ["5001", "-1", "Infinity", "NaN"]) {
+      const response = await fetch(`${base}/events?editorId=editor-a&wait=${wait}`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+      assert.equal(response.status, 400);
+    }
+    const malformedStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port, path: "http://[", method: "GET" }, (response) => { response.resume(); resolve(response.statusCode); });
+      request.on("error", reject); request.end();
+    });
+    assert.equal(malformedStatus, 400);
+    // Send headers only: the limit must reject before any body is buffered.
+    // Uploading a megabyte concurrently with a closing 413 races TCP on Linux.
+    const oversizedStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest({ hostname: "127.0.0.1", port, path: "/connect", method: "POST", headers: { Origin: origin, "Content-Type": "application/json", "Content-Length": 1024 * 1024 + 1 } }, (response) => { response.resume(); resolve(response.statusCode); });
+      request.setTimeout(5000, () => request.destroy(new Error("Oversized headers were not rejected.")));
+      request.on("error", reject); request.end();
+    });
+    assert.equal(oversizedStatus, 413);
+    const unauthorizedResult = await fetch(`${base}/result`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(unauthorizedResult.status, 401);
+    assert.equal((await fetch(`${base}/health`)).status, 200);
+    const mediaPath = join(stateDirectory, "bounded-media.svg");
+    await writeFile(mediaPath, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+    const transfers = [];
+    for (let index = 0; index < 32; index++) transfers.push(await first.call("prepare_media", { path: mediaPath }));
+    await assert.rejects(first.call("prepare_media", { path: mediaPath }), /MEDIA_TRANSFER_LIMIT/);
+    const consumed = await fetch(`${base}/media/${transfers[0].mediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(consumed.status, 200);
+    await consumed.arrayBuffer();
+    assert.ok((await first.call("prepare_media", { path: mediaPath })).mediaId, "consuming a transfer releases its capacity");
     assert.equal(first.daemon.pid, second.daemon.pid);
     assert.equal((await first.call("list_editors")).editors.length, 2);
     await first.call("select_editor", { editorId: "editor-a" });
     await second.call("select_editor", { editorId: "editor-b" });
+    await assert.rejects(first.call("list_local_fonts", { query: "TikTok" }), /FONT_PERMISSION_REQUIRED/);
+    const blockedFonts = await fetch(`${base}/fonts?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(blockedFonts.status, 403);
+    const enabledA = await fetch(`${base}/fonts/enable`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a" }),
+    });
+    assert.deepEqual(await enabledA.json(), { enabled: true });
+    const enabledB = await fetch(`${base}/fonts/enable`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorB.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-b" }),
+    });
+    assert.equal(enabledB.status, 200);
+    const localFontList = await first.call("list_local_fonts", { query: "TikTok", sort: "alphabetical", limit: 10 });
+    assert.ok(localFontList.fonts.length >= 1);
+    assert.doesNotMatch(JSON.stringify(localFontList), /pathInternal|fileFingerprint|faceIndex|\/Users\//);
+    const indexedFont = localFontList.fonts[0];
+    const directFont = await fetch(`${base}/fonts/${encodeURIComponent(indexedFont.localFontId)}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(directFont.status, 200);
+    assert.equal(directFont.headers.get("content-type"), "font/ttf");
+    assert.ok((await directFont.arrayBuffer()).byteLength > 100);
+    const preparedFont = await first.call("prepare_font", { localFontId: indexedFont.localFontId });
+    assert.equal(preparedFont.font.localFontId, indexedFont.localFontId);
+    const wrongEditorTransfer = await fetch(`${base}/font-media/${preparedFont.fontMediaId}?editorId=editor-b`, { headers: { Origin: origin, Authorization: `Bearer ${editorB.sessionToken}` } });
+    assert.equal(wrongEditorTransfer.status, 404);
+    const fontTransfer = await fetch(`${base}/font-media/${preparedFont.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(fontTransfer.status, 200);
+    assert.ok((await fontTransfer.arrayBuffer()).byteLength > 100);
+    const repeatedTransfer = await fetch(`${base}/font-media/${preparedFont.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(repeatedTransfer.status, 404);
     const firstEditors = await first.call("list_editors");
     const secondEditors = await second.call("list_editors");
     assert.equal(firstEditors.selectedEditorId, "editor-a");
@@ -53,22 +117,71 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     const sessionA = await first.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a", purpose: "Build deck A" });
     assert.equal(sessionA.editorId, "editor-a");
     assert.equal(sessionA.projectId, "project-a");
-    await assert.rejects(
-      second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-b", purpose: "Competing worker" }),
-      /EDITOR_BUSY/,
-    );
-    await assert.rejects(
-      second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-a", purpose: "Same project elsewhere" }),
-      /PROJECT_BUSY/,
-    );
+    const sharedSession = await second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a", purpose: "Shared project" });
+    const otherProject = await second.call("begin_edit_session", { editorId: "editor-a", projectId: "project-b", purpose: "Background project" });
+    const otherTab = await second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-a", purpose: "Same project elsewhere" });
+    for (const session of [sharedSession, otherProject, otherTab]) await second.call("end_edit_session", { editSessionId: session.id });
     const sessionB = await second.call("begin_edit_session", { editorId: "editor-b", projectId: "project-b", purpose: "Build deck B" });
 
+    const burstNotifications = new Set();
     async function nextCommand(editorId, token) {
       for (;;) {
         const event = await fetch(`${base}/events?editorId=${editorId}`, { headers: { Origin: origin, Authorization: `Bearer ${token}` } }).then((response) => response.json());
+        if (event.message?.startsWith("Burst ")) burstNotifications.add(event.message);
         if (event.kind === "command") return event;
       }
     }
+
+    await Promise.all(Array.from({ length: 110 }, (_, index) => first.call("notify", {
+      editSessionId: sessionA.id, message: `Burst ${index}`, tone: "info",
+    })));
+    const preparedImport = await first.call("prepare_font", { editSessionId: sessionA.id, localFontId: indexedFont.localFontId });
+    const importCall = first.call("browser", {
+      toolName: "import_font", mutating: true, editSessionId: sessionA.id,
+      operation: { type: "font.import", projectId: "project-a", localFontId: indexedFont.localFontId, font: preparedImport.font, fontMediaId: preparedImport.fontMediaId },
+      label: "Adding a local font…",
+    });
+    const importCommand = await nextCommand("editor-a", editorA.sessionToken);
+    assert.equal(importCommand.operation.font.localFontId, indexedFont.localFontId);
+    assert.equal(burstNotifications.size, 110, "shared-window activity must not be discarded at the old queue limit");
+    const importedBytes = await fetch(`${base}/font-media/${importCommand.operation.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(importedBytes.status, 200);
+    await importedBytes.arrayBuffer();
+    await fetch(`${base}/result`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", requestId: importCommand.requestId, ok: true, result: { projectId: "project-a", fontId: "project-font-1", revision: 1 } }),
+    });
+    assert.equal((await importCall).fontId, "project-font-1");
+
+    const preparedDuplicate = await first.call("prepare_font", { editSessionId: sessionA.id, localFontId: indexedFont.localFontId });
+    const duplicateImportCall = first.call("browser", {
+      toolName: "import_font", mutating: true, editSessionId: sessionA.id,
+      operation: { type: "font.import", projectId: "project-a", localFontId: indexedFont.localFontId, font: preparedDuplicate.font, fontMediaId: preparedDuplicate.fontMediaId },
+      label: "Adding a local font…",
+    });
+    const duplicateImportCommand = await nextCommand("editor-a", editorA.sessionToken);
+    assert.equal(duplicateImportCommand.operation.fontMediaId, preparedDuplicate.fontMediaId);
+    const duplicateResult = await fetch(`${base}/result`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", requestId: duplicateImportCommand.requestId, ok: true, result: { projectId: "project-a", fontId: "project-font-1", existing: true, revision: 1 } }),
+    });
+    assert.equal(duplicateResult.status, 200);
+    assert.equal((await duplicateImportCall).existing, true);
+    const unusedDuplicateTransfer = await fetch(`${base}/font-media/${preparedDuplicate.fontMediaId}?editorId=editor-a`, { headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}` } });
+    assert.equal(unusedDuplicateTransfer.status, 404, "a successful duplicate import must discard its unused one-time font transfer");
+
+    const unusedFonts = await first.call("list_local_fonts", { editSessionId: sessionA.id, query: "TikTok", limit: 10 });
+    assert.equal(unusedFonts.fonts.find((font) => font.localFontId === indexedFont.localFontId)?.lastUsedAt, null);
+    const usedResponse = await fetch(`${base}/fonts/use`, {
+      method: "POST",
+      headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ editorId: "editor-a", localFontId: indexedFont.localFontId }),
+    });
+    assert.equal(usedResponse.status, 200);
+    const usedFonts = await first.call("list_local_fonts", { editSessionId: sessionA.id, query: "TikTok", limit: 10 });
+    assert.ok(usedFonts.fonts.find((font) => font.localFontId === indexedFont.localFontId)?.lastUsedAt > 0);
 
     const browserCall = first.call("browser", {
       toolName: "add_slide", mutating: true, editSessionId: sessionA.id,
@@ -104,10 +217,44 @@ test("shares one daemon while preserving per-agent editor selection", async () =
       first.call("begin_edit_session", { editorId: "editor-a", purpose: "Worker one" }),
       second.call("begin_edit_session", { editorId: "editor-a", purpose: "Worker two" }),
     ]);
-    assert.equal(simultaneous.filter((result) => result.status === "fulfilled").length, 1, "only one simultaneous claim may win");
-    assert.match(simultaneous.find((result) => result.status === "rejected").reason.message, /EDITOR_BUSY/);
-    const winning = simultaneous.find((result) => result.status === "fulfilled").value;
-    await first.call("end_edit_session", { editSessionId: winning.id });
+    assert.equal(simultaneous.filter((result) => result.status === "fulfilled").length, 2, "both simultaneous sessions may share one editor");
+    for (const result of simultaneous) await first.call("end_edit_session", { editSessionId: result.value.id });
+
+    // Multiple agents retain independent project-bound targets in one editor.
+    const shared = await Promise.all([first, second].map((client) => client.call("begin_edit_session", { editorId: "editor-a", projectId: "project-a" })));
+    const calls = [first, second].map((client, index) => client.call("browser", {
+      toolName: "add_slide", mutating: true, editSessionId: shared[index].id,
+      operation: { type: "slide.add" }, label: "Adding a slide…",
+    }));
+    for (let index = 0; index < 2; index += 1) {
+      const command = await nextCommand("editor-a", editorA.sessionToken);
+      assert.equal(command.operation.projectId, "project-a", "session supplies its target instead of the visible project");
+      await fetch(`${base}/result`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ editorId: "editor-a", requestId: command.requestId, ok: true, result: { projectId: "project-a", revision: index + 3 } }),
+      });
+    }
+    assert.deepEqual((await Promise.all(calls)).map((result) => result.revision).sort(), [3, 4]);
+    for (const session of shared) await first.call("end_edit_session", { editSessionId: session.id });
+
+    await second.call("select_editor", { editorId: "editor-a" });
+    const defaultSession = await first.call("begin_edit_session", { projectId: "project-a" });
+    const implicitCalls = [first, second].map((client) => client.call("browser", {
+      toolName: "add_slide", mutating: true, operation: { type: "slide.add", projectId: "project-a" },
+    }));
+    for (let index = 0; index < 2; index += 1) {
+      const command = await nextCommand("editor-a", editorA.sessionToken);
+      await fetch(`${base}/result`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${editorA.sessionToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ editorId: "editor-a", requestId: command.requestId, ok: true, result: { projectId: "project-a" } }),
+      });
+    }
+    await Promise.all(implicitCalls);
+    const implicitSessions = (await first.call("list_edit_sessions")).editSessions;
+    assert.equal(implicitSessions.length, 3, "two implicit clients can share a window with an explicit session");
+    const defaultSharedSession = await second.call("begin_edit_session", { projectId: "project-a" });
+    assert.equal(defaultSharedSession.editorId, defaultSession.editorId);
+    for (const session of [...implicitSessions, defaultSharedSession]) await first.call("end_edit_session", { editSessionId: session.id });
 
     const controller = new AbortController();
     const openPoll = (async () => {
@@ -140,5 +287,6 @@ test("shares one daemon while preserving per-agent editor selection", async () =
     delete process.env.CAROUSELBOT_BRIDGE_PORT;
     delete process.env.CAROUSELBOT_EDITOR_TTL_MS;
     delete process.env.CAROUSELBOT_EVENT_POLL_TIMEOUT_MS;
+    delete process.env.CAROUSELBOT_FONT_DIRS;
   }
 });

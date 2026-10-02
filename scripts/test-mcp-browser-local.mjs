@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -17,7 +17,19 @@ const debuggingPort = 19229;
 const profile = await mkdtemp(join(tmpdir(), "carouselbot-browser-"));
 const stateDirectory = await mkdtemp(join(tmpdir(), "carouselbot-daemon-"));
 const exportPath = join(profile, "agent-export.png");
+const mixedRatioExportPath = join(profile, "mixed-ratio-export.png");
+const sourceRatioExportPath = join(profile, "source-ratio-export.png");
+const sourceRatioImagePath = join(profile, "source-ratio.svg");
+const fontExportPath = join(profile, "didot-export.png");
 const projectExportDirectory = join(profile, "project-export");
+await writeFile(sourceRatioImagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="400" viewBox="0 0 1600 400"><rect width="1600" height="400" fill="#7C3AED"/><rect width="120" height="400" fill="#FACC15"/><rect x="1480" width="120" height="400" fill="#22D3EE"/></svg>');
+const didotPath = "/System/Library/Fonts/Supplemental/Didot.ttc";
+const didotMetadata = await stat(didotPath).catch((error) => {
+  if (error.code === "ENOENT") return null;
+  throw error;
+});
+if (didotMetadata && !didotMetadata.isFile()) throw new Error(`${didotPath} exists but is not a regular file.`);
+const didotAvailable = Boolean(didotMetadata);
 const sharedDaemon = process.argv.includes("--shared-daemon");
 const bridgePort = sharedDaemon ? 43117 : 48000 + Math.floor(Math.random() * 1000);
 const env = sharedDaemon ? process.env : {
@@ -27,6 +39,8 @@ const env = sharedDaemon ? process.env : {
   CAROUSELBOT_ALLOWED_ORIGINS: [process.env.CAROUSELBOT_ALLOWED_ORIGINS, new URL(pageUrl).origin].filter(Boolean).join(","),
 };
 const browserPageUrl = sharedDaemon ? pageUrl : `${pageUrl}${pageUrl.includes("?") ? "&" : "?"}__mcpBridgePort=${bridgePort}`;
+const editorPageUrl = new URL(browserPageUrl);
+editorPageUrl.pathname = "/dashboard";
 const web = localPagePort
   ? spawn(process.execPath, ["server.mjs"], {
     cwd: root,
@@ -90,6 +104,23 @@ async function tool(name, args = {}) {
   const result = await rpc("tools/call", { name, arguments: arguments_ });
   if (result.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
   return result;
+}
+
+async function restartCompanion() {
+  const child = spawn(process.execPath, ["packages/mcp/src/cli.mjs", "restart"], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const status = await new Promise((resolve) => child.once("exit", resolve));
+  if (status !== 0) throw new Error(`Companion restart failed: ${stderr || stdout || `exit ${status}`}`);
+  return JSON.parse(stdout);
 }
 
 const chrome = spawn(chromePath, [
@@ -222,6 +253,84 @@ async function boxedLineGeometry(cdp, textId) {
   })()`);
 }
 
+async function textGlyphGeometry(cdp, textId) {
+  return evaluate(cdp, `(() => {
+    const textId = ${JSON.stringify(textId)};
+    const box = [...document.querySelectorAll(".text-box")].find((item) => item.dataset.textId === textId);
+    const content = box?.querySelector(".text-visual--inside .text-content");
+    if (!box || !content || !content.firstChild) return null;
+    const range = document.createRange();
+    range.selectNodeContents(content);
+    const rect = range.getBoundingClientRect();
+    const style = getComputedStyle(content);
+    const measurement = document.createElement("canvas").getContext("2d");
+    measurement.font = style.fontStyle + " " + style.fontWeight + " 104px " + style.fontFamily;
+    measurement.fontVariationSettings = style.fontVariationSettings;
+    const glyphMetrics = measurement.measureText(content.textContent);
+    return {
+      text: content.textContent,
+      renderedWidth: rect.width,
+      renderedHeight: rect.height,
+      glyphWidth: glyphMetrics.width,
+      glyphLeft: glyphMetrics.actualBoundingBoxLeft,
+      glyphRight: glyphMetrics.actualBoundingBoxRight,
+      family: style.fontFamily,
+      weight: style.fontWeight,
+      fontStyle: style.fontStyle,
+      fontReady: document.fonts.check(style.fontStyle + " " + style.fontWeight + " 104px " + style.fontFamily),
+      missing: box.classList.contains("is-font-missing"),
+    };
+  })()`);
+}
+
+async function renderedPixelDifference(cdp, leftBase64, rightBase64) {
+  return evaluate(cdp, `(async () => {
+    const load = (data) => new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Could not decode rendered PNG."));
+      image.src = "data:image/png;base64," + data;
+    });
+    const [left, right] = await Promise.all([load(${JSON.stringify(leftBase64)}), load(${JSON.stringify(rightBase64)})]);
+    if (left.width !== right.width || left.height !== right.height) return {
+      sameDimensions: false,
+      left: [left.width, left.height],
+      right: [right.width, right.height],
+    };
+    const canvas = document.createElement("canvas");
+    canvas.width = left.width;
+    canvas.height = left.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(left, 0, 0);
+    const leftPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(right, 0, 0);
+    const rightPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let changedPixels = 0;
+    let totalChannelDelta = 0;
+    let maxChannelDelta = 0;
+    for (let offset = 0; offset < leftPixels.length; offset += 4) {
+      let changed = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const delta = Math.abs(leftPixels[offset + channel] - rightPixels[offset + channel]);
+        changed ||= delta > 0;
+        totalChannelDelta += delta;
+        maxChannelDelta = Math.max(maxChannelDelta, delta);
+      }
+      if (changed) changedPixels += 1;
+    }
+    return {
+      sameDimensions: true,
+      width: left.width,
+      height: left.height,
+      pixels: left.width * left.height,
+      changedPixels,
+      totalChannelDelta,
+      maxChannelDelta,
+    };
+  })()`);
+}
+
 let cdp;
 let secondCdp;
 const additionalCdps = [];
@@ -231,11 +340,15 @@ try {
   const protocol = await waitForJson("/json/protocol");
   const localPermissions = (protocol.domains.find((domain) => domain.domain === "Browser")?.types.find((type) => type.id === "PermissionType")?.enum || []).filter((value) => /local|loopback/i.test(value));
   const pages = await waitForJson("/json/list");
-  cdp = connectCdp(pages[0].webSocketDebuggerUrl);
+  // Chrome can list internal browser UI and extension targets before the tab.
+  const editorPage = pages.find((page) => page.type === "page" && page.url === "about:blank");
+  if (!editorPage) throw new Error("Chrome did not expose the blank test page.");
+  cdp = connectCdp(editorPage.webSocketDebuggerUrl);
   await cdp.ready;
   await cdp.send("Runtime.enable");
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1800, deviceScaleFactor: 1, mobile: false });
   if (localPermissions.length) await cdp.send("Browser.grantPermissions", { permissions: localPermissions, origin: new URL(pageUrl).origin });
-  await cdp.send("Page.navigate", { url: browserPageUrl });
+  await cdp.send("Page.navigate", { url: editorPageUrl.href });
   await waitFor(() => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent) && Boolean(document.querySelector('[data-action=\"connect-agent\"]'))"), "Editor scripts did not load.");
   await evaluate(cdp, "window.carouselBotReady");
   const initialConnection = await evaluate(cdp, `({
@@ -257,10 +370,17 @@ try {
   if (statusAlignment?.justifySelf !== "start" || statusAlignment.justifyContent !== "flex-start" || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
   await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
-  const remembered = await evaluate(cdp, `localStorage.getItem("carouselbot:mcp-connected")`);
+  const remembered = await waitFor(() => evaluate(cdp, `localStorage.getItem("carouselbot:mcp-connected")`), "Browser did not acknowledge its MCP connection.");
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Remembered MCP connection did not resume after reload.");
+  const restartedCompanion = await restartCompanion();
+  if (!restartedCompanion.daemon?.previousPid || restartedCompanion.daemon.previousPid === restartedCompanion.daemon.pid) throw new Error(`Companion restart did not replace the daemon: ${JSON.stringify(restartedCompanion)}`);
+  await waitFor(async () => {
+    const editors = (await tool("list_editors")).structuredContent.editors;
+    const bridgeConnected = await evaluate(cdp, `window.carouselBotLocalMcpBridge.getState().connected`);
+    return bridgeConnected && editors.some((editor) => editor.id === initialConnection.editorId);
+  }, "The existing MCP process and browser did not reconnect after the daemon was replaced.");
   await tool("get_design_guidance");
   const connectedEditors = (await tool("list_editors")).structuredContent.editors;
   const testEditor = connectedEditors.find((editor) => editor.id === initialConnection.editorId);
@@ -283,7 +403,7 @@ try {
   })()`);
   let createdProject;
   try {
-    createdProject = (await tool("create_project", { name: "Full MCP browser test" })).structuredContent;
+    createdProject = (await tool("create_project", { name: "Full MCP browser test", folderPath: "/mcp-folder" })).structuredContent;
   } finally {
     await evaluate(cdp, `(() => {
       window.requestAnimationFrame = window.__carouselBotOriginalRequestAnimationFrame;
@@ -293,24 +413,299 @@ try {
   }
   const dashboardUpdated = await evaluate(cdp, `({
     dashboardVisible: Boolean(document.querySelector('.dashboard')),
-    projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent)
+    projectNames: [...document.querySelectorAll('.project-card .project-meta strong')].map((item) => item.textContent),
+    folderNames: [...document.querySelectorAll('.folder-card .folder-meta-name')].map((item) => item.textContent.trim()),
+    folderSlots: document.querySelector('.folder-card[data-folder-path="/mcp-folder"]')?.querySelectorAll('.folder-preview-slot').length,
+    folderIcon: Boolean(document.querySelector('.folder-card[data-folder-path="/mcp-folder"] .folder-meta-name svg'))
   })`);
-  if (!dashboardUpdated.dashboardVisible || !dashboardUpdated.projectNames.includes("Full MCP browser test")) throw new Error(`Dashboard did not update live: ${JSON.stringify(dashboardUpdated)}`);
+  if (!dashboardUpdated.dashboardVisible || dashboardUpdated.projectNames.includes("Full MCP browser test") || !dashboardUpdated.folderNames.includes("mcp-folder") || dashboardUpdated.folderSlots !== 8 || !dashboardUpdated.folderIcon || createdProject.folderPath !== "/mcp-folder") throw new Error(`Dashboard folder did not update live: ${JSON.stringify({ createdProject, dashboardUpdated })}`);
+  const folderInspection = (await tool("inspect_editor")).structuredContent;
+  const inspectedFolder = folderInspection.folders.find((folder) => folder.path === "/mcp-folder");
+  if (folderInspection.projects.find((project) => project.id === createdProject.projectId)?.folderPath !== "/mcp-folder" || inspectedFolder?.projectCount !== 1 || inspectedFolder.projectIds[0] !== createdProject.projectId) throw new Error(`Folder membership was not inspectable: ${JSON.stringify(folderInspection)}`);
   const dashboardProjectNotification = await waitFor(() => evaluate(cdp, `(() => {
     const item = [...document.querySelectorAll("#agent-activity-stack .agent-activity--success")].find((entry) => entry.textContent.includes("Created Full MCP browser test"));
     return item ? { label: item.querySelector("strong")?.textContent, icon: item.querySelector(".agent-activity-icon img")?.getAttribute("src") } : null;
   })()`), "MCP-created project did not show a dashboard notification.");
   if (dashboardProjectNotification.label !== "Codex" || !dashboardProjectNotification.icon?.includes("codex-logo-colored")) throw new Error(`Dashboard project notification used the wrong client identity: ${JSON.stringify(dashboardProjectNotification)}`);
   const addedSlide = (await tool("add_slide", { projectId: createdProject.projectId, name: "Live automation", backgroundColor: "#25282E" })).structuredContent;
-  const dashboardAfterSlide = await evaluate(cdp, `({ pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), slideCount: [...document.querySelectorAll('.project-card')].find((card) => card.querySelector('.project-meta strong')?.textContent === 'Full MCP browser test')?.querySelector('.project-meta span')?.textContent })`);
-  if (dashboardAfterSlide.pathname !== "/" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.slideCount?.startsWith("1 slide")) throw new Error(`Adding a slide changed the dashboard view: ${JSON.stringify(dashboardAfterSlide)}`);
+  const dashboardAfterSlide = await waitFor(() => evaluate(cdp, `(() => {
+    const card = document.querySelector('.folder-card[data-folder-path="/mcp-folder"]');
+    const value = { pathname: location.pathname, dashboardVisible: Boolean(document.querySelector('.dashboard')), composedCover: Boolean(card?.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')) };
+    return value.composedCover ? value : false;
+  })()`), "Adding a slide did not update the folder mosaic.");
+  if (dashboardAfterSlide.pathname !== "/dashboard" || !dashboardAfterSlide.dashboardVisible || !dashboardAfterSlide.composedCover) throw new Error(`Adding a slide changed the dashboard folder view: ${JSON.stringify(dashboardAfterSlide)}`);
+  await tool("move_project", { projectId: createdProject.projectId, folderPath: "/Client/Account" });
+  const nestedInspection = (await tool("inspect_editor")).structuredContent;
+  if (!nestedInspection.folders.some((folder) => folder.path === "/Client" && folder.projectCount === 1)
+    || !nestedInspection.folders.some((folder) => folder.path === "/Client/Account" && folder.parentPath === "/Client")) throw new Error("MCP did not expose the nested hierarchy");
+  await waitFor(() => evaluate(cdp, `(() => {
+    const preview = document.querySelector('.folder-card[data-folder-path="/Client"] .folder-preview');
+    const subfolder = preview?.querySelector('.folder-preview-subfolder');
+    const cover = subfolder?.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]');
+    const mark = subfolder?.querySelector('.folder-preview-folder-mark');
+    return preview?.children.length === 8 && subfolder?.querySelectorAll('.folder-preview-mini').length === 4
+      && subfolder.title === 'Account' && mark?.querySelector('svg') && getComputedStyle(mark).color === 'rgb(255, 255, 255)'
+      && Boolean(cover) && !preview?.querySelector(':scope > [data-project-cover-id]');
+  })()`), "Parent folder preview did not group its child into a dimmed 2x2 collage with a white folder icon");
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Client"]').click()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Client/Account"]')) && !document.querySelector('.project-card')`), "Parent folder did not show its account subfolder");
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Client/Account"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Client%2FAccount' && Boolean(document.querySelector('.project-card')) && Boolean(document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]'))`), "Subfolder navigation failed");
+  await evaluate(cdp, `window.__nestedFolderReload = true`);
+  await cdp.send("Page.reload");
+  await waitFor(() => evaluate(cdp, `Boolean(!window.__nestedFolderReload && document.readyState === "complete" && window.carouselBotAgent && document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]'))`), "Nested folder reload failed");
+  await evaluate(cdp, `document.querySelector('.folder-breadcrumb[data-folder-path="/Client"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Client' && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Home'`), "Nested folder back link did not return to its parent");
+  await evaluate(cdp, `document.querySelector('[data-action="open-dashboard-root"]').click()`);
+  await evaluate(cdp, `(() => {
+    document.querySelector('.folder-card[data-folder-path="/Client"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.includes('Rename folder')).click();
+    document.querySelector('[data-folder-rename-form] input').value = 'Renamed';
+    document.querySelector('[data-folder-rename-form]').requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Renamed"]')) && window.carouselBotAgent.inspect().projects.some((project) => project.folderPath === '/Renamed/Account')`), "Parent rename did not preserve account nesting");
+  const movedBetweenFolders = (await tool("move_project", { projectId: createdProject.projectId, folderPath: "/mcp-other" })).structuredContent;
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/mcp-other"]')) && !document.querySelector('.folder-card[data-folder-path="/mcp-folder"]')`), "Moving a project between folders did not update the dashboard cards.");
+
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/mcp-other"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === "/folders/mcp-other" && Boolean(document.querySelector('.project-card[data-project-id="${createdProject.projectId}"]'))`), "The MCP-created folder did not open before the pending-save regression check.");
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${createdProject.projectId}"]').click()`);
+  await waitFor(() => evaluate(cdp, `document.querySelector('.project-title-input')?.value === "Full MCP browser test"`), "The folder project did not open before the pending-save regression check.");
+  await evaluate(cdp, `(() => {
+    const title = document.querySelector('.project-title-input');
+    title.value = 'Debounced UI title preserved';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-action="home"]')?.click();
+    return true;
+  })()`);
+  const movedToRoot = (await tool("move_project", { projectId: createdProject.projectId, folderPath: null })).structuredContent;
+  const pendingSaveInspection = (await tool("inspect_editor", { projectId: createdProject.projectId })).structuredContent;
+  if (pendingSaveInspection.project.name !== "Debounced UI title preserved" || pendingSaveInspection.project.folderPath !== null || pendingSaveInspection.activeFolderPath !== null || pendingSaveInspection.folders.some((folder) => folder.path === "/mcp-other")) {
+    throw new Error(`Moving through MCP lost a pending UI edit or left stale folder state: ${JSON.stringify(pendingSaveInspection)}`);
+  }
+  await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP browser test" });
+  await evaluate(cdp, "document.querySelector('[data-action=\"home\"]')?.click()");
+  const dashboardAfterUnfile = await waitFor(() => evaluate(cdp, `(() => {
+    const value = {
+      rootProject: [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Full MCP browser test'),
+      folders: document.querySelectorAll('.folder-card').length
+    };
+    return value.rootProject ? value : false;
+  })()`), "Moving a project out of its folder did not update the dashboard.");
+  if (movedBetweenFolders.folderPath !== "/mcp-other" || movedToRoot.folderPath !== null || !dashboardAfterUnfile.rootProject || dashboardAfterUnfile.folders !== 0) throw new Error(`MCP folder moves returned an unexpected state: ${JSON.stringify({ movedBetweenFolders, movedToRoot, dashboardAfterUnfile })}`);
   await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
   await waitFor(() => evaluate(cdp, "document.querySelector('.project-title-input')?.value === 'Full MCP browser test'"), "Explicitly opening the project did not show the editor.");
+
+  const fontProbe = (await tool("add_text", {
+    projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "speed limit",
+    x: 0.1, y: 0.3, width: 0.8, height: 0.16, size: 104, style: "plain", align: "center", color: "#FFFFFF",
+  })).structuredContent;
+  const weightRenders = [];
+  for (const fontWeight of [550, 725]) {
+    await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId,
+      updates: [{ id: fontProbe.createdTextId, fontWeight }] });
+    const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+    if (geometry.weight !== String(fontWeight)) throw new Error(`DOM ignored weight ${fontWeight}: ${JSON.stringify(geometry)}`);
+    const rendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    weightRenders.push(rendered.content.find((item) => item.type === "image").data);
+  }
+  const weightPixels = await renderedPixelDifference(cdp, ...weightRenders);
+  if (weightPixels.changedPixels < 100) throw new Error(`Intermediate weights produced identical pixels: ${JSON.stringify(weightPixels)}`);
+  await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => evaluate(cdp, `document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Weight probe did not reconnect.");
+  const restoredWeight = await waitFor(() => textGlyphGeometry(cdp, fontProbe.createdTextId), "Weight probe did not repaint after reload.");
+  if (restoredWeight.weight !== "725") throw new Error(`Weight did not persist: ${JSON.stringify(restoredWeight)}`);
+  await tool("update_text", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId,
+    updates: [{ id: fontProbe.createdTextId, fontWeight: 500 }] });
+  let fontPermissionError = null;
+  try {
+    await tool("list_local_fonts", { query: "Didot", limit: 20, sort: "alphabetical" });
+  } catch (error) {
+    fontPermissionError = error;
+  }
+  if (!fontPermissionError || !/FONT_PERMISSION_REQUIRED|enable local fonts/i.test(fontPermissionError.message)) {
+    throw new Error(`Local font discovery was not refused before consent: ${fontPermissionError?.message || "request succeeded"}`);
+  }
+  const permissionPromptOpened = await evaluate(cdp, `(() => {
+    const select = document.querySelector("#text-font");
+    if (!select) return false;
+    select.value = "__add_local_font__";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+  if (!permissionPromptOpened) throw new Error("The selected text layer did not expose the local-font picker.");
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector(".font-picker-backdrop [data-enable-fonts]"))`), "The local-font permission prompt did not open.");
+  await evaluate(cdp, `document.querySelector(".font-picker-backdrop [data-enable-fonts]").click()`);
+  await waitFor(() => evaluate(cdp, `window.carouselBotLocalMcpBridge.getState().localFontsEnabled === true && Boolean(document.querySelector("#font-search"))`), "Explicit local-font permission was not enabled.", 60_000);
+  const rememberedFontPermission = await evaluate(cdp, `localStorage.getItem("carouselbot:local-fonts-enabled")`);
+  if (rememberedFontPermission !== "1") throw new Error("Explicit local-font permission was not remembered.");
+  await evaluate(cdp, `document.querySelector(".font-picker-close")?.click()`);
+
+  const didotList = (await tool("list_local_fonts", { query: "Didot", limit: 20, sort: "alphabetical" })).structuredContent;
+  let localFontAcceptance = {
+    permissionRefused: true,
+    permissionEnabled: true,
+    didotAvailable,
+    didotFaces: 0,
+    changedPixels: 0,
+  };
+  if (didotAvailable) {
+    const didotFaces = didotList.fonts || [];
+    const expectedPublicKeys = ["localFontId", "family", "fullName", "postscriptName", "subfamily", "weight", "italic", "lastUsedAt", "variableAxes"];
+    if (didotFaces.length !== 3
+      || new Set(didotFaces.map((font) => font.localFontId)).size !== 3
+      || JSON.stringify([...new Set(didotFaces.map((font) => font.subfamily))].sort()) !== JSON.stringify(["Bold", "Italic", "Regular"])
+      || didotFaces.some((font) => JSON.stringify(Object.keys(font)) !== JSON.stringify(expectedPublicKeys))) {
+      throw new Error(`Didot.ttc did not expose its three distinct public faces: ${JSON.stringify(didotFaces)}`);
+    }
+    const listedFontJson = JSON.stringify(didotList);
+    if (/pathInternal|sourcePostscriptName|fileFingerprint|fingerprint|Didot\.ttc|\/System\/Library/.test(listedFontJson)) {
+      throw new Error(`Local font discovery exposed private source details: ${listedFontJson}`);
+    }
+    const regularDidot = didotFaces.find((font) => font.subfamily === "Regular" && font.weight === 400 && font.italic === false);
+    if (!regularDidot) throw new Error(`Didot Regular metadata was not exact: ${JSON.stringify(didotFaces)}`);
+
+    await evaluate(cdp, `document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`);
+    const defaultGeometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+    if (defaultGeometry?.text !== "speed limit" || !defaultGeometry.family.includes("TikTok Sans") || !defaultGeometry.fontReady || defaultGeometry.glyphWidth <= 0) {
+      throw new Error(`The default speed-limit probe did not render in TikTok Sans: ${JSON.stringify(defaultGeometry)}`);
+    }
+    const defaultRendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    const defaultImage = defaultRendered.content.find((item) => item.type === "image");
+    if (!defaultImage?.data) throw new Error("Default-font probe did not render an image.");
+
+    const importedDidot = (await tool("import_font", { projectId: createdProject.projectId, localFontId: regularDidot.localFontId })).structuredContent;
+    if (!importedDidot.fontId || importedDidot.localFontId !== regularDidot.localFontId || importedDidot.existing !== false) {
+      throw new Error(`Didot Regular did not import as one project font: ${JSON.stringify(importedDidot)}`);
+    }
+    await tool("update_text", {
+      projectId: createdProject.projectId,
+      slideId: addedSlide.createdSlideId,
+      updates: [{ id: fontProbe.createdTextId, fontId: importedDidot.fontId }],
+    });
+    const recentDidot = (await tool("list_local_fonts", {
+      query: "Didot",
+      limit: 20,
+      sort: "recent_then_alphabetical",
+    })).structuredContent.fonts;
+    if (recentDidot[0]?.localFontId !== regularDidot.localFontId || !(recentDidot[0].lastUsedAt > 0)) {
+      throw new Error(`Applying Didot through MCP did not update recent font usage: ${JSON.stringify(recentDidot)}`);
+    }
+    const didotGeometry = await waitFor(async () => {
+      const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+      return geometry?.family.includes("carousel-font-") && geometry.fontReady && !geometry.missing && geometry.glyphWidth > 0 ? geometry : null;
+    }, "The editable speed-limit text did not repaint with the imported Didot face.");
+    if (didotGeometry.text !== "speed limit" || didotGeometry.weight !== "400" || Math.abs(didotGeometry.glyphWidth - defaultGeometry.glyphWidth) < 0.5) {
+      throw new Error(`Didot did not produce distinct glyph metrics: ${JSON.stringify({ defaultGeometry, didotGeometry })}`);
+    }
+    const didotRendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    const didotImage = didotRendered.content.find((item) => item.type === "image");
+    if (!didotImage?.data) throw new Error("Didot probe did not render an image.");
+    const fontPixelDifference = await renderedPixelDifference(cdp, defaultImage.data, didotImage.data);
+    if (!fontPixelDifference.sameDimensions || fontPixelDifference.changedPixels < 500 || fontPixelDifference.maxChannelDelta < 32) {
+      throw new Error(`Default and Didot speed-limit renders were not measurably different: ${JSON.stringify(fontPixelDifference)}`);
+    }
+
+    let syntheticItalicError = null;
+    try {
+      await tool("update_text", {
+        projectId: createdProject.projectId,
+        slideId: addedSlide.createdSlideId,
+        updates: [{ id: fontProbe.createdTextId, fontStyle: "italic" }],
+      });
+    } catch (error) {
+      syntheticItalicError = error;
+    }
+    if (!syntheticItalicError || !/FONT_FACE_MISMATCH/.test(syntheticItalicError.message)) {
+      throw new Error(`Didot Regular accepted a synthetic italic request: ${syntheticItalicError?.message || "request succeeded"}`);
+    }
+
+    await tool("undo", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+    const undoneFontInspection = (await tool("inspect_editor", {
+      projectId: createdProject.projectId,
+      slideId: addedSlide.createdSlideId,
+      includeAllProjects: false,
+    })).structuredContent;
+    const undoneProbe = undoneFontInspection.slide.texts.find((text) => text.id === fontProbe.createdTextId);
+    if (undoneProbe?.fontId || undoneProbe?.fontFamily !== "TikTok Sans") {
+      throw new Error(`Undo did not restore the built-in font: ${JSON.stringify(undoneProbe)}`);
+    }
+    await tool("redo", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
+    const redoneGeometry = await waitFor(async () => {
+      const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+      return geometry?.family.includes("carousel-font-") && geometry.fontReady && !geometry.missing ? geometry : null;
+    }, "Redo did not restore the imported Didot face.");
+    if (Math.abs(redoneGeometry.glyphWidth - didotGeometry.glyphWidth) > 0.1) {
+      throw new Error(`Didot metrics changed across undo/redo: ${JSON.stringify({ didotGeometry, redoneGeometry })}`);
+    }
+
+    const projectFonts = (await tool("list_project_fonts", { projectId: createdProject.projectId })).structuredContent;
+    const fontInspection = (await tool("inspect_editor", {
+      projectId: createdProject.projectId,
+      slideId: addedSlide.createdSlideId,
+      includeAllProjects: false,
+    })).structuredContent;
+    const inspectedProbe = fontInspection.slide.texts.find((text) => text.id === fontProbe.createdTextId);
+    if (projectFonts.fonts?.length !== 1
+      || projectFonts.fonts[0].id !== importedDidot.fontId
+      || projectFonts.fonts[0].available !== true
+      || inspectedProbe?.fontId !== importedDidot.fontId) {
+      throw new Error(`Imported Didot metadata was not attached to the editable text: ${JSON.stringify({ projectFonts, inspectedProbe })}`);
+    }
+    const publicFontJson = JSON.stringify({ projectFonts, fontInspection });
+    if (/fontData|data:font|pathInternal|fileFingerprint|fingerprint|Didot\.ttc|\/System\/Library/.test(publicFontJson)) {
+      throw new Error(`Project inspection exposed local font bytes or paths: ${publicFontJson}`);
+    }
+
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await waitFor(() => evaluate(cdp, `document.readyState === "complete" && document.querySelector('.project-title-input')?.value === "Full MCP browser test" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "The font project did not restore after reload.");
+    await evaluate(cdp, `document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`);
+    const restoredGeometry = await waitFor(async () => {
+      const geometry = await textGlyphGeometry(cdp, fontProbe.createdTextId);
+      return geometry?.family.includes("carousel-font-")
+        && geometry.fontReady
+        && !geometry.missing
+        ? geometry
+        : null;
+    }, "The imported Didot face was not restored from the local project after reload.");
+    if (restoredGeometry.text !== "speed limit" || Math.abs(restoredGeometry.glyphWidth - didotGeometry.glyphWidth) > 0.1) {
+      throw new Error(`Didot editor geometry changed after project reload: ${JSON.stringify({ didotGeometry, restoredGeometry })}`);
+    }
+    const restoredRendered = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 360 });
+    const restoredImage = restoredRendered.content.find((item) => item.type === "image");
+    const reloadPixelDifference = await renderedPixelDifference(cdp, didotImage.data, restoredImage?.data || "");
+    if (!reloadPixelDifference.sameDimensions || reloadPixelDifference.changedPixels !== 0) {
+      throw new Error(`Didot slide pixels changed after project reload: ${JSON.stringify(reloadPixelDifference)}`);
+    }
+
+    const fullDidotRender = await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, width: 1080 });
+    const fullDidotImage = fullDidotRender.content.find((item) => item.type === "image");
+    await tool("export_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, outputPath: fontExportPath });
+    const exportedDidot = await readFile(fontExportPath);
+    if (!fullDidotImage?.data || !exportedDidot.equals(Buffer.from(fullDidotImage.data, "base64"))) {
+      throw new Error("The exported Didot slide did not match the full-resolution editor renderer.");
+    }
+    localFontAcceptance = {
+      ...localFontAcceptance,
+      didotFaces: didotFaces.length,
+      changedPixels: fontPixelDifference.changedPixels,
+      glyphWidthDelta: Math.abs(didotGeometry.glyphWidth - defaultGeometry.glyphWidth),
+      reloadPixelsChanged: reloadPixelDifference.changedPixels,
+      exportBytes: exportedDidot.length,
+    };
+  }
+  await tool("delete_layers", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, layerIds: [fontProbe.createdTextId] });
+  await waitFor(async () => {
+    const visibleTextIds = await evaluate(cdp, `[...document.querySelectorAll(".text-box")].map((item) => item.dataset.textId)`);
+    return Boolean(fontProbe.createdTextId) && !visibleTextIds.includes(fontProbe.createdTextId);
+  }, "The temporary local-font probe was not removed.");
+
   const addedText = (await tool("add_text", {
     projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Built live by an AI agent",
     x: 0.1, y: 0.2, width: 0.8, height: 0.16, size: 82, style: "boxed", background: "black", backgroundShape: "lines", color: "#FFFFFF",
   })).structuredContent;
-  const imported = (await tool("import_asset", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, path: join(rootPath, "assets", "favicon.svg"), name: "CarouselBot mark" })).structuredContent;
+  const imported = (await tool("import_asset", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, path: join(rootPath, "assets", "carouselbot-bot-icon.svg"), name: "CarouselBot mark" })).structuredContent;
   const image = (await tool("add_image", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, assetId: imported.assetId, x: 0.34, y: 0.52, width: 0.32, rotation: 6 })).structuredContent;
   const batch = await tool("apply_operations", { operations: [
     { tool: "add_text", arguments: { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, text: "Claude · Codex · Hermes · OpenCode · OpenClaw", x: 0.1, y: 0.76, width: 0.8, height: 0.1, size: 44, style: "plain", color: "#25F4EE" } },
@@ -318,9 +713,17 @@ try {
   ] });
   const supportingTextId = batch.structuredContent.results[0].createdTextId;
 
+  const copiedTexts = (await tool("copy_all_texts", { projectId: createdProject.projectId })).structuredContent;
+  if (copiedTexts.text !== "Built live through MCP\nClaude · Codex · Hermes · OpenCode · OpenClaw" || copiedTexts.projectId !== createdProject.projectId) {
+    throw new Error(`MCP copy all texts failed: ${JSON.stringify(copiedTexts)}`);
+  }
+
   const visible = await evaluate(cdp, `({
     title: document.querySelector('.project-title-input')?.value,
-    texts: [...document.querySelectorAll('.text-content')].map((item) => item.textContent),
+    texts: [...document.querySelectorAll('.text-content')].map((item) => {
+      const lines = [...item.querySelectorAll('.text-line')];
+      return lines.length ? lines.map((line) => line.textContent).join(' ') : item.textContent;
+    }),
     connected: document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus,
     imageCount: document.querySelectorAll('.overlay-box').length
   })`);
@@ -329,17 +732,16 @@ try {
   const compactToolbar = await waitFor(() => evaluate(cdp, `(() => {
     const projectIdentity = document.querySelector(".project-identity");
     const airdrop = document.querySelector(".airdrop-icon");
-    const github = document.querySelector(".github-mark");
-    if (!projectIdentity || !airdrop || !github) return null;
+    if (!projectIdentity || !airdrop) return null;
     return {
       projectTitleDisplay: getComputedStyle(projectIdentity).display,
       hasMobileEditButton: Boolean(document.querySelector(".mobile-edit-button")),
       airdropWidth: getComputedStyle(airdrop).width,
       airdropRadius: getComputedStyle(airdrop).borderRadius,
-      githubWidth: getComputedStyle(github).width,
+      hasRepositoryLink: Boolean(document.querySelector(".github-link")),
     };
   })()`), "Compact editor toolbar did not render.");
-  if (compactToolbar.projectTitleDisplay !== "none" || compactToolbar.hasMobileEditButton || compactToolbar.airdropWidth !== "25px" || compactToolbar.airdropRadius !== "50%" || compactToolbar.githubWidth !== "25px") throw new Error(`Compact toolbar regression: ${JSON.stringify(compactToolbar)}`);
+  if (compactToolbar.projectTitleDisplay !== "none" || compactToolbar.hasMobileEditButton || compactToolbar.airdropWidth !== "25px" || compactToolbar.airdropRadius !== "50%" || compactToolbar.hasRepositoryLink) throw new Error(`Compact toolbar regression: ${JSON.stringify(compactToolbar)}`);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: 2400, height: 1800, deviceScaleFactor: 1, mobile: false });
 
   for (const [align, expectedAlignItems] of [["left", "flex-start"], ["right", "flex-end"]]) {
@@ -408,13 +810,175 @@ try {
   const exportedProject = (await tool("export_project", { projectId: createdProject.projectId, outputDirectory: projectExportDirectory })).structuredContent;
   if (exportedProject.fileCount !== 2 || (await readdir(projectExportDirectory)).filter((name) => name.endsWith(".png")).length !== 2) throw new Error("Project export did not write both slides.");
   await tool("delete_slide", { projectId: createdProject.projectId, slideId: duplicatedSlide.createdSlideId });
+  // Public companion import of a real moving H.264/AAC fixture, without a user gesture.
+  const videoPath = join(rootPath, 'packages/mcp/test/fixtures/video-with-audio.mp4');
+  const videoAsset = (await tool("import_asset", { projectId: createdProject.projectId, path: videoPath, name: "Moving clip" })).structuredContent;
+  if (videoAsset.type !== "video" || videoAsset.duration < 1.5) throw new Error("Video import lost media metadata");
+  const videoDuplicate = (await tool("import_asset", { projectId: createdProject.projectId, path: videoPath })).structuredContent;
+  if (!videoDuplicate.existing || videoDuplicate.assetId !== videoAsset.assetId) throw new Error("Video deduplication failed");
+  const videoSlide = (await tool("add_slide", { projectId: createdProject.projectId, name: "Video integration", aspectRatio: "1:1" })).structuredContent;
+  const videoTarget = { projectId: createdProject.projectId, slideId: videoSlide.createdSlideId };
+  const placedVideo = (await tool("add_image", { ...videoTarget, assetId: videoAsset.assetId, x: 0.5, y: 0.2, width: 0.4 })).structuredContent;
+  await tool("add_text", { ...videoTarget, text: "Prompt to app", x: 0.05, y: 0.3, width: 0.4, size: 60 });
+  await tool("update_image", { ...videoTarget, updates: [{ id: placedVideo.createdImageId, x: 0.52, rotation: 5 }] });
+  let videoInspection = (await tool("inspect_editor", { ...videoTarget, includeAllProjects: false })).structuredContent;
+  if (videoInspection.slide.mode !== "video" || videoInspection.slide.images[0].type !== "video" || videoInspection.slide.duration < 1.5) throw new Error("Video mode inspection failed");
+  await tool("open_project", videoTarget);
+  const paused = (await tool("set_video_playback", { ...videoTarget, playing: false, time: 0.4 })).structuredContent;
+  if (paused.playing || Math.abs(paused.time - 0.4) > 0.01) throw new Error("Agent playback seek failed");
+  const firstFrame = (await tool("render_slide", { ...videoTarget, time: 0.1 })).content.find(item => item.type === "image");
+  const laterFrame = (await tool("render_slide", { ...videoTarget, time: 1.3 })).content.find(item => item.type === "image");
+  const frameDiff = await renderedPixelDifference(cdp, firstFrame.data, laterFrame.data);
+  if (frameDiff.changedPixels < 1000) throw new Error("Video frame previews did not seek");
+  const afterPreview = (await tool("set_video_playback", videoTarget)).structuredContent;
+  if (afterPreview.playing || Math.abs(afterPreview.time - 0.4) > 0.01) throw new Error("Frame rendering moved the user playhead");
+  const videoExportPath = join(profile, 'agent-video.mp4');
+  await tool("export_slide", { ...videoTarget, outputPath: videoExportPath });
+  const mp4 = await readFile(videoExportPath);
+  if (mp4.subarray(4,8).toString() !== "ftyp" || mp4.length < 1000) throw new Error("Agent MP4 export is invalid");
+  const decodedExport = await evaluate(cdp, `(async () => {
+    const video = document.createElement('video'); video.muted = true;
+    video.src = 'data:video/mp4;base64,${mp4.toString('base64')}';
+    await new Promise((resolve,reject) => { video.onloadeddata = resolve; video.onerror = reject; });
+    const context = new OfflineAudioContext(1, 48000, 48000);
+    const audio = await context.decodeAudioData(await fetch(video.src).then(response => response.arrayBuffer()));
+    const samples = audio.getChannelData(0);
+    const peak = samples.reduce((maximum, sample) => Math.max(maximum, Math.abs(sample)), 0);
+    const result = { duration: video.duration, width: video.videoWidth, height: video.videoHeight, peak };
+    video.removeAttribute('src'); video.load(); return result;
+  })()`);
+  if (decodedExport.duration < 1.5 || decodedExport.width !== 1080 || decodedExport.height !== 1080 || decodedExport.peak < 0.02) throw new Error("MP4 dimensions/duration incorrect");
+  await tool("export_slide", { ...videoTarget, format: "png", time: 1.3, outputPath: join(profile, 'video-frame.png') });
+  await tool("export_slide", { ...videoTarget, outputPath: videoExportPath }).then(() => { throw new Error("Video overwrite was not protected"); }, error => { if (!/already exists/.test(error.message)) throw error; });
+  await tool("export_slide", { ...videoTarget, outputPath: join(profile, 'wrong.png') }).then(() => { throw new Error("Video exported under PNG extension"); }, error => { if (!/requires a .mp4/.test(error.message)) throw error; });
+  const mixedExportDir = join(profile, 'mixed-video-export');
+  const mixedExport = (await tool("export_project", { projectId: createdProject.projectId, outputDirectory: mixedExportDir })).structuredContent;
+  if (mixedExport.fileCount !== 2 || !(await readdir(mixedExportDir)).some(name => name.endsWith('.mp4')) || !(await readdir(mixedExportDir)).some(name => name.endsWith('.png'))) throw new Error("Mixed project export failed");
+  const backgroundVideo = (await tool("add_slide", { projectId: createdProject.projectId, backgroundPath: videoPath })).structuredContent;
+  const bgTarget = { projectId: createdProject.projectId, slideId: backgroundVideo.createdSlideId };
+  if ((await tool("inspect_editor", { ...bgTarget, includeAllProjects: false })).structuredContent.slide.background.type !== 'video') throw new Error("Video background import failed");
+  await tool("update_slide", { ...bgTarget, backgroundColor: '#ffffff' });
+  if ((await tool("inspect_editor", { ...bgTarget, includeAllProjects: false })).structuredContent.slide.mode !== 'image') throw new Error("Replacing video background left video mode enabled");
+  await tool("update_slide", { ...bgTarget, backgroundPath: videoPath });
+  if ((await tool("inspect_editor", { ...bgTarget, includeAllProjects: false })).structuredContent.slide.mode !== 'video') throw new Error("Replacing image background with video failed");
+  await evaluate(cdp, `window.__videoReloadPending = true`);
+  await cdp.send('Page.reload');
+  await waitFor(() => evaluate(cdp, `!window.__videoReloadPending && Boolean(window.carouselBotReady)
+    && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), 'Video reload failed');
+  await evaluate(cdp, `window.carouselBotReady`);
+  videoInspection = (await tool("inspect_editor", { ...videoTarget, includeAllProjects: false })).structuredContent;
+  if (videoInspection.slide.mode !== 'video' || videoInspection.project.assets.find(asset => asset.id === videoAsset.assetId)?.type !== 'video') throw new Error("Video metadata did not persist");
+  await tool("set_view", { ...videoTarget, showTikTokOverlay: true, canvasZoom: 0.8 });
+  await tool("delete_slide", bgTarget);
+  await tool("delete_asset", { projectId: createdProject.projectId, assetId: videoAsset.assetId });
+  if ((await tool("inspect_editor", { ...videoTarget, includeAllProjects: false })).structuredContent.slide.mode !== 'image') throw new Error("Removing the last video asset left video mode enabled");
+  await tool("delete_slide", videoTarget);
+  await tool("open_project", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId });
   await tool("update_project", { projectId: createdProject.projectId, name: "Full MCP verified" });
+  const originalSession = editSessionId;
+  const originalState = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, includeAllProjects: false })).structuredContent;
+  const originalPreview = (await tool("render_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).content.find((item) => item.type === "image");
+  const copies = [];
+  for (const variant of ["A", "B"]) {
+    const duplicate = (await tool("duplicate_project", { projectId: createdProject.projectId, expectedRevision: originalState.project.revision, name: originalState.project.name, folderPath: `/Copies/${variant}` })).structuredContent;
+    if (!duplicate.createdProjectId || duplicate.projectId !== createdProject.projectId) throw new Error("Duplicate result lost source session identity");
+    copies.push(duplicate.createdProjectId);
+  }
+  for (const copyId of copies) {
+    editSessionId = (await tool("begin_edit_session", { editorId: initialConnection.editorId, projectId: copyId, purpose: "Verify independent duplicate" })).structuredContent.editSessionId;
+    const copy = (await tool("inspect_editor", { projectId: copyId, includeAllProjects: false })).structuredContent;
+    if (copy.project.slideCount !== originalState.project.slideCount || copy.project.assetCount !== originalState.project.assetCount || copy.project.fontCount !== originalState.project.fontCount || copy.project.revision !== 1 || copy.activeProjectId !== originalState.activeProjectId) throw new Error("Duplicate lost content or navigated the editor");
+    const copySlideId = copy.project.slides[originalState.slide.index].id;
+    const copyPreview = (await tool("render_slide", { projectId: copyId, slideId: copySlideId })).content.find((item) => item.type === "image");
+    const pixels = await renderedPixelDifference(cdp, originalPreview.data, copyPreview.data);
+    if (!pixels.sameDimensions || pixels.changedPixels) throw new Error("Duplicate render differs from its source");
+    await tool("update_project", { projectId: copyId, name: "Independent copy" });
+    await tool("delete_project", { projectId: copyId });
+    await tool("end_edit_session", { editSessionId });
+    editSessionId = originalSession;
+  }
+  const sourceAfterCopies = (await tool("inspect_editor", { projectId: createdProject.projectId, includeAllProjects: false })).structuredContent;
+  if (sourceAfterCopies.project.revision !== originalState.project.revision || sourceAfterCopies.project.name !== originalState.project.name) throw new Error("Duplicating or editing copies modified the source");
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
   const pinnedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   editSessionId = (await tool("begin_edit_session", { editorId: testEditor.id, purpose: "Verify background project edits preserve the current view" })).structuredContent.id;
-  const temporaryProject = (await tool("create_project", { name: "Temporary project" })).structuredContent;
+  const temporaryProject = (await tool("create_project", { name: "Temporary project", aspectRatio: "3:4" })).structuredContent;
   const temporarySlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Background edit", backgroundColor: "#18181B" })).structuredContent;
+  const mixedRatioSlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Square interlude", aspectRatio: "1:1", backgroundColor: "#F4EFE6" })).structuredContent;
+  const sourceRatioSlide = (await tool("add_slide", { projectId: temporaryProject.projectId, name: "Source-ratio panorama", backgroundPath: sourceRatioImagePath })).structuredContent;
+  const formatInspection = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent;
+  const formatSlide = formatInspection.project.slides.find((slide) => slide.id === temporarySlide.createdSlideId);
+  const squareSlide = formatInspection.project.slides.find((slide) => slide.id === mixedRatioSlide.createdSlideId);
+  const panoramaSlide = formatInspection.project.slides.find((slide) => slide.id === sourceRatioSlide.createdSlideId);
+  if (temporaryProject.aspectRatio !== "3:4" || temporaryProject.canvasWidth !== 1080 || temporaryProject.canvasHeight !== 1440
+    || temporarySlide.aspectRatio !== "3:4" || temporarySlide.canvasWidth !== 1080 || temporarySlide.canvasHeight !== 1440
+    || mixedRatioSlide.aspectRatio !== "1:1" || mixedRatioSlide.canvasWidth !== 1080 || mixedRatioSlide.canvasHeight !== 1080
+    || formatInspection.project.aspectRatio !== "3:4" || formatInspection.project.canvasWidth !== 1080 || formatInspection.project.canvasHeight !== 1440
+    || formatSlide?.aspectRatio !== "3:4" || formatSlide.canvasWidth !== 1080 || formatSlide.canvasHeight !== 1440
+    || formatSlide.width !== 1080 || formatSlide.height !== 1440 || formatSlide.background?.type !== "solid" || formatSlide.background.color !== "#18181B"
+    || squareSlide?.aspectRatio !== "1:1" || squareSlide.canvasWidth !== 1080 || squareSlide.canvasHeight !== 1080
+    || squareSlide.width !== 1080 || squareSlide.height !== 1080 || squareSlide.background?.type !== "solid" || squareSlide.background.color !== "#F4EFE6"
+    || sourceRatioSlide.aspectRatio !== "4:1" || sourceRatioSlide.canvasWidth !== 1080 || sourceRatioSlide.canvasHeight !== 270
+    || panoramaSlide?.aspectRatio !== "4:1" || panoramaSlide.canvasWidth !== 1080 || panoramaSlide.canvasHeight !== 270
+    || panoramaSlide.width !== 1600 || panoramaSlide.height !== 400 || panoramaSlide.background?.type !== "image"
+    || formatInspection.slide.aspectRatio !== "3:4" || formatInspection.slide.canvasWidth !== 1080 || formatInspection.slide.canvasHeight !== 1440
+    || formatInspection.slide.width !== 1080 || formatInspection.slide.height !== 1440 || formatInspection.slide.background?.type !== "solid" || formatInspection.slide.background.color !== "#18181B") {
+    throw new Error(`Custom aspect ratio or solid background metadata was not inspectable: ${JSON.stringify({ temporaryProject, formatInspection })}`);
+  }
+  const formatRender = await tool("render_slide", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, width: 360 });
+  const formatImage = formatRender.content.find((item) => item.type === "image");
+  const formatPng = formatImage?.data ? Buffer.from(formatImage.data, "base64") : null;
+  const formatPngWidth = formatPng?.length >= 24 ? formatPng.readUInt32BE(16) : null;
+  const formatPngHeight = formatPng?.length >= 24 ? formatPng.readUInt32BE(20) : null;
+  if (formatRender.structuredContent.width !== 360 || formatRender.structuredContent.height !== 480 || formatPngWidth !== 360 || formatPngHeight !== 480) {
+    throw new Error(`Custom-aspect render dimensions were incorrect: ${JSON.stringify({ rendered: formatRender.structuredContent, png: { width: formatPngWidth, height: formatPngHeight } })}`);
+  }
+  const sourceRatioRender = await tool("render_slide", { projectId: temporaryProject.projectId, slideId: sourceRatioSlide.createdSlideId, width: 360 });
+  const sourceRatioImage = sourceRatioRender.content.find((item) => item.type === "image");
+  const sourceRatioPng = sourceRatioImage?.data ? Buffer.from(sourceRatioImage.data, "base64") : null;
+  if (sourceRatioRender.structuredContent.width !== 360 || sourceRatioRender.structuredContent.height !== 90
+    || sourceRatioPng?.readUInt32BE(16) !== 360 || sourceRatioPng?.readUInt32BE(20) !== 90) {
+    throw new Error(`Source-ratio preview included padding or used the project ratio: ${JSON.stringify(sourceRatioRender.structuredContent)}`);
+  }
+  await tool("export_slide", { projectId: temporaryProject.projectId, slideId: sourceRatioSlide.createdSlideId, outputPath: sourceRatioExportPath });
+  const sourceRatioExport = await readFile(sourceRatioExportPath);
+  if (sourceRatioExport.readUInt32BE(16) !== 1080 || sourceRatioExport.readUInt32BE(20) !== 270) {
+    throw new Error(`Source-ratio export included workspace padding: ${JSON.stringify({ width: sourceRatioExport.readUInt32BE(16), height: sourceRatioExport.readUInt32BE(20) })}`);
+  }
+  const ratioText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, text: "One carousel, many shapes", role: "subtitle", x: 0.16, y: 0.24, width: 0.68, height: 0.14, color: "#111111" })).structuredContent;
+  const ratioAsset = (await tool("import_asset", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, path: join(rootPath, "assets", "airdrop.svg"), name: "Ratio test mark" })).structuredContent;
+  const ratioImage = (await tool("add_image", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, assetId: ratioAsset.assetId, x: 0.32, y: 0.56, width: 0.36 })).structuredContent;
+  const squareBeforeUpdate = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId })).structuredContent.slide;
+  const ratioUpdate = (await tool("update_slide", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, aspectRatio: "4:3" })).structuredContent;
+  const landscapeAfterUpdate = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId })).structuredContent.slide;
+  const beforeText = squareBeforeUpdate.texts.find((text) => text.id === ratioText.createdTextId);
+  const afterText = landscapeAfterUpdate.texts.find((text) => text.id === ratioText.createdTextId);
+  const beforeImage = squareBeforeUpdate.images.find((image) => image.id === ratioImage.createdImageId);
+  const afterImage = landscapeAfterUpdate.images.find((image) => image.id === ratioImage.createdImageId);
+  const centerY = (layer) => layer.y + layer.height / 2;
+  const expectedHeightScale = 1080 / 810;
+  if (ratioUpdate.aspectRatio !== "4:3" || ratioUpdate.canvasWidth !== 1080 || ratioUpdate.canvasHeight !== 810
+    || landscapeAfterUpdate.aspectRatio !== "4:3" || landscapeAfterUpdate.canvasWidth !== 1080 || landscapeAfterUpdate.canvasHeight !== 810
+    || landscapeAfterUpdate.width !== 1080 || landscapeAfterUpdate.height !== 810
+    || landscapeAfterUpdate.background?.type !== "solid" || landscapeAfterUpdate.background.color !== "#F4EFE6"
+    || !beforeText || !afterText || Math.abs(centerY(afterText) - centerY(beforeText)) > 0.000001 || Math.abs(afterText.height - beforeText.height * expectedHeightScale) > 0.000001
+    || !beforeImage || !afterImage || Math.abs(centerY(afterImage) - centerY(beforeImage)) > 0.000001 || Math.abs(afterImage.height - beforeImage.height * expectedHeightScale) > 0.000001) {
+    throw new Error(`Per-slide aspect-ratio update did not preserve layer geometry and solid background metadata: ${JSON.stringify({ ratioUpdate, squareBeforeUpdate, landscapeAfterUpdate })}`);
+  }
+  const landscapeRender = await tool("render_slide", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, width: 360 });
+  const landscapeImage = landscapeRender.content.find((item) => item.type === "image");
+  const landscapePng = landscapeImage?.data ? Buffer.from(landscapeImage.data, "base64") : null;
+  const landscapePngWidth = landscapePng?.length >= 24 ? landscapePng.readUInt32BE(16) : null;
+  const landscapePngHeight = landscapePng?.length >= 24 ? landscapePng.readUInt32BE(20) : null;
+  if (landscapeRender.structuredContent.width !== 360 || landscapeRender.structuredContent.height !== 270 || landscapePngWidth !== 360 || landscapePngHeight !== 270) {
+    throw new Error(`Slide-specific render dimensions were incorrect: ${JSON.stringify({ rendered: landscapeRender.structuredContent, png: { width: landscapePngWidth, height: landscapePngHeight } })}`);
+  }
+  await tool("export_slide", { projectId: temporaryProject.projectId, slideId: mixedRatioSlide.createdSlideId, outputPath: mixedRatioExportPath });
+  const landscapeExport = await readFile(mixedRatioExportPath);
+  if (landscapeExport.length < 24 || landscapeExport.readUInt32BE(16) !== 1080 || landscapeExport.readUInt32BE(20) !== 810) {
+    throw new Error(`Slide-specific export dimensions were incorrect: ${JSON.stringify({ width: landscapeExport.length >= 24 ? landscapeExport.readUInt32BE(16) : null, height: landscapeExport.length >= 24 ? landscapeExport.readUInt32BE(20) : null })}`);
+  }
   const perLineText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Edited without taking over", role: "subtitle", x: 0.1, y: 0.2, width: 0.8, height: 0.16, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
   const autoFitText = (await tool("add_text", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId, text: "Short body copy.", role: "body", x: 0.14, y: 0.5, width: 0.72, height: 0.045, style: "boxed", background: "black", color: "#FFFFFF" })).structuredContent;
   const autoFitBefore = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide.texts.find((text) => text.id === autoFitText.createdTextId);
@@ -428,6 +992,21 @@ try {
   if (perLineLayer?.role !== "subtitle" || perLineLayer.size !== 76 || perLineLayer.backgroundShape !== "lines") throw new Error(`Role defaults or per-line preference failed: ${JSON.stringify(perLineLayer)}`);
   if (!autoFitText.fittedTextBox?.automatic || !autoFitUpdate.fittedTextBoxes?.[0]?.automatic || autoFitLayer.height <= autoFitBefore.height || autoFitLayer.y + autoFitLayer.height > 1.0001) throw new Error(`Automatic MCP text-height fitting failed: ${JSON.stringify({ autoFitText, autoFitBefore, autoFitUpdate, autoFitLayer })}`);
   if (fullBoxLayer?.role !== "body" || fullBoxLayer.size !== 60 || fullBoxLayer.height >= 0.48 || fitted.fittedTextBoxes?.[0]?.id !== fullBoxText.createdTextId) throw new Error(`Full-box content fitting failed: ${JSON.stringify({ fullBoxLayer, fitted })}`);
+  const parallelSessions = await Promise.all(Array.from({ length: 3 }, (_, index) => tool("begin_edit_session", {
+    editorId: testEditor.id, projectId: temporaryProject.projectId, purpose: `Shared window worker ${index}`,
+  }).then((result) => result.structuredContent)));
+  try {
+    const parallelResults = await Promise.all(parallelSessions.map((session, index) => rpc("tools/call", {
+      name: "add_text", arguments: { editSessionId: session.id, slideId: temporarySlide.createdSlideId, text: `Parallel worker ${index}` },
+    })));
+    if (parallelResults.some((result) => result.isError)) throw new Error(`Shared-window edits failed: ${JSON.stringify(parallelResults)}`);
+    const sharedSlide = (await tool("inspect_editor", { projectId: temporaryProject.projectId, slideId: temporarySlide.createdSlideId })).structuredContent.slide;
+    for (let index = 0; index < parallelSessions.length; index += 1) {
+      if (!sharedSlide.texts.some((text) => text.text === `Parallel worker ${index}`)) throw new Error(`Shared-window edit ${index} was lost`);
+    }
+  } finally {
+    for (const session of parallelSessions) await tool("end_edit_session", { editSessionId: session.id });
+  }
   const preservedView = await evaluate(cdp, `({ pathname: location.pathname, title: document.querySelector('.project-title-input')?.value, slideId: window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId })`);
   if (JSON.stringify(preservedView) !== JSON.stringify(pinnedView)) throw new Error(`Background project edits changed the user's view: ${JSON.stringify({ pinnedView, preservedView })}`);
   await tool("delete_project", { projectId: temporaryProject.projectId });
@@ -440,14 +1019,14 @@ try {
 
   const inspected = (await tool("inspect_editor", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId })).structuredContent;
   if (inspected.project.name !== "Full MCP verified" || inspected.project.slides.length !== 1 || inspected.slide.texts.length !== 2 || inspected.slide.images.length !== 1 || inspected.slide.images[0].id !== image.createdImageId || inspected.view.showTikTokOverlay !== true) throw new Error(`Unexpected final state: ${JSON.stringify(inspected)}`);
-  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: browserPageUrl });
+  const { targetId: secondTargetId } = await cdp.send("Target.createTarget", { url: editorPageUrl.href });
   const secondPage = await waitFor(async () => (await waitForJson("/json/list")).find((page) => page.id === secondTargetId), "Second editor tab did not open.");
   secondCdp = connectCdp(secondPage.webSocketDebuggerUrl);
   await secondCdp.ready;
   await secondCdp.send("Runtime.enable");
   await waitFor(() => evaluate(secondCdp, `document.readyState === "complete" && document.querySelector('[data-action="connect-agent"]')?.dataset.mcpStatus === "connected"`), "Second editor did not restore the remembered connection.");
   for (let index = 0; index < 5; index += 1) {
-    const { targetId } = await cdp.send("Target.createTarget", { url: browserPageUrl });
+    const { targetId } = await cdp.send("Target.createTarget", { url: editorPageUrl.href });
     const page = await waitFor(async () => (await waitForJson("/json/list")).find((item) => item.id === targetId), `Stress editor ${index + 3} did not open.`);
     const extraCdp = connectCdp(page.webSocketDebuggerUrl);
     await extraCdp.ready;
@@ -457,7 +1036,7 @@ try {
   }
   const stressEditors = (await tool("list_editors")).structuredContent.editors;
   if (stressEditors.length < 7) throw new Error(`Seven-tab transport stress setup connected only ${stressEditors.length} editors.`);
-  const previousCoverUrl = await waitFor(() => evaluate(secondCdp, `document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]')?.src || ""`), "The dashboard did not render its initial composed project cover.");
+  const previousThumbnailUrl = await waitFor(() => evaluate(secondCdp, `document.querySelector('.project-card[data-project-id="${createdProject.projectId}"] [data-project-preview-slide-id="${addedSlide.createdSlideId}"] img.thumb-rendered')?.src || ""`), "The dashboard did not render its initial project slide thumbnail.");
   await evaluate(secondCdp, `(() => {
     window.__carouselBotOriginalRequestAnimationFrame = window.requestAnimationFrame;
     window.requestAnimationFrame = () => 0;
@@ -473,10 +1052,11 @@ try {
     })()`), "A tool action performed in another editor was not announced in this tab.");
     if (crossTabActivity.label !== "Codex" || !crossTabActivity.icon?.includes("codex-logo-colored")) throw new Error(`Cross-tab activity used the wrong client identity: ${JSON.stringify(crossTabActivity)}`);
     await waitFor(() => evaluate(secondCdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === "Cross-tab sync verified")`), "The dashboard did not receive the cross-tab project update.");
+    await tool("update_slide", { projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, backgroundColor: "#101820" });
     await waitFor(() => evaluate(secondCdp, `(() => {
-      const image = document.querySelector('[data-project-cover-id="${createdProject.projectId}"] img[data-composite-cover="true"]');
-      return image?.src && image.src !== ${JSON.stringify(previousCoverUrl)};
-    })()`), "The dashboard did not refresh its composed cover while animation frames were paused.");
+      const image = document.querySelector('.project-card[data-project-id="${createdProject.projectId}"] [data-project-preview-slide-id="${addedSlide.createdSlideId}"] img.thumb-rendered');
+      return image?.src && image.src !== ${JSON.stringify(previousThumbnailUrl)};
+    })()`), "The dashboard did not refresh its slide thumbnail while animation frames were paused.");
   } finally {
     await evaluate(secondCdp, `(() => {
       window.requestAnimationFrame = window.__carouselBotOriginalRequestAnimationFrame;
@@ -489,7 +1069,7 @@ try {
     .catch((error) => { if (!/revision changed/.test(error.message)) throw error; });
   await tool("end_edit_session", { editSessionId });
   editSessionId = null;
-  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, composedDashboardCover: true, dashboardProjectNotification: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, operationsCovered: 34, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ connected: true, optInRequired: true, reconnectAfterReload: true, reconnectAfterDaemonReplacement: true, localFonts: localFontAcceptance, sevenTabConnectionStress: true, crossTabSync: true, crossTabActionNotifications: true, dashboardSlideFilmstrip: true, dashboardProjectNotification: true, folderCreateAndMove: true, independentProjectDuplicates: true, pendingUiSavePreservedDuringMcpMove: true, connectionStatusLeftAligned: true, backgroundEditsPreserveView: true, customAspectRatioAndSolidBackground: true, mixedSlideAspectRatios: true, sourceImageAspectRatios: true, sourceRatioExportsExcludeWorkspace: true, slideRatioLayerRemapping: true, slideRatioExportDimensions: true, roleBasedTextDefaults: true, automaticTextHeightFitting: true, agentIdentityNotificationIcon: true, compactToolbar: true, fittedFullBox: true, symmetricPerLinePaddingAfterReload: true, projectId: createdProject.projectId, slideId: addedSlide.createdSlideId, textLayers: 2, imageLayers: 1, agentVideoImport: true, agentVideoPlayback: true, agentVideoFrames: true, agentVideoAudioExport: true, mixedMediaExport: true, operationsCovered: 82, previewBytes: imageContent.data.length, exportBytes: (await stat(exportPath)).size, projectExports: exportedProject.fileCount }, null, 2)}\n`);
 } finally {
   await closeChromeGracefully();
   for (const extraCdp of additionalCdps) extraCdp.close();

@@ -4,13 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -43,3 +44,55 @@ jobs:
         run: npm run test:editor:browser
         env:
           CHROME_PATH: /usr/bin/google-chrome
+
+  deploy-production:
+    name: Deploy production
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://carousel.bot
+
+    steps:
+      - name: Check whether deployment credentials are configured
+        id: credentials
+        env:
+          HAS_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [[ "$HAS_CLOUDFLARE_API_TOKEN" == "true" && "$HAS_CLOUDFLARE_ACCOUNT_ID" == "true" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Production deployment skipped until the Cloudflare environment secrets are configured."
+          fi
+
+      - name: Check out verified main
+        if: steps.credentials.outputs.configured == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.credentials.outputs.configured == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies without lifecycle scripts
+        if: steps.credentials.outputs.configured == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Build the production bundle
+        if: steps.credentials.outputs.configured == 'true'
+        run: npm run build
+
+      - name: Deploy the verified bundle to Cloudflare Pages
+        if: steps.credentials.outputs.configured == 'true'
+        run: ./node_modules/.bin/wrangler pages deploy dist --project-name slides-editor --branch main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

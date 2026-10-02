@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { cp, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { EDITOR_URL, PACKAGE_NAME, PACKAGE_ROOT, PACKAGE_VERSION } from "./config.mjs";
+import { companionUpgrade } from "./companion.mjs";
 
 const supported = ["claude", "codex", "hermes", "opencode", "openclaw"];
 const serverName = "carouselbot";
@@ -43,13 +44,35 @@ function openCodeSnippet(specifier, version = commandVersion("opencode")) {
     : { mcp: { [serverName]: { ...server, enabled: true } } }, null, 2);
 }
 
+export function setupSkillTargets(homeDirectory = homedir(), hermesHome = process.env.HERMES_HOME) {
+  const targets = [
+    join(homeDirectory, ".agents", "skills", "carouselbot"),
+    join(homeDirectory, ".claude", "skills", "carouselbot"),
+    join(homeDirectory, ".hermes", "skills", "carouselbot"),
+  ];
+  if (hermesHome?.trim()) targets.push(join(resolve(hermesHome.trim()), "skills", "carouselbot"));
+  return [...new Set(targets)];
+}
+
+export function clientSpawnOptions(client) {
+  if (client === "hermes") {
+    // Hermes tool discovery prompts even after the caller approved CarouselBot
+    // setup, and an existing entry adds an overwrite prompt first. Feed both
+    // approvals explicitly; EOF otherwise looks like a successful cancel.
+    return { input: "y\ny\n", stdio: ["pipe", "inherit", "inherit"] };
+  }
+  return { stdio: "inherit" };
+}
+
+function clientConfigurationPresent(client) {
+  if (client !== "hermes") return true;
+  const result = spawnSync("hermes", ["mcp", "list"], { encoding: "utf8" });
+  return result.status === 0 && /(?:^|\s)carouselbot(?:\s|$)/m.test(String(result.stdout || "") + String(result.stderr || ""));
+}
+
 async function installSkill() {
   const source = join(PACKAGE_ROOT, "skill", "carouselbot");
-  const targets = [
-    join(homedir(), ".agents", "skills", "carouselbot"),
-    join(homedir(), ".claude", "skills", "carouselbot"),
-    join(homedir(), ".hermes", "skills", "carouselbot"),
-  ];
+  const targets = setupSkillTargets();
   for (const target of targets) {
     await mkdir(target, { recursive: true });
     await cp(source, target, { recursive: true, force: true });
@@ -92,15 +115,23 @@ export async function runSetup(arguments_) {
   for (const client of clients) {
     const command = shellCommand(client, specifier);
     if (!command) continue;
-    for (const remove of removeCommands(client)) spawnSync(remove[0], remove.slice(1), { stdio: "ignore" });
-    const result = spawnSync(command[0], command.slice(1), { stdio: "inherit" });
-    if (result.status === 0) configured.push(client);
-    else process.stderr.write(`Could not configure ${client}; its command is printed above for manual setup.\n`);
+    if (client !== "hermes") {
+      for (const remove of removeCommands(client)) spawnSync(remove[0], remove.slice(1), { stdio: "ignore" });
+    }
+    const result = spawnSync(command[0], command.slice(1), clientSpawnOptions(client));
+    if (result.status === 0 && clientConfigurationPresent(client)) {
+      configured.push(client);
+      if (client === "hermes") {
+        const legacyRemove = removeCommands(client).find((remove) => remove.at(-1) === legacyServerName);
+        if (legacyRemove) spawnSync(legacyRemove[0], legacyRemove.slice(1), { input: "y\n", stdio: ["pipe", "ignore", "ignore"] });
+      }
+    } else process.stderr.write(`Could not verify ${client}'s CarouselBot config; the existing config was preserved and its command is printed above for manual setup.\n`);
   }
   const skillTargets = await installSkill();
-  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\n\nOpen ${EDITOR_URL} in your normal local browser and click Connect AI. Do not use a sandboxed agent browser.\n`);
+  const companion = await companionUpgrade();
+  process.stdout.write(`\nConfigured: ${configured.join(", ") || "none automatically"}\nSkill installed in:\n${skillTargets.map((value) => `  ${value}`).join("\n")}\nCompanion: ${companion.version} (${companion.upgraded ? "upgraded automatically" : "already current"})\n\nOpen ${EDITOR_URL} in your normal local browser and click Connect AI. Do not use a sandboxed agent browser.\n`);
   process.stdout.write(`First connection check (no browser automation): npx -y ${specifier} call list_editors\n`);
-  if (clients.includes("hermes")) process.stdout.write("Hermes can also refresh native tools in place with /reload-mcp and /reload-skills.\n");
+  if (clients.includes("hermes")) process.stdout.write("The companion and browser reconnect automatically. Hermes only needs /reload-mcp when adding entirely new native tool names to an already-running session; the CLI fallback remains available immediately.\n");
   if (clients.includes("claude")) process.stdout.write("Claude may require a new session for native MCP registration; use the CLI fallback immediately instead of stopping.\n");
   if (clients.includes("opencode")) process.stdout.write("OpenCode currently uses its JSON config; merge the snippet printed above into opencode.json.\n");
   return { clients, configured, skillTargets };

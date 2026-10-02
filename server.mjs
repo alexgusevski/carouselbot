@@ -8,8 +8,10 @@ const host = "127.0.0.1";
 const port = Number(process.env.CAROUSELBOT_PORT || process.env.SLIDE_STUDIO_PORT) || 4173;
 
 const files = new Map([
+  ["/assets/mediabunny-1.60.0.min.mjs", ["node_modules/mediabunny/dist/bundles/mediabunny.min.mjs", "text/javascript; charset=utf-8"]],
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/dashboard", ["index.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/app-config.js", ["app-config.js", "text/javascript; charset=utf-8"]],
   ["/domain-migration.js", ["domain-migration.js", "text/javascript; charset=utf-8"]],
@@ -21,7 +23,7 @@ const files = new Map([
   ["/assets/codex-logo-colored-53743834.svg", ["assets/codex-logo-colored-53743834.svg", "image/svg+xml"]],
   ["/assets/hermes-agent-icon-e5340726.webp", ["assets/hermes-agent-icon-e5340726.webp", "image/webp"]],
   ["/assets/Octicons-mark-github.svg", ["assets/Octicons-mark-github.svg", "image/svg+xml"]],
-  ["/assets/favicon.svg", ["assets/favicon.svg", "image/svg+xml"]],
+  ["/assets/carouselbot-bot-icon.svg", ["assets/carouselbot-bot-icon.svg", "image/svg+xml"]],
 ]);
 
 const server = createServer(async (request, response) => {
@@ -31,7 +33,7 @@ const server = createServer(async (request, response) => {
     : null;
   const entry = files.get(url.pathname)
     || sourceModule
-    || (/^\/projects\/[^/]+\/?$/.test(url.pathname) ? files.get("/") : null);
+    || (/^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname) ? files.get("/") : null);
 
   if (!entry || (request.method !== "GET" && request.method !== "HEAD")) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

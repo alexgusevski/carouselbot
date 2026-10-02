@@ -11,6 +11,12 @@ import {
   layerKey,
   overlayCrop,
   initialOverlayWidth,
+  initialTextBoxHeight,
+  aspectRatioFromDimensions,
+  normalizeAspectRatio,
+  slideCanvasDimensions,
+  remapLayerGeometryBetweenCanvases,
+  clampLayerCoordinate,
   slideItems,
   nextLayerZ,
   clamp,
@@ -32,12 +38,14 @@ import {
   constrainOverlay,
   constrainImagePosition,
 } from "./editor-state.mjs";
-import { putProject } from "./project-store.mjs";
 import { getImageDimensions, fingerprintData } from "./slide-renderer.mjs";
+import { canonicalSolidBackgroundColor, solidBackgroundDataUrl } from "./slide-background.mjs";
+import { DEFAULT_FONT_FAMILY, DEFAULT_FONT_WEIGHT } from "./project-fonts.mjs";
 
 export function createEditorActions({
   recordHistory,
   scheduleSave,
+  flushPendingSave,
   reloadProjectFromDb,
   renderEditor,
   toast,
@@ -142,7 +150,7 @@ export function createEditorActions({
     if (!slide) return;
     recordHistory();
     const width = 0.64;
-    const height = 0.08;
+    const height = initialTextBoxHeight(activeProject(), 64, slide);
     const text = {
       id: uid(),
       text: "Your text",
@@ -151,6 +159,9 @@ export function createEditorActions({
       width,
       height,
       size: 64,
+      fontFamily: DEFAULT_FONT_FAMILY,
+      fontWeight: DEFAULT_FONT_WEIGHT,
+      fontStyle: "normal",
       style: "plain",
       outlineWidth: DEFAULT_OUTLINE_WIDTH,
       color: "#FFFFFF",
@@ -214,9 +225,10 @@ export function createEditorActions({
       slide.imageData = imageData;
       slide.width = dimensions.width;
       slide.height = dimensions.height;
+      delete slide.backgroundColor;
       slide.backgroundRevision = uid();
       constrainImagePosition(slide);
-      clearSlideThumbnail(slide.id);
+      clearSlideThumbnail(slide.id, project.id);
       scheduleSave();
       renderEditor();
       toast("Slide background changed");
@@ -224,6 +236,64 @@ export function createEditorActions({
       console.error(error);
       toast("That image couldn’t be used as the slide background.");
     }
+  }
+
+  function setSlideAspectRatio(slideId, value) {
+    const project = activeProject();
+    const slide = project?.slides.find((item) => item.id === slideId);
+    if (!project || !slide) return false;
+
+    const sourceCanvas = slideCanvasDimensions(project, slide);
+    const aspectRatio = normalizeAspectRatio(value, sourceCanvas.aspectRatio);
+    if (aspectRatio === sourceCanvas.aspectRatio) return false;
+    const solidBackgroundColor = canonicalSolidBackgroundColor(slide, project);
+    const targetSlide = { ...slide, aspectRatio };
+    const targetCanvas = slideCanvasDimensions(project, targetSlide);
+
+    exitCropMode();
+    recordHistory();
+    slide.texts = (slide.texts || []).map((text) => (
+      remapLayerGeometryBetweenCanvases(text, sourceCanvas, targetCanvas, { maxHeight: 2.4 })
+    ));
+    slide.overlays = (slide.overlays || []).map((overlay) => {
+      const geometry = remapLayerGeometryBetweenCanvases(overlay, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
+      const asset = project.assets?.find((item) => item.id === overlay.assetId);
+      return constrainOverlay(geometry, asset, { project, slide: targetSlide });
+    });
+    slide.aspectRatio = aspectRatio;
+    if (solidBackgroundColor) {
+      slide.imageData = solidBackgroundDataUrl(solidBackgroundColor, project, slide);
+      slide.width = targetCanvas.width;
+      slide.height = targetCanvas.height;
+      slide.backgroundRevision = uid();
+    }
+    constrainImagePosition(slide, project);
+    clearSlideThumbnail(slide.id, project.id);
+    state.shareAllCache = null;
+    scheduleSave();
+    renderEditor();
+    toast(`Slide format changed to ${aspectRatio}`);
+    return true;
+  }
+
+  function duplicateSlide(slideId) {
+    const project = activeProject();
+    const index = project?.slides.findIndex((slide) => slide.id === slideId) ?? -1;
+    if (index < 0) return;
+
+    recordHistory();
+    clearLayerSelection();
+    const copy = structuredClone(project.slides[index]);
+    copy.id = uid();
+    copy.name = `${copy.name} copy`;
+    copy.texts = (copy.texts || []).map((text) => ({ ...text, id: uid() }));
+    copy.overlays = (copy.overlays || []).map((overlay) => ({ ...overlay, id: uid() }));
+    project.slides.splice(index + 1, 0, copy);
+    state.activeSlideId = copy.id;
+    state.photoAdjustMode = false;
+    scheduleSave();
+    renderEditor();
+    toast("Slide duplicated");
   }
 
   function removeSlide(slideId) {
@@ -234,7 +304,7 @@ export function createEditorActions({
 
     recordHistory();
     project.slides.splice(index, 1);
-    clearSlideThumbnail(slideId);
+    clearSlideThumbnail(slideId, project.id);
 
     if (state.activeSlideId === slideId) {
       state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
@@ -264,6 +334,7 @@ export function createEditorActions({
 
   async function addDroppedAssetsToSlide(files, event) {
     const slide = activeSlide();
+    if (!slide && files.some(isVideoFile)) return addSlidesFromFiles(files);
     if (!slide) {
       toast("Create a slide before adding an asset to the canvas.");
       return;
@@ -315,7 +386,7 @@ export function createEditorActions({
       assetId: asset.id,
       x: 0.33,
       y: 0.36,
-      width: initialOverlayWidth(asset),
+      width: initialOverlayWidth(asset, activeProject(), slide),
       rotation: 0,
       z: nextLayerZ(slide),
     }, asset);
@@ -357,7 +428,7 @@ export function createEditorActions({
         id: uid(), text: value, x, y, width, height, size, color,
         style: "plain", align: "left", rotation: 0, z: 2,
       });
-      const slide = { id: uid(), name: "Prompt to app · video demo", imageData: canvas.toDataURL(),
+      const slide = { id: uid(), name: "Prompt to app · video demo", aspectRatio: "9:16", imageData: canvas.toDataURL(),
         width: 1080, height: 1920, imageScale: 1, imageX: 0, imageY: 0,
         overlays: [{ id: uid(), assetId: asset.id, x: 0.51, y: 0.29, width: 0.44, rotation: 0, z: 1 }],
         texts: [
@@ -411,20 +482,17 @@ export function createEditorActions({
         }
       }
       if (!added) {
-        toast("Those files aren’t usable images.");
+        toast("Those files aren’t usable images or videos.");
         renderEditor();
         return;
       }
-      const baseRevision = Number(project.revision) || 0;
-      project.updatedAt = Date.now();
-      project.revision = baseRevision + 1;
-      await putProject(project, { expectedRevision: baseRevision });
+      scheduleSave(project);
+      await flushPendingSave();
       toast(`${added} ${added === 1 ? "asset" : "assets"} uploaded`);
       renderEditor();
     } catch (error) {
       console.error(error);
-      if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
-      toast("One of those files couldn’t be added.");
+      toast(error.message || "One of those files couldn’t be added.");
       renderEditor();
     }
   }
@@ -471,7 +539,7 @@ export function createEditorActions({
   async function addSlidesFromFiles(files, { activateFirstNew = false } = {}) {
     const imageFiles = files.filter((file) => isImageFile(file) || isVideoFile(file));
     if (!imageFiles.length) {
-      if (files.length) toast("Drop an image file here.");
+      if (files.length) toast("Drop an image or video file here.");
       return;
     }
     const project = activeProject();
@@ -491,6 +559,7 @@ export function createEditorActions({
           const slide = {
             id: uid(),
             name: file.name.replace(/\.[^.]+$/, "") || "Slide",
+            aspectRatio: aspectRatioFromDimensions(dimensions.width, dimensions.height, project.aspectRatio),
             imageData,
             width: dimensions.width,
             height: dimensions.height,
@@ -564,7 +633,7 @@ export function createEditorActions({
     });
     if (!copies.length) return;
     const token = uid();
-    const copied = { token, layers: copies };
+    const copied = { token, sourceCanvas: slideCanvasDimensions(activeProject(), activeSlide()), layers: copies };
     rememberCopiedLayer(copied);
     event.preventDefault();
     event.clipboardData?.setData(CLIPBOARD_LAYER_TYPE, JSON.stringify(copied));
@@ -600,6 +669,8 @@ export function createEditorActions({
     if (!project || !slide || !layers.length) return false;
     if (layers.some((layer) => layer.kind === "overlay" && !layer.asset)) return false;
     const offset = 0.03;
+    const targetCanvas = slideCanvasDimensions(project, slide);
+    const sourceCanvas = copied.sourceCanvas;
     const pastedLayers = [];
     const pastedKeys = [];
     let nextZ = nextLayerZ(slide);
@@ -616,25 +687,29 @@ export function createEditorActions({
           asset = { ...layer.asset, id: uid() };
           project.assets.push(asset);
         }
+        const geometry = remapLayerGeometryBetweenCanvases(layer.item, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
         const pasted = constrainOverlay({
-          ...layer.item,
+          ...geometry,
           id: uid(),
           assetId: asset.id,
-          x: layer.item.x + offset,
-          y: layer.item.y + offset,
+          x: geometry.x + offset,
+          y: geometry.y + offset,
           z: nextZ,
-        }, asset);
+        }, asset, { project, slide });
+        pasted.x = clampLayerCoordinate(pasted.x, pasted.width);
+        pasted.y = clampLayerCoordinate(pasted.y, pasted.height);
         nextZ += 1;
         slide.overlays.push(pasted);
         pastedLayers.push({ kind: "overlay", item: { ...pasted }, asset: { ...asset } });
         pastedKeys.push(layerKey("overlay", pasted.id));
         return;
       }
+      const geometry = remapLayerGeometryBetweenCanvases(layer.item, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
       const pasted = {
-        ...layer.item,
+        ...geometry,
         id: uid(),
-        x: clamp(layer.item.x + offset, 0, 1 - layer.item.width),
-        y: clamp(layer.item.y + offset, 0, 1 - layer.item.height),
+        x: clampLayerCoordinate(geometry.x + offset, geometry.width),
+        y: clampLayerCoordinate(geometry.y + offset, geometry.height),
         z: nextZ,
       };
       nextZ += 1;
@@ -643,6 +718,7 @@ export function createEditorActions({
       pastedKeys.push(layerKey("text", pasted.id));
     });
     copied.layers = pastedLayers;
+    copied.sourceCanvas = targetCanvas;
     setLayerSelection(pastedKeys);
     state.photoAdjustMode = false;
     state.mobileInspectorOpen = true;
@@ -694,7 +770,7 @@ export function createEditorActions({
       imageData,
       width: dimensions.width,
       height: dimensions.height,
-            ...(dimensions.videoData ? dimensions : {}),
+      ...(dimensions.videoData ? dimensions : {}),
       fingerprint,
     };
     project.assets.push(asset);
@@ -713,9 +789,13 @@ export function createEditorActions({
     if (!files.length) return;
     event.preventDefault();
     state.pasteBusy = true;
-    recordHistory();
     const assets = [];
     try {
+      if (!activeSlide() && files.some(isVideoFile)) {
+        await addSlidesFromFiles(files);
+        return;
+      }
+      recordHistory();
       for (const [index, file] of files.entries()) {
         try {
           const asset = await createAssetFromFile(file, files.length > 1 ? `Pasted image ${index + 1}` : "Pasted image");
@@ -725,7 +805,7 @@ export function createEditorActions({
         }
       }
       if (!assets.length) {
-        toast("That clipboard image couldn’t be added.");
+        toast("That clipboard media couldn’t be added.");
         return;
       }
       const slide = activeSlide();
@@ -754,6 +834,8 @@ export function createEditorActions({
     deleteSelectedText,
     beginSlideBackgroundChange,
     handleSlideBackgroundChange,
+    setSlideAspectRatio,
+    duplicateSlide,
     removeSlide,
     reorderSlide,
     addDroppedAssetsToSlide,

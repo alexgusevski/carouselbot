@@ -1,8 +1,6 @@
 import {
-  DESIGN_WIDTH,
   layerKey,
   overlayCrop,
-  textAlignment,
   rotateDelta,
   applyCropValues,
   clamp,
@@ -26,6 +24,7 @@ import {
 } from "./editor-state.mjs";
 import {
   paintTextContent,
+  updateInlineTextLayout,
   updateTextBox,
   updateOverlayBox,
   updateStageImage,
@@ -41,6 +40,29 @@ export function createLayerInteractions({
   ensureTextFits,
   deleteSelectedLayers,
 }) {
+  const layerPointerHandlers = new WeakMap();
+  const boundInteractionSurfaces = new WeakSet();
+
+  function bindSelectedLayerPriority(box, handler) {
+    layerPointerHandlers.set(box, handler);
+    const surface = box.closest(".layer-stack");
+    if (!surface || boundInteractionSurfaces.has(surface)) return;
+    boundInteractionSurfaces.add(surface);
+    surface.addEventListener("pointerdown", (event) => {
+      // Modifier clicks must still reach other layers for additive selection.
+      if (state.photoAdjustMode || event.metaKey || event.ctrlKey || event.button !== 0) return;
+      const hits = document.elementsFromPoint(event.clientX, event.clientY)
+        .map((target) => ({ target, box: target.closest(".overlay-box, .text-box") }))
+        .filter((hit) => hit.box?.classList.contains("is-selected") && surface.contains(hit.box));
+      const hit = hits.find(({ target }) => target.closest("[data-corner], [data-edge], [data-rotate], [data-crop]")) || hits[0];
+      if (!hit || hit.box.contains(event.target)) return;
+      const selectedHandler = layerPointerHandlers.get(hit.box);
+      if (!selectedHandler) return;
+      event.stopPropagation();
+      selectedHandler(event, hit.target);
+    }, { capture: true });
+  }
+
   function prepareLayerPointerSelection(event, kind, id) {
     const key = layerKey(kind, id);
     if ((event.metaKey || event.ctrlKey) && event.button === 0) {
@@ -57,12 +79,12 @@ export function createLayerInteractions({
   }
 
   function bindOverlayBox(box) {
-    box.addEventListener("pointerdown", (event) => {
+    const handlePointerDown = (event, target = event.target) => {
       if (state.photoAdjustMode) return;
-      const corner = event.target.closest("[data-corner]")?.dataset.corner;
-      const edge = event.target.closest("[data-edge]")?.dataset.edge;
-      const rotate = event.target.closest("[data-rotate]");
-      const cropHandle = event.target.closest("[data-crop]")?.dataset.crop;
+      const corner = target.closest("[data-corner]")?.dataset.corner;
+      const edge = target.closest("[data-edge]")?.dataset.edge;
+      const rotate = target.closest("[data-rotate]");
+      const cropHandle = target.closest("[data-crop]")?.dataset.crop;
       if (!prepareLayerPointerSelection(event, "overlay", box.dataset.overlayId)) return;
       if (state.croppingOverlayId && state.croppingOverlayId !== box.dataset.overlayId) {
         finishCrop();
@@ -70,14 +92,16 @@ export function createLayerInteractions({
       }
       if (state.croppingOverlayId === box.dataset.overlayId) {
         if (cropHandle) beginCropResize(event, box, cropHandle);
-        else if (event.target.closest(".crop-rect")) beginCropMove(event, box);
+        else if (target.closest(".crop-rect")) beginCropMove(event, box);
         return;
       }
       if (rotate) beginOverlayRotate(event, box);
       else if (corner) beginOverlayResize(event, box, corner);
       else if (edge) beginOverlayResize(event, box, edge, { preserveAspect: false });
       else beginOverlayDrag(event, box);
-    });
+    };
+    box.addEventListener("pointerdown", handlePointerDown);
+    bindSelectedLayerPriority(box, handlePointerDown);
     box.addEventListener("contextmenu", (event) => {
       showLayerMenu(event, "overlay", box.dataset.overlayId);
     });
@@ -258,6 +282,7 @@ export function createLayerInteractions({
   }
 
   function beginOverlayResize(event, box, handle, { preserveAspect = true } = {}) {
+    if (selectedLayers().length > 1) return beginSelectionResize(event, box, handle, preserveAspect);
     event.preventDefault();
     event.stopPropagation();
     const overlay = selectedOverlay();
@@ -345,17 +370,17 @@ export function createLayerInteractions({
 
   function bindTextBox(box) {
     const content = box.querySelector(".text-visual--inside .text-content");
-    box.addEventListener("pointerdown", (event) => {
-      const corner = event.target.closest("[data-corner]")?.dataset.corner;
-      const edge = event.target.closest("[data-edge]")?.dataset.edge;
-      const rotate = event.target.closest("[data-rotate]");
-      const contentTarget = event.target.closest(".text-content, .text-editor");
+    const handlePointerDown = (event, target = event.target) => {
+      const corner = target.closest("[data-corner]")?.dataset.corner;
+      const edge = target.closest("[data-edge]")?.dataset.edge;
+      const rotate = target.closest("[data-rotate]");
+      const contentTarget = target.closest(".text-content, .text-editor");
       const wasSelected = isLayerSelected("text", box.dataset.textId);
 
       if (box.classList.contains("is-editing")) {
         if (contentTarget && !corner && !edge && !rotate) return;
         endTextEditing(box);
-      } else if (wasSelected && contentTarget && event.button === 0 && !(event.metaKey || event.ctrlKey)) {
+      } else if (wasSelected && selectedLayers().length === 1 && contentTarget && event.button === 0 && !(event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         event.stopPropagation();
         startTextEditing(box, { clientX: event.clientX, clientY: event.clientY });
@@ -371,7 +396,9 @@ export function createLayerInteractions({
       else if (corner) beginResize(event, box, corner);
       else if (edge) beginResize(event, box, edge);
       else beginDrag(event, box);
-    });
+    };
+    box.addEventListener("pointerdown", handlePointerDown);
+    bindSelectedLayerPriority(box, handlePointerDown);
     box.addEventListener("contextmenu", (event) => {
       if (box.classList.contains("is-editing")) return;
       showLayerMenu(event, "text", box.dataset.textId);
@@ -443,22 +470,24 @@ export function createLayerInteractions({
     box.classList.add("is-editing", "is-selected");
     const editor = document.createElement("span");
     editor.className = "text-editor";
-    editor.contentEditable = "true";
+    editor.contentEditable = "plaintext-only";
     editor.spellcheck = false;
     editor.setAttribute("role", "textbox");
     editor.setAttribute("aria-label", "Edit text layer");
     editor.setAttribute("aria-multiline", "true");
-    editor.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    editor.style.textAlign = textAlignment(text);
-    editor.textContent = text.text || "";
+    // A plaintext contenteditable needs one extra terminal newline as a caret
+    // placeholder. It is not part of the document (including after reopening).
+    editor.textContent = (text.text || "") + (text.text?.endsWith("\n") ? "\n" : "");
     content.setAttribute("aria-hidden", "true");
     contentWrap.appendChild(editor);
+    updateInlineTextLayout(text, editor, box);
 
     editor.addEventListener("input", () => {
       text.text = editor.innerText.replace(/\n$/, "");
       box.querySelectorAll(".text-content").forEach((renderedContent) => {
         paintTextContent(text, renderedContent, box);
       });
+      updateInlineTextLayout(text, editor, box);
       const textarea = app.querySelector("#text-value");
       if (textarea) textarea.value = text.text;
       ensureTextFits(text);
@@ -547,7 +576,57 @@ export function createLayerInteractions({
     window.addEventListener("pointercancel", end);
   }
 
+  // Apply the grabbed layer's relative size change around each layer's opposite handle.
+  function beginSelectionResize(event, box, handle, preserveAspect) {
+    event.preventDefault();
+    event.stopPropagation();
+    const entries = selectedLayers().map(({ kind, item }) => {
+      const height = kind === "overlay" ? getOverlayMetrics(item).height : item.height;
+      return { kind, item, start: { ...item, height, rotation: item.rotation || 0,
+        centerX: item.x + item.width / 2, centerY: item.y + height / 2,
+        clientX: event.clientX, clientY: event.clientY } };
+    });
+    const primary = entries.find(({ item }) => item.id === (box.dataset.textId || box.dataset.overlayId));
+    if (!primary) return;
+    recordHistory();
+    try { box.setPointerCapture(event.pointerId); } catch { /* Window tracking is the fallback. */ }
+    const move = (moveEvent) => {
+      const delta = pointerDeltaInLayerAxes(moveEvent, primary.start, primary.start.rotation);
+      const next = resizeLayerRect(primary.start, handle, delta, {
+        minWidth: 0.001, minHeight: 0.001, preserveAspect,
+      });
+      // Clamp the shared scale once so smaller layers keep the same relative change.
+      const minX = Math.max(...entries.map(({ kind, start }) => (kind === "text" ? 0.1 : 0.04) / start.width));
+      const minY = Math.max(...entries.map(({ kind, start }) => (kind === "text" ? 0.045 : 0.025) / start.height));
+      const maxX = Math.min(...entries.map(({ kind, start }) => kind === "overlay" ? 2.4 / start.width : Infinity));
+      const maxY = Math.min(...entries.map(({ kind, start }) => kind === "overlay" ? 2.4 / start.height : Infinity));
+      let scaleX = handle.match(/[ew]/) ? clamp(next.width / primary.start.width, minX, maxX) : 1;
+      let scaleY = handle.match(/[ns]/) ? clamp(next.height / primary.start.height, minY, maxY) : 1;
+      if (preserveAspect) scaleX = scaleY = clamp(next.width / primary.start.width, Math.max(minX, minY), Math.min(maxX, maxY));
+      entries.forEach(({ kind, item, start }) => {
+        const resized = resizeLayerRect(start, handle, {
+          x: start.width * (scaleX - 1) * (handle.includes("w") ? -1 : 1),
+          y: start.height * (scaleY - 1) * (handle.includes("n") ? -1 : 1),
+        }, { minWidth: 0.001, minHeight: 0.001 });
+        Object.assign(item, resized);
+        if (kind === "text") updateTextBox(item);
+        else updateOverlayBox(item);
+      });
+      scheduleSave();
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      refreshSelection();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
+
   function beginResize(event, box, handle) {
+    if (selectedLayers().length > 1) return beginSelectionResize(event, box, handle, false);
     event.preventDefault();
     event.stopPropagation();
     const text = selectedText();

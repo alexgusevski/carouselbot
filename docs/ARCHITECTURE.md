@@ -1,6 +1,6 @@
 # Editor architecture
 
-CarouselBot is a static, local-first browser application. There is no application backend: projects and imported images remain in IndexedDB, while the optional MCP companion communicates with the open browser over loopback.
+CarouselBot is a browser application with a local mode and an authenticated cloud mode. Local projects and imported images remain in IndexedDB unless the user explicitly creates a 24-hour share link or imports them into an account. Two Pages Functions store and retrieve compressed, immutable snapshots from Workers KV; the recipient imports an independent IndexedDB project. The optional MCP companion communicates with the open browser over loopback.
 
 The editor deliberately uses a small ES-module graph rather than a framework or bundler. Each module represents a stable responsibility, while `editor.mjs` remains the composition root and compatibility facade.
 
@@ -8,14 +8,16 @@ The editor deliberately uses a small ES-module graph rather than a framework or 
 
 ```text
 main ───────────────> editor + agent-commands
-agent-commands ─────> editor + store + view + renderer + state + model
+agent-commands ─────> editor + store + view + renderer + fonts + background + state + model
 editor ─────────────> projects + actions + output + UI + store + state + model
-UI ─────────────────> interactions + view + state + model
-projects ───────────> store + view + state + model
-actions ────────────> store + renderer + state + model
-output ─────────────> renderer + view + state + model
+UI ─────────────────> interactions + view + fonts + state + model
+projects ───────────> store + view + fonts + background + state + model
+actions ────────────> store + renderer + fonts + background + state + model
+output ─────────────> store + renderer + view + state + model
 interactions ───────> view + state + model
-store/view/renderer ─> state + model
+view/renderer ──────> fonts + background + state + model
+background ─────────> model
+fonts/store ────────> model
 state ──────────────> model
 ```
 
@@ -27,7 +29,7 @@ An arrow points from an importing module toward its dependencies. The four featu
 
 ### Model
 
-`editor-model.mjs` contains constants and behavior that does not depend on mutable editor state or browser lifecycle: routes, color normalization, project cloning, layer ordering, crop normalization, image layout, text wrapping, box geometry, and safe filenames. This is the primary unit-test seam.
+`editor-model.mjs` contains constants and behavior that does not depend on mutable editor state or browser lifecycle: project and virtual-folder routes, folder-path normalization, color normalization, project cloning, layer ordering, crop normalization, image layout, text wrapping, box geometry, and safe filenames. This is the primary unit-test seam.
 
 ### State
 
@@ -39,9 +41,15 @@ An arrow points from an importing module toward its dependencies. The four featu
 
 `editor-projects.mjs` owns the behaviors that combine persistence with rendering, such as migration imports, stale-project reloads, debounced saves, external project updates, history, routes, and project deletion. It also contains the legacy-record normalization seam exercised by Node tests.
 
+Dashboard folders are derived from each project's optional canonical `folderPath` (for example `/campaigns`). They are intentionally not separate IndexedDB records: moving a project remains one revision-checked project write, cross-tab notifications need no second protocol, and legacy-origin migration copies folder membership with the project. Empty folders therefore disappear automatically.
+
 ### Views and rendering
 
 `editor-view.mjs` creates editor markup and updates live layer DOM. `slide-renderer.mjs` draws the export representation onto a canvas. Both use the same model helpers for colors, crops, layer order, text alignment, wrapping, and boxed-text geometry.
+
+`slide-background.mjs` defines the canonical generated solid-background payload shared by project normalization, agent inspection, and rendering. A stored color is treated as authoritative only while that payload is still the slide background, so replacing the image cannot leave a stale color covering it.
+
+`project-fonts.mjs` owns project-font normalization, private local face data, `FontFace` registration, public redaction, and the shared font descriptors used by DOM and canvas rendering. `ensureProjectFontsLoaded` is the exact-font gate before measurement or rendered output. A missing or invalid imported face remains editable with a visible warning, but rendering and export fail with `FONT_UNAVAILABLE` instead of silently accepting fallback pixels.
 
 Dashboard covers and slide thumbnails also use the final slide renderer. `editor-output.mjs` versions and revokes their Blob URLs to prevent stale previews and leaks, and owns the related PNG download and Web Share workflows.
 
@@ -72,16 +80,27 @@ window.slideStudioAgent
 
 The local MCP bridge waits for the readiness promise before processing operations.
 
+The stdio MCP process and shared loopback daemon have independent lifetimes. The daemon health response advertises its internal action set and daemon API version; a newly launched MCP process replaces a daemon that cannot implement its tool surface before registering with the host. Existing MCP processes and remembered browser connections reconnect to the replacement automatically. Package setup additionally upgrades a compatible-but-older daemon so installed agent skills, schemas, and daemon code move forward together. Browser `protocolVersion` remains a separate compatibility contract and must not be used as a proxy for MCP-to-daemon capabilities.
+
+### Local-font companion boundary
+
+Installed fonts are an optional capability of the loopback MCP companion. After explicit permission in the editor, the companion indexes supported macOS font directories, parses each face (including every TTC face), and returns only stable opaque `localFontId` metadata. Filesystem paths, index fingerprints, and raw bytes never appear in MCP or inspection responses.
+
+An import resolves one selected face inside the companion and transfers its bytes once to the reserved browser tab over the authenticated loopback bridge. TTC faces are repacked as standalone SFNT data before transfer. The browser stores those bytes only in the local IndexedDB project record, registers a generated CSS family, and returns a project-scoped `fontId`; agents apply that ID to text instead of guessing a family name. The companion retains only its private index, recent-use metadata, and short-lived pending transfers.
+
 ## Data and rendering invariants
 
-- Output is 1080 × 1920.
+- Output is 1080 pixels wide at each slide's normalized aspect ratio. A project's ratio is the default for new slides, while a slide may override it; legacy projects and slides inherit 9:16 (1080 × 1920).
+- New native image uploads and MCP image-backed slides without an explicit ratio derive a reduced ratio from the source dimensions. This makes the image and slide canvas coextensive at the default zoom, so surrounding workspace never becomes part of the exported PNG.
 - Layer `x`, `y`, `width`, and `height` are normalized to the stage.
 - The base photo uses cover sizing plus normalized pan offsets and a 1–3× scale.
 - Overlay crop rectangles are normalized within the source image and have a minimum 5% size.
 - Layer `z` values determine one combined ordering across text and overlays.
 - Text wrapping and boxed-line geometry must agree between DOM previews and exported canvas images.
+- Local-mode font bytes remain on the device; authenticated cloud projects save private font bytes in R2. Font metadata returned to agents never contains a filesystem path or stored bytes.
+- A text layer using a project font is measured and rendered only after that exact face has loaded.
 - TikTok placement chrome is preview-only and is never exported.
-- Project images stay embedded in the local project record; they are not uploaded by the application.
+- Local-mode project images stay embedded in the local project record except during an explicit share or account import. Cloud projects use authenticated private R2 references.
 - Layer geometry is applied with dynamic style attributes. The deployment CSP permits style attributes while keeping stylesheet and script sources restricted to the application origin.
 
 ## Testing strategy
@@ -97,6 +116,7 @@ Avoid committed pixel snapshots. Canvas output can vary across browser and platf
 ## Where a change belongs
 
 - Pure calculation or normalization: `editor-model.mjs`.
+- Project-font records, exact-face loading, or shared font descriptors: `project-fonts.mjs`.
 - Active selection or state-aware geometry: `editor-state.mjs`.
 - IndexedDB transaction or project notification: `project-store.mjs`.
 - Markup or live DOM painting: `editor-view.mjs`.
@@ -129,3 +149,45 @@ a mislabeled WebM file. Still-image slides continue to export PNG.
 rail's “Try video sample” action creates an editable prompt-and-app composition.
 The browser smoke test covers sample creation, playback, scrubbing, video imports,
 MP4 decoding and dimensions, and IndexedDB persistence.
+
+The agent protocol keeps version 3 and the established image-layer tool names.
+`video-frame.mjs` uses isolated decoders for exact-time composited previews;
+`slide.export` selects PNG or MP4 independently of the visible slide. The companion
+retains explicit session targets across mixed project exports. Daemon API 2 adds
+video MIME transfers and extended export deadlines so an old image-only daemon
+is automatically replaced. Import bytes are bounded at 100 MB; agent MP4 exports
+are bounded at 120 seconds and JSON responses at 256 MB.
+
+`video-audio.mjs` mixes source audio offline, then captures muted playback, avoiding
+Web Audio autoplay restrictions during agent exports in Chrome. Browsers without
+media-element capture use the existing live audio mix with a bounded activation
+error instead of hanging. All tracks and temporary media URLs are released.
+
+## Bounded dashboard memory
+
+Database version 3 adds a derived `project-catalog` and disposable `project-previews`.
+The upgrade backfills metadata with a cursor, holding only one original project at
+a time. Original `projects` records, media bytes, revisions, and migration remain
+unchanged. Project writes, imports, deletes, and folder moves update the catalog
+in the same transaction. Catalog records are explicitly marked and cannot be saved
+as originals. Startup and dashboard refresh read the catalog; editor navigation
+hydrates only the selected project. Inactive records become metadata again, while
+pending saves and undo history remain available.
+
+Slide previews, folder covers, and asset thumbnails share a two-job queue. Only
+near-viewport previews render, with generation checks before and after async work.
+Offscreen previews release their object URLs and DOM images, and persisted slide
+previews can be restored without decoding source photos. The disposable disk cache
+is capped at 128 entries. Render-owned image bitmaps
+are closed after drawing; encoded canvases release their pixel buffers. Export
+continues to use original images and the existing canvas dimensions.
+
+## Hosted product
+
+`product-client.mjs` owns same-origin API requests, Clerk session tokens, account-scoped project persistence and hydration of private media. `product-ui.mjs` owns the landing page, account controls, subscription links and per-project chat. The store selects one persistence adapter at a time. Authenticated documents never enter the shared local IndexedDB project store. Signing out clears in-memory account data before restoring local mode.
+
+The Cloudflare Worker verifies Clerk session tokens for every private request. D1 stores owner-scoped project documents, revisions, conversations, jobs, billing periods and usage reservations. R2 holds private image, video and font bytes; downloads require the same owner check. Existing editor geometry, rendering and local MCP aliases remain shared across both modes.
+
+One Workflow runs each hosted request. The agent has a short system prompt and a bounded tool loop using the OpenAI SDK against OpenRouter. It edits through validated operations and revision checks, previews through the native browser canvas renderer, and checkpoints operations and provider usage. Stop is cooperative: saved changes remain, in-flight calls are charged, and no further edits start. Chat history belongs to a single project.
+
+Polar checkout redirects never grant access. Only verified, idempotently handled webhooks establish a subscription period. Each job reserves its maximum cost atomically; settlement returns unused allowance and keeps actual provider charges. Prompt caching uses OpenRouter's model caching controls and a project-scoped session.

@@ -1,14 +1,18 @@
 # CarouselBot
 
-A focused, local-first editor for creating social carousel images.
+A focused editor for creating social carousel slides, with optional hosted AI assistance for text and layouts. Images come from uploads; CarouselBot does not generate images or offer generative image editing.
 
 **Canonical site:** [carousel.bot](https://carousel.bot)
 
-Everything runs in the browser. Photos and projects stay in IndexedDB on the user's device; nothing is uploaded to an application backend.
+Editing runs in the browser. **Local mode** stores projects on the device and works with the npm MCP companion. Signing in enables private cloud projects and a hosted assistant. Local projects are copied into the account only through the explicit import action; originals stay on the device.
+
+The landing page lives at `/`, projects at `/dashboard`, and the editor at `/projects/:id`. The hosted product uses Clerk for sign-in, Polar for subscriptions, and a Cloudflare Worker with D1, private R2 storage, Workflows and Browser Run. The $19/month plan has a configurable provider-cost allowance; each AI request reserves a bounded amount before it starts. See [backend/README.md](backend/README.md) for provisioning, secrets and billing verification.
+
+The GitHub repository is private. Previously published versions and the npm MCP packages retain their MIT license.
 
 ## AI agent control
 
-The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
+The MIT-licensed local MCP companion lets Claude Code, Codex, Hermes, OpenCode, OpenClaw, and any stdio MCP client edit the browser tab live. There is no hosted relay: the agent, image files, and companion stay on the user's computer.
 
 ```bash
 npx carouselbot@latest setup
@@ -20,15 +24,17 @@ The npm package is only a distribution surface. Its source, skill, guidance, and
 
 ## What it does
 
-- Persists projects locally with IndexedDB
-- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF images
-- Crops photos to portrait 9:16 with drag and zoom controls
+- Persists projects and slash-path folder organization locally with IndexedDB
+- Uploads multiple PNG, JPEG, WebP, GIF, SVG, or AVIF images and gives each new slide the source image's own aspect ratio
+- Crops photos into slide canvases with drag and zoom controls; each slide may independently use a built-in format from 9:16 portrait to 16:9 landscape
+- Creates native solid-color slides without requiring a placeholder image file
 - Maintains a reusable project asset library
 - Adds movable and resizable text and image layers
-- Supports text color, outlines, per-line backgrounds, and full-box backgrounds
+- Supports editable text with installed Mac fonts, text color, configurable outlines, per-line backgrounds, and full-box backgrounds
 - Provides a TikTok placement preview that is never exported
-- Shares or downloads full-resolution 1080 × 1920 PNGs
-- Allows local AI agents to edit through a loopback-only MCP companion
+- Shares or downloads full-resolution, 1080-pixel-wide PNGs at each slide's chosen aspect ratio
+- Creates 24-hour links to editable project snapshots that import into the recipient's local **Shared** folder
+- Allows local AI agents to create projects in folders and move them through a loopback-only MCP companion
 
 ## Run locally
 
@@ -55,15 +61,28 @@ Fast editor tests use Node's built-in test runner. Browser suites launch a tempo
 
 The browser editor is organized as a small ES-module graph under `src/`. Pure model logic, state, persistence, views, final slide rendering, and pointer interactions have explicit boundaries; stateful workflow coordination remains in one controller. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the dependency direction, invariants, and change guide.
 
-## Deploy to Cloudflare
+## Deploy the hosted product
 
-This project uses Cloudflare Pages Direct Upload. The deployment contains only the browser-ready files in `dist/`; there is no backend function.
+The product preview uses `wrangler.product.jsonc`. Its resources are separate from the existing Pages editor. Apply the backend migrations before deploying; configure secrets through Wrangler, never source files. `npm run deploy:product:dev` builds and uploads only the product preview. Production promotion requires separate live resources, a production Clerk instance, an approved Polar organization/product, and live end-to-end verification.
+
+## Existing Pages deployment
+
+This project uses Cloudflare Pages Direct Upload. The static editor lives in `dist/`; Pages Functions under `functions/api/shares/` use a Workers KV namespace for optional 24-hour links. The `SHARES` KV binding is declared in `wrangler.jsonc`, which is the source of truth for Pages deployments. Keep the account on the Workers Free plan if shares must stop when its free usage limits are reached. KV's Free plan limits include 1 GB of stored data, 1,000 writes/day, and 100,000 reads/day; a single compressed share is capped at 24 MiB by this app.
+
+For local share testing, use `npm run build` followed by `npx wrangler pages dev dist --kv=SHARES`. The ordinary `npm start` server serves the editor and share routes but does not emulate KV.
 
 ```bash
 npm run deploy
 ```
 
 The production deploy command is intentionally main-only. Experimental branches can use the persistent development environment with `npm run deploy:dev`.
+
+Protected `main` updates also run the production deployment job after CI passes. The job uses the `production` GitHub environment, which is restricted to `main`, and skips until these environment secrets are configured:
+
+- `CLOUDFLARE_ACCOUNT_ID` — the account that owns the existing `slides-editor` Pages project.
+- `CLOUDFLARE_API_TOKEN` — a custom token limited to that account with **Account → Cloudflare Pages → Edit** permission.
+
+The Cloudflare credentials are exposed only to the final Wrangler upload step; pull-request jobs never receive them. To deploy an already-merged commit after adding or rotating the secrets, manually run the **CI** workflow on `main` from the Actions tab.
 
 The current Pages project name and legacy `slides-editor.pages.dev` hostname are intentionally retained during the domain migration. See [docs/REBRAND_ROLLOUT.md](docs/REBRAND_ROLLOUT.md) before changing GitHub, npm, Cloudflare, or DNS.
 
@@ -81,4 +100,4 @@ npm releases use GitHub Actions trusted publishing instead of a stored npm token
 
 ## License
 
-MIT. TikTok Sans is distributed under the SIL Open Font License 1.1; its license is included at `assets/TikTokSans-OFL.txt`. The GitHub Octicons mark is distributed under the MIT License; its notice is included at `assets/Octicons-LICENSE.txt`.
+New product additions are proprietary; previously published code retains its original MIT license. The npm MCP packages remain MIT. See [LICENSE](LICENSE) and [licenses/legacy-MIT.txt](licenses/legacy-MIT.txt). TikTok Sans is distributed under the SIL Open Font License 1.1; its license is included at `assets/TikTokSans-OFL.txt`. The GitHub Octicons mark is distributed under the MIT License; its notice is included at `assets/Octicons-LICENSE.txt`.

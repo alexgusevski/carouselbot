@@ -1,18 +1,31 @@
 #!/usr/bin/env node
+import { readBoundedFile } from "./bounded-file.mjs";
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { basename, extname } from "node:path";
+import { basename, delimiter, extname } from "node:path";
 import {
   ALLOWED_ORIGINS, AUDIT_LOG_PATH, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_URL, DAEMON_LOCK_PATH,
-  DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION, PROTOCOL_VERSION, STATE_DIRECTORY,
+  DAEMON_API_VERSION, DAEMON_INTERNAL_ACTIONS, DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION,
+  PROTOCOL_VERSION, STATE_DIRECTORY,
 } from "./config.mjs";
+import { createLocalFontService } from "./local-fonts.mjs";
 
-const MAX_JSON_BYTES = 40 * 1024 * 1024;
-const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const MAX_CONTROL_BYTES = 1024 * 1024;
+const MAX_JSON_BYTES = 144 * 1024 * 1024;
+const MAX_BUFFERED_JSON_BYTES = 160 * 1024 * 1024;
+const MAX_MEDIA_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_MEDIA_ITEMS = 32;
+let bufferedJsonBytes = 0;
+let mediaReservations = 0;
+let mediaPreparations = 0;
+const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 const EDITOR_TTL_MS = Number(process.env.CAROUSELBOT_EDITOR_TTL_MS || process.env.SLIDE_STUDIO_EDITOR_TTL_MS) || 60_000;
 const CLIENT_TTL_MS = 45_000;
 const MEDIA_TTL_MS = 5 * 60_000;
+const FONT_MEDIA_TTL_MS = 5 * 60_000;
+const MAX_FONT_MEDIA_ITEMS = 32;
+const MAX_FONT_MEDIA_BYTES = 256 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 90_000;
 const EDIT_SESSION_TTL_MS = Number(process.env.CAROUSELBOT_EDIT_SESSION_TTL_MS || process.env.SLIDE_STUDIO_EDIT_SESSION_TTL_MS) || 5 * 60_000;
 const MAX_AUDIT_EVENTS = 500;
@@ -24,8 +37,17 @@ const editors = new Map();
 const clients = new Map();
 const inflight = new Map();
 const media = new Map();
+const fontMedia = new Map();
 const editSessions = new Map();
 const auditEvents = [];
+const configuredFontDirectories = String(process.env.CAROUSELBOT_FONT_DIRS || process.env.SLIDE_STUDIO_FONT_DIRS || "")
+  .split(delimiter)
+  .map((value) => value.trim())
+  .filter(Boolean);
+const localFonts = createLocalFontService({
+  cacheDirectory: STATE_DIRECTORY,
+  ...(configuredFontDirectories.length ? { directories: configuredFontDirectories } : {}),
+});
 let focusedEditorId = null;
 let lockHandle = null;
 let idleSince = null;
@@ -63,6 +85,19 @@ function codedError(code, message, details = {}) {
   error.code = code;
   error.details = details;
   return error;
+}
+
+function daemonHealth(details = {}) {
+  return {
+    ok: true,
+    service: PACKAGE_NAME,
+    pid: process.pid,
+    version: PACKAGE_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    daemonApiVersion: DAEMON_API_VERSION,
+    capabilities: { internalActions: [...DAEMON_INTERNAL_ACTIONS] },
+    ...details,
+  };
 }
 
 function publicSession(session) {
@@ -120,10 +155,6 @@ function sessionForEditor(editorId) {
   return activeEditSessions().find((session) => session.editorId === editorId) || null;
 }
 
-function sessionForProject(projectId) {
-  return projectId ? activeEditSessions().find((session) => session.projectId === projectId) || null : null;
-}
-
 function requireEditSession(sessionId) {
   const session = editSessions.get(sessionId);
   if (!session || session.lastSeen < Date.now() - EDIT_SESSION_TTL_MS) {
@@ -140,11 +171,6 @@ function requireEditSession(sessionId) {
 
 function claimProject(session, projectId) {
   if (!projectId) return;
-  const conflict = sessionForProject(projectId);
-  if (conflict && conflict.id !== session.id) {
-    recordAudit({ action: "edit_session.conflict", status: "blocked", session, projectId, message: `Project held by ${conflict.owner.name}` });
-    throw codedError("PROJECT_BUSY", `Project ${projectId} is being edited by ${conflict.owner.name} (${conflict.purpose}). Use a different project or wait for edit session ${conflict.id} to end.`, { session: publicSession(conflict) });
-  }
   if (session.projectId && session.projectId !== projectId) {
     if (session.implicit) {
       session.projectId = projectId;
@@ -160,16 +186,7 @@ function beginEditSession(client, { editorId, projectId, purpose }) {
   if (!connected.length) throw codedError("NO_EDITOR", "No CarouselBot editor is connected. Open the editor in the user's normal browser and click Connect AI.");
   let editor = editorId ? connected.find((item) => item.id === editorId) : null;
   if (editorId && !editor) throw codedError("EDITOR_DISCONNECTED", `Editor is not connected: ${editorId}`);
-  if (!editor) {
-    const selected = client.selectedEditorId && connected.find((item) => item.id === client.selectedEditorId);
-    const available = connected.filter((item) => !sessionForEditor(item.id));
-    editor = selected && !sessionForEditor(selected.id) ? selected : available.length === 1 ? available[0] : null;
-    if (!editor) throw codedError("EDITOR_SELECTION_REQUIRED", "Multiple browser tabs are available. Call list_editors, choose an unassigned editor, then begin_edit_session with editorId.");
-  }
-  const editorConflict = sessionForEditor(editor.id);
-  if (editorConflict) throw codedError("EDITOR_BUSY", `Editor ${editor.id} is assigned to ${editorConflict.owner.name} (${editorConflict.purpose}) until ${new Date(editorConflict.lastSeen + EDIT_SESSION_TTL_MS).toISOString()}.`, { session: publicSession(editorConflict) });
-  const projectConflict = sessionForProject(projectId);
-  if (projectConflict) throw codedError("PROJECT_BUSY", `Project ${projectId} is being edited by ${projectConflict.owner.name} (${projectConflict.purpose}).`, { session: publicSession(projectConflict) });
+  if (!editor) editor = selectEditor(client.id);
   const now = Date.now();
   const session = {
     id: randomUUID(), editorId: editor.id, projectId: projectId || null,
@@ -189,7 +206,7 @@ function browserCors(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Expose-Headers": "X-CarouselBot-Filename, X-Slide-Studio-Filename",
+    "Access-Control-Expose-Headers": "X-CarouselBot-Filename, X-Slide-Studio-Filename, X-CarouselBot-Local-Font-Id",
     "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "600",
     "Cache-Control": "no-store",
@@ -203,25 +220,50 @@ function sendJson(response, statusCode, value, headers = {}) {
   response.end(body);
 }
 
-function readJson(request) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    request.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > MAX_JSON_BYTES) {
-        reject(new Error("Request body is too large."));
-        request.destroy();
+function sendLocalFont(response, item, headers = {}) {
+  response.writeHead(200, {
+    ...headers,
+    "Content-Type": item.mimeType,
+    "Content-Length": item.buffer.length,
+    "X-CarouselBot-Filename": encodeURIComponent(item.filename),
+    "X-Slide-Studio-Filename": encodeURIComponent(item.filename),
+    "X-CarouselBot-Local-Font-Id": encodeURIComponent(item.font.localFontId),
+  });
+  response.end(item.buffer);
+}
+
+async function readJson(request, limit = MAX_CONTROL_BYTES) {
+  const chunks = [];
+  let size = 0;
+  try {
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        request.off("data", data); request.off("end", end);
+        request.off("error", error); request.off("aborted", aborted);
+      };
+      const error = (cause) => { cleanup(); reject(cause); };
+      const aborted = () => error(new Error("Request was aborted."));
+      const end = () => { cleanup(); resolve(); };
+      const data = (chunk) => {
+        if (size + chunk.length > limit || bufferedJsonBytes + chunk.length > MAX_BUFFERED_JSON_BYTES) {
+          error(codedError("REQUEST_TOO_LARGE", "Request body is too large or the local bridge is busy."));
+          request.resume();
+          return;
+        }
+        size += chunk.length;
+        bufferedJsonBytes += chunk.length;
+        chunks.push(chunk);
+      };
+      if (Number(request.headers["content-length"]) > limit) {
+        error(codedError("REQUEST_TOO_LARGE", "Request body is too large."));
+        request.resume();
         return;
       }
-      chunks.push(chunk);
+      request.on("data", data); request.once("end", end);
+      request.once("error", error); request.once("aborted", aborted);
     });
-    request.on("end", () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
-      catch { reject(new Error("Request body must be valid JSON.")); }
-    });
-    request.on("error", reject);
-  });
+    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+  } finally { bufferedJsonBytes -= size; }
 }
 
 function bearer(request) {
@@ -246,8 +288,11 @@ function requireEditor(request, response, editorId, cors) {
 }
 
 function queueEditorEvent(editor, event) {
+  // Keep only the latest roster snapshot, but never drop commands or notifications.
+  if (event.kind === "system" && ["agents.changed", "edit-sessions.changed"].includes(event.type)) {
+    editor.queue = editor.queue.filter((queued) => queued.kind !== "system" || queued.type !== event.type);
+  }
   editor.queue.push(event);
-  if (editor.queue.length > 100) editor.queue.splice(0, editor.queue.length - 100);
   deliverNext(editor);
 }
 
@@ -269,6 +314,7 @@ function disconnectEditor(editorId, message = "Browser editor disconnected.") {
   endEditorPoll(editor);
   for (const session of editSessions.values()) if (session.editorId === editorId) releaseEditSession(session.id, "editor disconnected");
   editors.delete(editorId);
+  for (const [id, item] of fontMedia) if (item.editorId === editorId) fontMedia.delete(id);
   if (focusedEditorId === editorId) focusedEditorId = null;
   for (const [requestId, pending] of inflight) {
     if (pending.editorId !== editorId) continue;
@@ -305,6 +351,22 @@ function selectEditor(clientId) {
   throw new Error("Multiple editors are connected and none is selected. Call list_editors, then select_editor.");
 }
 
+function requireLocalFontPermission(editor) {
+  if (editor?.localFontsEnabled) return editor;
+  throw codedError("FONT_PERMISSION_REQUIRED", "Open CarouselBot and enable local fonts.");
+}
+
+function selectLocalFontEditor(clientId) {
+  return requireLocalFontPermission(selectEditor(clientId));
+}
+
+function localFontEditorForCall(clientId, editSessionId) {
+  if (!editSessionId) return selectLocalFontEditor(clientId);
+  const session = requireEditSession(editSessionId);
+  session.lastClientId = clientId;
+  return requireLocalFontPermission(editors.get(session.editorId));
+}
+
 function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) {
   const client = clients.get(clientId) || { id: clientId, name: "MCP agent" };
   if (editSessionId) {
@@ -321,11 +383,9 @@ function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) 
     return { client, editor: editors.get(session.editorId), session };
   }
   const editor = selectEditor(clientId);
-  const conflict = sessionForEditor(editor.id);
-  if (conflict) throw codedError("EDITOR_BUSY", `Editor ${editor.id} is assigned to ${conflict.owner.name} (${conflict.purpose}). Begin an edit session on another editor.`, { session: publicSession(conflict) });
   const now = Date.now();
   session = {
-    id: randomUUID(), editorId: editor.id, projectId: null, purpose: "Implicit single-agent edit",
+    id: randomUUID(), editorId: editor.id, projectId: null, purpose: "Implicit edit",
     owner: publicClient(client), creatorClientId: client.id, lastClientId: client.id,
     implicit: true, createdAt: now, lastSeen: now,
   };
@@ -338,20 +398,37 @@ function resolveBrowserTarget(clientId, { editSessionId, mutating, projectId }) 
 }
 
 function callBrowser(clientId, toolName, operation, label, { editSessionId = null, mutating = false } = {}) {
+  const boundSession = editSessionId ? requireEditSession(editSessionId) : null;
+  if (!operation?.projectId && boundSession?.projectId && operation?.type !== "project.create") {
+    operation = { ...operation, projectId: boundSession.projectId };
+  }
   const projectId = operation?.projectId || null;
   const { client, editor, session } = resolveBrowserTarget(clientId, { editSessionId, mutating, projectId });
   if (mutating && session && !session.implicit && !session.projectId && toolName !== "create_project") {
     throw codedError("PROJECT_ID_REQUIRED", "This edit session is not bound to a project yet. Pass projectId, or create a project first so the daemon can bind it atomically.");
   }
   const requestId = randomUUID();
+  const timeoutMs = operation?.type === "slide.export" ? 210_000 : COMMAND_TIMEOUT_MS;
   recordAudit({ action: "tool.call", client, session, editorId: editor.id, projectId, toolName, status: "started" });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       inflight.delete(requestId);
+      editor.queue = editor.queue.filter((event) => event.requestId !== requestId);
+      if (operation?.fontMediaId) fontMedia.delete(operation.fontMediaId);
       recordAudit({ action: "tool.result", client, session, editorId: editor.id, projectId, toolName, status: "error", message: "Browser timeout" });
-      reject(codedError("BROWSER_TIMEOUT", "The browser did not answer within 90 seconds."));
-    }, COMMAND_TIMEOUT_MS);
-    inflight.set(requestId, { resolve, reject, timer, editorId: editor.id, client, session, projectId, toolName });
+      reject(codedError("BROWSER_TIMEOUT", `The browser did not answer within ${timeoutMs / 1000} seconds.`));
+    }, timeoutMs);
+    inflight.set(requestId, {
+      resolve,
+      reject,
+      timer,
+      editorId: editor.id,
+      client,
+      session,
+      projectId,
+      toolName,
+      fontMediaId: operation?.fontMediaId || null,
+    });
     queueEditorEvent(editor, { kind: "command", requestId, toolName, operation, label, editSessionId: session?.id || null, agent: publicClient(client) });
   });
 }
@@ -363,6 +440,8 @@ function detectedMime(buffer, filename) {
   if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
   const header = buffer.subarray(0, 64).toString("ascii");
   if (/ftyp(?:avif|avis)/.test(header)) return "image/avif";
+  if (buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4";
+  if (buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
   const text = buffer.subarray(0, 1024).toString("utf8").trimStart();
   if (/^(?:<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text)) return "image/svg+xml";
   const extension = extname(filename).toLowerCase();
@@ -371,15 +450,66 @@ function detectedMime(buffer, filename) {
 }
 
 async function prepareMedia(filePath) {
-  const metadata = await stat(filePath);
-  if (!metadata.isFile()) throw new Error("Image path must point to a regular file.");
-  if (metadata.size > MAX_MEDIA_BYTES) throw new Error("Image is larger than the 25 MB local-transfer limit.");
-  const buffer = await readFile(filePath);
-  const mimeType = detectedMime(buffer, filePath);
-  if (!mimeType) throw new Error("Unsupported image. Use PNG, JPEG, WebP, GIF, SVG, or AVIF.");
-  const id = randomUUID();
-  media.set(id, { id, buffer, mimeType, filename: basename(filePath), expiresAt: Date.now() + MEDIA_TTL_MS });
-  return { mediaId: id, filename: basename(filePath), mimeType, size: buffer.length };
+  for (const [id, item] of media) if (item.expiresAt < Date.now()) media.delete(id);
+  const used = [...media.values()].reduce((total, item) => total + item.buffer.length, 0);
+  if (media.size + mediaPreparations >= MAX_MEDIA_ITEMS || used + mediaReservations + MAX_MEDIA_BYTES > MAX_MEDIA_TOTAL_BYTES) {
+    throw codedError("MEDIA_TRANSFER_LIMIT", "Local media transfers are full. Finish pending uploads before preparing more.");
+  }
+  mediaReservations += MAX_MEDIA_BYTES;
+  mediaPreparations++;
+  try {
+    const { buffer } = await readBoundedFile(filePath, MAX_MEDIA_BYTES);
+    const mimeType = detectedMime(buffer, filePath);
+    if (!mimeType) throw new Error("Unsupported media. Use PNG, JPEG, WebP, GIF, SVG, AVIF, MP4, MOV, or WebM (browser-decodable codecs).");
+    const id = randomUUID();
+    media.set(id, { id, buffer, mimeType, filename: basename(filePath), expiresAt: Date.now() + MEDIA_TTL_MS });
+    return { mediaId: id, filename: basename(filePath), mimeType, size: buffer.length };
+  } finally { mediaReservations -= MAX_MEDIA_BYTES; mediaPreparations--; }
+}
+
+function localFontFilename(font, mimeType) {
+  const extension = ({
+    "font/ttf": "ttf",
+    "font/otf": "otf",
+    "font/woff": "woff",
+    "font/woff2": "woff2",
+  })[mimeType] || "font";
+  const stem = String(font?.postscriptName || font?.localFontId || "local-font")
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "") || "local-font";
+  return `${stem}.${extension}`;
+}
+
+async function readLocalFontFace(localFontId) {
+  if (!localFontId || typeof localFontId !== "string") throw codedError("FONT_NOT_FOUND", "A valid localFontId is required.");
+  const prepared = await localFonts.readFace(localFontId);
+  if (!prepared?.font || !prepared?.buffer) throw codedError("FONT_NOT_FOUND", `Local font is unavailable: ${localFontId}`);
+  const buffer = Buffer.isBuffer(prepared.buffer) ? prepared.buffer : Buffer.from(prepared.buffer);
+  const mimeType = prepared.mimeType || "application/octet-stream";
+  return { font: prepared.font, buffer, mimeType, filename: localFontFilename(prepared.font, mimeType) };
+}
+
+async function prepareFont(clientId, localFontId, editSessionId) {
+  const editor = localFontEditorForCall(clientId, editSessionId);
+  const prepared = await readLocalFontFace(localFontId);
+  const now = Date.now();
+  let retainedBytes = 0;
+  for (const [id, item] of fontMedia) {
+    if (item.expiresAt < now) fontMedia.delete(id);
+    else retainedBytes += item.buffer.length;
+  }
+  if (fontMedia.size >= MAX_FONT_MEDIA_ITEMS || retainedBytes + prepared.buffer.length > MAX_FONT_MEDIA_BYTES) {
+    throw codedError("FONT_TRANSFER_LIMIT", "Too many local fonts are waiting to be transferred. Finish the pending imports and retry.");
+  }
+  const fontMediaId = randomUUID();
+  fontMedia.set(fontMediaId, {
+    ...prepared,
+    id: fontMediaId,
+    editorId: editor.id,
+    localFontId: prepared.font.localFontId,
+    expiresAt: now + FONT_MEDIA_TTL_MS,
+  });
+  return { font: prepared.font, fontMediaId };
 }
 
 async function writeExport(filePath, data, overwrite) {
@@ -406,7 +536,7 @@ async function handleInternalCall(body) {
       selectedEditorId,
       editors: connected.map((editor) => {
         const assigned = sessionForEditor(editor.id);
-        return { id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state, editSession: assigned ? publicSession(assigned) : null };
+        return { id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state, editSession: assigned ? publicSession(assigned) : null, editSessions: activeEditSessions().filter((session) => session.editorId === editor.id).map(publicSession) };
       }),
       editSessions: activeEditSessions().map(publicSession),
     };
@@ -430,6 +560,11 @@ async function handleInternalCall(body) {
     const events = auditEvents.filter((event) => (!body.projectId || event.projectId === body.projectId) && (!body.status || event.status === body.status));
     return { events: events.slice(-limit).reverse(), localLogPath: AUDIT_LOG_PATH };
   }
+  if (body.action === "list_local_fonts") {
+    localFontEditorForCall(body.clientId, body.editSessionId);
+    return localFonts.list({ query: body.query, limit: body.limit, cursor: body.cursor, sort: body.sort });
+  }
+  if (body.action === "prepare_font") return prepareFont(body.clientId, body.localFontId, body.editSessionId);
   if (body.action === "prepare_media") return prepareMedia(body.path);
   if (body.action === "write_export") return writeExport(body.path, body.data, Boolean(body.overwrite));
   if (body.action === "notify") {
@@ -443,13 +578,20 @@ async function handleInternalCall(body) {
     for (const item of body.items) results.push(await callBrowser(body.clientId, item.toolName || "apply_operations", item.operation, item.label, { editSessionId: body.editSessionId, mutating: true }));
     return { applied: results.length, results };
   }
-  throw new Error(`Unknown internal action: ${body.action}`);
+  throw codedError("UNSUPPORTED_INTERNAL_ACTION", `Unknown internal action: ${body.action}`, {
+    action: body.action,
+    supportedActions: [...DAEMON_INTERNAL_ACTIONS],
+  });
 }
 
 const server = createServer(async (request, response) => {
+  // A disconnected sender can emit a transport error after its body was rejected.
+  request.on("error", () => {});
   const host = request.headers.host || "";
   if (![`${BRIDGE_HOST}:${BRIDGE_PORT}`, `localhost:${BRIDGE_PORT}`].includes(host)) return sendJson(response, 421, { error: "Invalid Host header." });
-  const url = new URL(request.url || "/", BRIDGE_URL);
+  let url;
+  try { url = new URL(request.url || "/", BRIDGE_URL); }
+  catch { return sendJson(response, 400, { error: "Invalid request URL." }); }
   const origin = request.headers.origin;
   const cors = browserCors(origin);
 
@@ -461,19 +603,19 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === "/health" && request.method === "GET") {
     if (origin && !cors) return sendJson(response, 403, { error: "Origin not allowed." });
-    return sendJson(response, 200, { ok: true, service: PACKAGE_NAME, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION, editors: activeEditors().length, agents: activeClients().length }, cors || {});
+    return sendJson(response, 200, daemonHealth({ editors: activeEditors().length, agents: activeClients().length }), cors || {});
   }
 
   try {
     if (url.pathname.startsWith("/internal/")) {
       if (!requireInternal(request, response)) return;
-      if (url.pathname === "/internal/health" && request.method === "GET") return sendJson(response, 200, { ok: true, pid: process.pid, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION });
+      if (url.pathname === "/internal/health" && request.method === "GET") return sendJson(response, 200, daemonHealth());
       if (url.pathname === "/internal/shutdown" && request.method === "POST") {
         sendJson(response, 202, { ok: true, pid: process.pid });
         setImmediate(() => void shutdown());
         return;
       }
-      const body = await readJson(request);
+      const body = await readJson(request, url.pathname === "/internal/call" ? MAX_JSON_BYTES : MAX_CONTROL_BYTES);
       if (url.pathname === "/internal/client/connect" && request.method === "POST") {
         const existing = clients.get(body.clientId) || { id: body.clientId };
         Object.assign(existing, { name: body.name || existing.name || "MCP agent", version: body.version || existing.version || null, lastSeen: Date.now() });
@@ -518,12 +660,14 @@ const server = createServer(async (request, response) => {
       }
       const editor = {
         id: body.editorId, queue: [], poll: null, pageUrl: body.pageUrl,
-        pollTimer: null, state: body.state, lastSeen: Date.now(), cors, sessionToken: randomBytes(32).toString("base64url"),
+        pollTimer: null, state: body.state, lastSeen: Date.now(), cors,
+        localFontsEnabled: body.localFontsEnabled === true,
+        sessionToken: randomBytes(32).toString("base64url"),
       };
       editors.set(editor.id, editor);
       if (body.hasFocus && body.visibilityState === "visible") focusedEditorId = editor.id;
       log(`Editor connected (${editor.id.slice(0, 8)})`);
-      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
+      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, localFontsEnabled: editor.localFontsEnabled, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
     }
     if (url.pathname === "/activate" && request.method === "POST") {
       const body = await readJson(request);
@@ -545,13 +689,62 @@ const server = createServer(async (request, response) => {
       disconnectEditor(editor.id);
       return sendJson(response, 200, { ok: true, editorId: editor.id }, cors);
     }
+    if (url.pathname === "/fonts/enable" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = requireEditor(request, response, body.editorId, cors);
+      if (!editor) return;
+      editor.localFontsEnabled = true;
+      return sendJson(response, 200, { enabled: true }, cors);
+    }
+    if (url.pathname === "/fonts" && request.method === "GET") {
+      const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const result = await localFonts.list({
+        query: url.searchParams.get("query") || "",
+        limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+        cursor: url.searchParams.get("cursor") || null,
+        sort: url.searchParams.get("sort") || undefined,
+      });
+      return sendJson(response, 200, result, cors);
+    }
+    if (url.pathname === "/fonts/use" && request.method === "POST") {
+      const body = await readJson(request);
+      const editor = requireEditor(request, response, body.editorId, cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const font = await localFonts.markUsed(body.localFontId);
+      if (!font) throw codedError("FONT_NOT_FOUND", `Local font is unavailable: ${body.localFontId}`);
+      return sendJson(response, 200, { font }, cors);
+    }
+    if (url.pathname.startsWith("/fonts/") && request.method === "GET") {
+      const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const localFontId = decodeURIComponent(url.pathname.slice("/fonts/".length));
+      return sendLocalFont(response, await readLocalFontFace(localFontId), cors);
+    }
+    if (url.pathname.startsWith("/font-media/") && request.method === "GET") {
+      const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
+      if (!editor) return;
+      requireLocalFontPermission(editor);
+      const id = decodeURIComponent(url.pathname.slice("/font-media/".length));
+      const item = fontMedia.get(id);
+      if (!item || item.expiresAt < Date.now()) {
+        fontMedia.delete(id);
+        throw codedError("FONT_MEDIA_UNAVAILABLE", "Local font transfer is missing or expired.");
+      }
+      if (item.editorId !== editor.id) throw codedError("FONT_MEDIA_UNAVAILABLE", "Local font transfer is missing or expired.");
+      fontMedia.delete(id);
+      return sendLocalFont(response, item, cors);
+    }
     if (url.pathname === "/events" && request.method === "GET") {
       const editor = requireEditor(request, response, url.searchParams.get("editorId"), cors);
       if (!editor) return;
-      const requestedWait = Number(url.searchParams.get("wait"));
-      const waitMs = url.searchParams.has("wait") && Number.isFinite(requestedWait)
-        ? Math.min(MAX_EVENT_POLL_TIMEOUT_MS, Math.max(0, requestedWait))
-        : EVENT_POLL_TIMEOUT_MS;
+      const waitMs = url.searchParams.has("wait") ? Number(url.searchParams.get("wait")) : EVENT_POLL_TIMEOUT_MS;
+      if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > MAX_EVENT_POLL_TIMEOUT_MS) {
+        return sendJson(response, 400, { error: "Event wait must be between 0 and 5000 milliseconds." }, cors);
+      }
       editor.cors = cors;
       if (editor.poll) endEditorPoll(editor);
       editor.poll = response;
@@ -573,13 +766,16 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname === "/result" && request.method === "POST") {
-      const body = await readJson(request);
+      const token = bearer(request);
+      if (!token || ![...editors.values()].some((editor) => editor.sessionToken === token)) return sendJson(response, 401, { error: "Editor session is not authorized." }, cors);
+      const body = await readJson(request, MAX_JSON_BYTES);
       const editor = requireEditor(request, response, body.editorId, cors);
       if (!editor) return;
       const pending = inflight.get(body.requestId);
       if (!pending || pending.editorId !== editor.id) return sendJson(response, 404, { error: "Unknown request." }, cors);
       inflight.delete(body.requestId);
       clearTimeout(pending.timer);
+      if (pending.fontMediaId) fontMedia.delete(pending.fontMediaId);
       if (body.state) editor.state = body.state;
       if (body.ok) {
         try {
@@ -611,9 +807,17 @@ const server = createServer(async (request, response) => {
     }
     return sendJson(response, 404, { error: "Not found." }, cors);
   } catch (error) {
-    const headers = cors || {};
-    const statusCode = error.code === "ENOENT" ? 404 : error.code === "EACCES" ? 403 : 400;
-    return sendJson(response, statusCode, { error: error.message }, headers);
+    const headers = { ...cors, ...(error.code === "REQUEST_TOO_LARGE" ? { Connection: "close" } : {}) };
+    const statusCode = ["ENOENT", "FONT_NOT_FOUND", "FONT_MEDIA_UNAVAILABLE"].includes(error.code)
+      ? 404
+      : ["EACCES", "FONT_PERMISSION_REQUIRED"].includes(error.code)
+        ? 403
+        : ["FONT_TRANSFER_LIMIT", "MEDIA_TRANSFER_LIMIT"].includes(error.code) ? 429 : error.code === "REQUEST_TOO_LARGE" ? 413 : 400;
+    return sendJson(response, statusCode, {
+      error: error.message,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details && Object.keys(error.details).length ? { details: error.details } : {}),
+    }, headers);
   }
 });
 
@@ -643,7 +847,14 @@ async function acquireDaemonLock() {
 
 async function writeDaemonState() {
   const temporary = `${DAEMON_STATE_PATH}.${process.pid}.tmp`;
-  await writeFile(temporary, JSON.stringify({ pid: process.pid, port: BRIDGE_PORT, secret: daemonSecret, version: PACKAGE_VERSION, protocolVersion: PROTOCOL_VERSION }), { mode: 0o600 });
+  await writeFile(temporary, JSON.stringify({
+    pid: process.pid,
+    port: BRIDGE_PORT,
+    secret: daemonSecret,
+    version: PACKAGE_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    daemonApiVersion: DAEMON_API_VERSION,
+  }), { mode: 0o600 });
   await rename(temporary, DAEMON_STATE_PATH);
 }
 
@@ -661,6 +872,7 @@ async function cleanup() {
 setInterval(() => {
   const now = Date.now();
   for (const [id, item] of media) if (item.expiresAt < now) media.delete(id);
+  for (const [id, item] of fontMedia) if (item.expiresAt < now) fontMedia.delete(id);
   for (const session of editSessions.values()) if (session.lastSeen < now - EDIT_SESSION_TTL_MS) releaseEditSession(session.id, "lease expired");
   let clientsChanged = false;
   for (const [id, client] of clients) if (client.lastSeen < now - CLIENT_TTL_MS) {

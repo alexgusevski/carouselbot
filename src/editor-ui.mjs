@@ -1,17 +1,23 @@
+import { allSlideTexts } from "./editor-model.mjs";
+import { releaseVideo } from "./video-media.mjs";
 let disposeVideoPlayback = () => {};
 import { mountVideoPlayback } from "./video-playback.mjs";
 import {
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
-  TEXT_WEIGHT,
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
   CANVAS_ZOOM_MIN,
   CANVAS_ZOOM_MAX,
   projectPath,
+  folderRoutePath,
+  folderDisplayName,
+  folderParentPath,
+  folderAncestors,
+  folderPreviewItems,
   adjacentSlideId,
   escapeHtml,
   normalizeHexColor,
+  normalizeAspectRatio,
+  slideCanvasDimensions,
   textColor,
   rgbToHex,
   formatRgb,
@@ -28,6 +34,7 @@ import {
   app,
   activeProject,
   activeSlide,
+  slideThumbnailKey,
   selectedText,
   selectedOverlay,
   selectedLayerKeys,
@@ -36,6 +43,7 @@ import {
   setLayerSelection,
   selectOnlyLayer,
   projectAsset,
+  getOverlayMetrics,
   constrainImagePosition,
 } from "./editor-state.mjs";
 import {
@@ -44,6 +52,7 @@ import {
   renderHeader,
   renderLegacyMigrationNotice,
   renderSlideRail,
+  renderSlideThumbnail,
   renderAssetRail,
   renderEmptyStage,
   renderStage,
@@ -53,8 +62,14 @@ import {
   updateStageImage,
 } from "./editor-view.mjs";
 import { createLayerInteractions } from "./layer-interactions.mjs";
+import {
+  applyProjectFontToText,
+  applyTextWeight,
+  createProjectFont,
+  ensureProjectFontsLoaded,
+} from "./project-fonts.mjs";
 
-export function createEditorUI({ projects, actions, output }) {
+export function createEditorUI({ projects, actions, output, renderProductLanding = () => {}, mountProduct = () => {} }) {
   const {
     recordHistory,
     scheduleSave,
@@ -71,6 +86,8 @@ export function createEditorUI({ projects, actions, output }) {
     deleteSelectedText,
     beginSlideBackgroundChange,
     handleSlideBackgroundChange,
+    setSlideAspectRatio,
+    duplicateSlide,
     removeSlide,
     reorderSlide,
     addDroppedAssetsToSlide,
@@ -83,11 +100,15 @@ export function createEditorUI({ projects, actions, output }) {
     handleUpload,
     addSlidesFromFiles,
     imageFilesFromTransfer,
+    fileToDataUrl,
   } = actions;
   const {
     refreshAllProjectCovers,
     refreshAllSlideThumbnails,
+    refreshDashboardSlideThumbnails,
+    disconnectDashboardSlideThumbnails,
     exportActiveSlide,
+    exportAllSlides,
     shareActiveSlide,
     shareAllSlides,
   } = output;
@@ -110,7 +131,7 @@ export function createEditorUI({ projects, actions, output }) {
     deleteSelectedLayers,
   });
 
-  async function copyText(value) {
+  async function copyText(value, message = `Copied ${value}`) {
     try {
       await navigator.clipboard.writeText(value);
     } catch (error) {
@@ -120,10 +141,14 @@ export function createEditorUI({ projects, actions, output }) {
       input.style.opacity = "0";
       document.body.appendChild(input);
       input.select();
-      document.execCommand("copy");
+      const copied = document.execCommand("copy");
       input.remove();
+      if (!copied) {
+        toast("Could not copy text. Please try again.");
+        return;
+      }
     }
-    toast(`Copied ${value}`);
+    toast(message);
   }
 
 
@@ -183,7 +208,7 @@ export function createEditorUI({ projects, actions, output }) {
     positionLayerMenu(menu, event.clientX, event.clientY);
   }
 
-  function showAssetDeleteMenu(event, assetId) {
+  function showAssetMenu(event, assetId) {
     event.preventDefault();
     event.stopPropagation();
     closeLayerMenu();
@@ -195,14 +220,14 @@ export function createEditorUI({ projects, actions, output }) {
     const menu = document.createElement("div");
     menu.className = "layer-menu layer-menu--confirm";
     menu.setAttribute("role", "menu");
-    menu.setAttribute("aria-label", `Delete ${asset.name}?`);
+    menu.setAttribute("aria-label", `Actions for ${asset.name}`);
 
     const button = document.createElement("button");
     button.type = "button";
     button.className = "layer-menu-item is-danger";
     button.setAttribute("role", "menuitem");
-    button.setAttribute("aria-label", `Delete ${asset.name}`);
-    button.innerHTML = `${icon("trash")}<span>Delete?</span>`;
+    button.setAttribute("aria-label", `Remove ${asset.name}`);
+    button.innerHTML = `${icon("trash")}<span>Remove</span>`;
     button.addEventListener("click", (clickEvent) => {
       clickEvent.stopPropagation();
       closeLayerMenu();
@@ -232,6 +257,7 @@ export function createEditorUI({ projects, actions, output }) {
 
     [
       ["change", "image", "Change"],
+      ["duplicate", "duplicate", "Duplicate"],
       ["remove", "trash", "Remove"],
     ].forEach(([action, iconName, label]) => {
       const button = document.createElement("button");
@@ -245,6 +271,7 @@ export function createEditorUI({ projects, actions, output }) {
         clickEvent.stopPropagation();
         closeLayerMenu();
         if (action === "change") beginSlideBackgroundChange(slideId);
+        else if (action === "duplicate") duplicateSlide(slideId);
         else removeSlide(slideId);
       });
       menu.appendChild(button);
@@ -268,66 +295,395 @@ export function createEditorUI({ projects, actions, output }) {
     state.toastTimer = setTimeout(() => element.remove(), 2600);
   }
 
+  let fontPickerRequest = 0;
+  let fontPickerSearchTimer = null;
+
+  function closeFontPicker() {
+    window.clearTimeout(fontPickerSearchTimer);
+    fontPickerRequest += 1;
+    document.querySelector(".font-picker-backdrop")?.remove();
+  }
+
+  async function applyFontToSelectedText(fontId) {
+    const project = activeProject();
+    const text = selectedText();
+    const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
+    const selection = selectedLayerKeys().join("|");
+    if (!project || !text) return;
+    const next = { ...text };
+    applyProjectFontToText(project, next, fontId);
+    await ensureProjectFontsLoaded(project, [next]);
+    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id || selectedLayerKeys().join("|") !== selection) return;
+    recordHistory(project);
+    targets.forEach((item) => {
+      applyProjectFontToText(project, item, fontId);
+      updateTextBox(item);
+      ensureTextFits(item, { force: true });
+    });
+    refreshSelection();
+    scheduleSave();
+    const font = fontId ? project.fonts.find((item) => item.id === fontId) : null;
+    if (font?.localFontId) {
+      await window.carouselBotLocalMcpBridge?.markFontUsed?.(font.localFontId).catch((error) => {
+        console.warn(`Could not update recent font usage for ${font.localFontId}:`, error);
+      });
+    }
+  }
+
+  async function addLocalFontToSelectedText(face) {
+    const project = activeProject();
+    const text = selectedText();
+    const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
+    const selection = selectedLayerKeys().join("|");
+    const bridge = window.carouselBotLocalMcpBridge;
+    if (!project || !text || !bridge) return;
+    const existing = (project.fonts || []).find((item) => item.localFontId === face.localFontId) || null;
+    let font = existing;
+    let repaired = false;
+    if (existing) {
+      try {
+        await ensureProjectFontsLoaded(project, [{ fontId: existing.id }]);
+      } catch (error) {
+        if (error?.code !== "FONT_UNAVAILABLE") throw error;
+        repaired = true;
+      }
+    }
+    if (!font || repaired) {
+      const transfer = await bridge.fetchLocalFont(face.localFontId);
+      const source = transfer?.file instanceof Blob
+        ? transfer.file
+        : transfer instanceof Blob
+          ? transfer
+          : new Blob([transfer?.arrayBuffer || transfer?.buffer || transfer], { type: transfer?.mimeType || "font/otf" });
+      font = createProjectFont(transfer?.font || face, await fileToDataUrl(source), existing
+        ? { id: existing.id, addedAt: existing.addedAt }
+        : undefined);
+    }
+    const candidateFonts = existing && repaired
+      ? (project.fonts || []).map((item) => item.id === existing.id ? font : item)
+      : existing
+        ? project.fonts
+        : [...(project.fonts || []), font];
+    const candidateProject = candidateFonts === project.fonts ? project : { ...project, fonts: candidateFonts };
+    const next = { ...text };
+    applyProjectFontToText(candidateProject, next, font.id);
+    await ensureProjectFontsLoaded(candidateProject, [next]);
+    if (activeProject()?.id !== project.id || selectedText()?.id !== text.id || selectedLayerKeys().join("|") !== selection) return;
+    recordHistory(project);
+    if (existing && repaired) project.fonts.splice(project.fonts.findIndex((item) => item.id === existing.id), 1, font);
+    else if (!existing) (project.fonts ||= []).push(font);
+    targets.forEach((item) => {
+      applyProjectFontToText(project, item, font.id);
+      updateTextBox(item);
+      ensureTextFits(item, { force: true });
+    });
+    closeFontPicker();
+    refreshSelection();
+    scheduleSave();
+    await bridge.markFontUsed?.(font.localFontId).catch((error) => {
+      console.warn(`Could not update recent font usage for ${font.localFontId}:`, error);
+    });
+    toast(`${font.fullName || font.family} ${repaired ? "repaired" : existing ? "selected" : "added"}`);
+  }
+
+  function fontPickerShell() {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop font-picker-backdrop";
+    backdrop.innerHTML = `
+      <section class="modal font-picker-modal" role="dialog" aria-modal="true" aria-labelledby="font-picker-title">
+        <div class="font-picker-header">
+          <div><p class="eyebrow">Local fonts</p><h2 id="font-picker-title">Choose a font</h2></div>
+          <button class="icon-button font-picker-close" type="button" aria-label="Close font picker">×</button>
+        </div>
+        <div class="font-picker-content"></div>
+      </section>`;
+    document.body.appendChild(backdrop);
+    backdrop.querySelector(".font-picker-close").addEventListener("click", closeFontPicker);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) closeFontPicker(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") closeFontPicker(); });
+    return backdrop;
+  }
+
+  async function renderInstalledFontResults(backdrop, query = "") {
+    const content = backdrop.querySelector(".font-picker-content");
+    const request = ++fontPickerRequest;
+    const list = content.querySelector(".font-results");
+    const status = content.querySelector(".font-picker-status");
+    status.textContent = "Looking through fonts on this Mac…";
+    list.replaceChildren();
+    try {
+      const result = await window.carouselBotLocalMcpBridge.listLocalFonts({ query, limit: 80, sort: query ? "alphabetical" : "recent_then_alphabetical" });
+      if (request !== fontPickerRequest || !backdrop.isConnected) return;
+      status.textContent = result.fonts.length ? `${result.fonts.length}${result.nextCursor ? "+" : ""} faces` : "No matching fonts";
+      result.fonts.forEach((face) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "font-result";
+        const names = document.createElement("span");
+        const family = document.createElement("strong");
+        const style = document.createElement("small");
+        family.textContent = face.family;
+        style.textContent = face.subfamily || "Regular";
+        names.append(family, style);
+        const use = document.createElement("span");
+        use.className = "font-result-use";
+        use.textContent = "Use";
+        button.append(names, use);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          status.textContent = `Loading ${face.fullName || face.family}…`;
+          try {
+            await addLocalFontToSelectedText(face);
+          } catch (error) {
+            console.error(error);
+            button.disabled = false;
+            status.textContent = error.message?.replace(/^\[[A-Z_]+\]\s*/, "") || "That font couldn’t be loaded.";
+          }
+        });
+        list.appendChild(button);
+      });
+    } catch (error) {
+      if (request !== fontPickerRequest) return;
+      console.error(error);
+      status.textContent = error.message?.replace(/^\[[A-Z_]+\]\s*/, "") || "Couldn’t list local fonts.";
+    }
+  }
+
+  function showInstalledFontBrowser(backdrop) {
+    const content = backdrop.querySelector(".font-picker-content");
+    content.innerHTML = `
+      <label class="font-search-label" for="font-search">Search installed fonts</label>
+      <input id="font-search" class="font-search" type="search" autocomplete="off" placeholder="Try Didot, Avenir, Helvetica…" />
+      <div class="font-picker-status" role="status"></div>
+      <div class="font-results" role="list"></div>`;
+    const search = content.querySelector("#font-search");
+    search.addEventListener("input", () => {
+      window.clearTimeout(fontPickerSearchTimer);
+      fontPickerSearchTimer = window.setTimeout(() => void renderInstalledFontResults(backdrop, search.value), 140);
+    });
+    void renderInstalledFontResults(backdrop);
+    search.focus();
+  }
+
+  function openFontPicker() {
+    closeFontPicker();
+    const backdrop = fontPickerShell();
+    const bridge = window.carouselBotLocalMcpBridge;
+    const content = backdrop.querySelector(".font-picker-content");
+    const bridgeState = bridge?.getState?.();
+    if (!bridge || !bridgeState?.connected) {
+      content.innerHTML = `<p>Local fonts are provided by the CarouselBot companion. Connect this browser first; font files never leave this computer.</p><div class="modal-actions"><button class="button button--primary" type="button" data-connect-fonts>Connect AI</button></div>`;
+      content.querySelector("[data-connect-fonts]").addEventListener("click", () => {
+        closeFontPicker();
+        bridge?.open?.(app.querySelector('[data-action="connect-agent"]'));
+      });
+      return;
+    }
+    if (!bridgeState.localFontsEnabled) {
+      content.innerHTML = `<p><strong>Allow CarouselBot to use fonts installed on this Mac</strong></p><p>Font names and selected font data stay on this device. Nothing is uploaded.</p><div class="modal-actions"><button class="button button--quiet" type="button" data-cancel-fonts>Not now</button><button class="button button--primary" type="button" data-enable-fonts>Allow local fonts</button></div>`;
+      content.querySelector("[data-cancel-fonts]").addEventListener("click", closeFontPicker);
+      content.querySelector("[data-enable-fonts]").addEventListener("click", async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await bridge.enableLocalFonts();
+          showInstalledFontBrowser(backdrop);
+        } catch (error) {
+          console.error(error);
+          event.currentTarget.disabled = false;
+          content.querySelector("p:last-of-type").textContent = "Couldn’t enable local fonts. Check the companion connection and try again.";
+        }
+      });
+      return;
+    }
+    showInstalledFontBrowser(backdrop);
+  }
+
+  function renderStorageBlocked() {
+    app.innerHTML = `
+      <main class="dashboard" data-storage-blocked role="status">
+        <section class="modal">
+          <h2>Close your other CarouselBot tabs</h2>
+          <p>Save your work and close the other CarouselBot tabs in this browser so this update can finish. This page will continue automatically.</p>
+          <p>Your projects are still stored in this browser. Do not clear your browser data.</p>
+        </section>
+      </main>`;
+  }
+
+  function renderLanding() {
+    output.cancelPendingThumbnailRenders();
+    disconnectDashboardSlideThumbnails();
+    disposeVideoPlayback();
+    hideAssetPreview();
+    renderProductLanding();
+    projects.releaseInactiveProjects();
+  }
+
   function renderDashboard() {
+    if (["/", "/index.html"].includes(location.pathname) && !domainMigration.isLegacyOrigin) return renderLanding();
+    output.cancelPendingThumbnailRenders();
     disposeVideoPlayback();
     hideAssetPreview();
     state.activeProjectId = null;
     state.activeSlideId = null;
+    state.shareAllCache = null;
     clearLayerSelection();
-    document.title = "CarouselBot";
+    projects.releaseInactiveProjects();
     const sortedProjects = [...state.projects].sort((a, b) => b.updatedAt - a.updatedAt);
+    const activeFolderPath = state.activeFolderPath;
+    document.title = activeFolderPath ? `${folderDisplayName(activeFolderPath)} · CarouselBot` : "CarouselBot";
+    const foldersByPath = new Map();
+    for (const folder of state.folders) {
+      for (const path of folderAncestors(folder.path)) {
+        if (folderParentPath(path) === activeFolderPath) foldersByPath.set(path, []);
+      }
+    }
+    for (const project of sortedProjects) {
+      if (!project.folderPath) continue;
+      for (const path of folderAncestors(project.folderPath)) {
+        if (folderParentPath(path) !== activeFolderPath) continue;
+        if (!foldersByPath.has(path)) foldersByPath.set(path, []);
+        foldersByPath.get(path).push(project);
+      }
+    }
+    const folders = [...foldersByPath.entries()].map(([folderPath, folderProjects]) => ({
+      folderPath,
+      projects: folderProjects,
+      updatedAt: Math.max(0, ...state.folders.filter((folder) => folder.path === folderPath).map((folder) => folder.updatedAt), ...folderProjects.map((project) => Number(project.updatedAt) || 0)),
+    }));
+    const visibleProjects = activeFolderPath
+      ? sortedProjects.filter((project) => project.folderPath === activeFolderPath)
+      : sortedProjects.filter((project) => !project.folderPath);
+
+    const renderProjectCard = (project) => {
+      const previewId = `project-preview-${escapeHtml(project.id)}`;
+      const slides = project.slides.map((slide) => {
+        const canvas = slideCanvasDimensions(project, slide);
+        return `
+          <span class="project-preview-slide" data-project-preview-slide-id="${escapeHtml(slide.id)}" data-thumbnail-slide-id="${escapeHtml(slide.id)}" data-thumbnail-project-id="${escapeHtml(project.id)}" style="aspect-ratio:${canvas.width} / ${canvas.height}">
+            ${renderSlideThumbnail(slide, project)}
+          </span>
+        `;
+      }).join("");
+      return `
+        <div class="project-card-shell">
+          <a class="project-card" href="${projectPath(project.id)}" data-project-id="${escapeHtml(project.id)}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}, ${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"}. Right-click for actions." title="Right-click for actions">
+            <span class="project-preview" id="${previewId}" data-project-preview-strip aria-hidden="true">
+              ${slides || `<span class="project-preview-empty">No slides yet</span>`}
+            </span>
+            <span class="project-meta">
+              <strong class="project-meta-name">${icon("square-stack")}<span>${escapeHtml(project.name)}</span></strong>
+              <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
+            </span>
+          </a>
+          ${project.slides.length > 1 ? `
+            <button class="project-preview-scroll-button project-preview-scroll-button--previous" type="button" data-project-preview-direction="previous" aria-controls="${previewId}" aria-label="Scroll ${escapeHtml(project.name)} slide previews left" hidden>${icon("back")}</button>
+            <button class="project-preview-scroll-button project-preview-scroll-button--next" type="button" data-project-preview-direction="next" aria-controls="${previewId}" aria-label="Scroll ${escapeHtml(project.name)} slide previews right" hidden>${icon("forward")}</button>
+          ` : ""}
+        </div>
+      `;
+    };
+
+    const renderFolderProjectPreview = (project, extraClass = "", more = "") => {
+      if (!project) return `<span class="folder-preview-slot ${extraClass}" aria-hidden="true"></span>`;
+      const slide = project.slides[0];
+      const cover = slide ? state.projectCoverUrls.get(project.id) : null;
+      return `
+        <span class="folder-preview-slot ${extraClass}" data-project-cover-id="${escapeHtml(project.id)}" aria-hidden="true">
+          ${cover ? `<img src="${escapeHtml(cover)}" alt=""${state.projectCoverUrls.has(project.id) ? ' data-composite-cover="true"' : ""} />` : ""}
+          ${more}
+        </span>
+      `;
+    };
+
+    const renderFolderCard = (folder) => {
+      const items = folderPreviewItems(folder.projects, folder.folderPath, state.folders);
+      const overflow = Math.max(0, items.length - 8);
+      const slots = Array.from({ length: 8 }, (_, index) => {
+        const item = items[index];
+        const more = overflow && index === 7 ? `<span class="folder-preview-more">+${overflow}</span>` : "";
+        if (item?.type === "folder") {
+          const name = item.path.split("/").at(-1);
+          return `
+            <span class="folder-preview-slot folder-preview-subfolder" title="${escapeHtml(name)}" aria-hidden="true">
+              <span class="folder-preview-collage">${Array.from({ length: 4 }, (_, cell) => renderFolderProjectPreview(item.projects[cell], "folder-preview-mini")).join("")}</span>
+              <span class="folder-preview-folder-mark">${icon("folder")}<span>${escapeHtml(name)}</span></span>
+              ${more}
+            </span>
+          `;
+        }
+        return renderFolderProjectPreview(item?.project, "", more);
+      }).join("");
+      return `
+        <a class="folder-card" href="${folderRoutePath(folder.folderPath)}" data-folder-path="${escapeHtml(folder.folderPath)}" aria-haspopup="menu" aria-label="Open folder ${escapeHtml(folder.folderPath.split("/").at(-1))}. Right-click for actions." title="Right-click for actions">
+          <span class="folder-preview">${slots}</span>
+          <span class="project-meta">
+            <strong class="folder-meta-name">${icon("folder")}<span>${escapeHtml(folder.folderPath.split("/").at(-1))}</span></strong>
+            <span>${folder.projects.length} ${folder.projects.length === 1 ? "project" : "projects"}</span>
+          </span>
+        </a>
+      `;
+    };
+
+    const rootItems = [
+      ...visibleProjects.map((project) => ({ type: "project", updatedAt: Number(project.updatedAt) || 0, project })),
+      ...folders.map((folder) => ({ type: "folder", updatedAt: folder.updatedAt, folder })),
+    ].sort((a, b) => b.updatedAt - a.updatedAt);
+    const cards = rootItems.map((item) => item.type === "folder" ? renderFolderCard(item.folder) : renderProjectCard(item.project)).join("");
+    const projectCountLabel = `${visibleProjects.length} ${visibleProjects.length === 1 ? "project" : "projects"}${folders.length ? ` · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}` : ""}`;
     app.innerHTML = `
       ${renderHeader()}
       ${renderLegacyMigrationNotice(sortedProjects, domainMigration, projects.isMigrationModalDismissed())}
       <main class="dashboard">
-        <section class="dashboard-hero">
-          <div>
-            <p class="eyebrow">Made for your camera roll</p>
-            <h1>Turn photos into<br><em>scroll-stoppers.</em></h1>
-          </div>
-          <p class="dashboard-intro">Upload your photos, place TikTok-style text, and export crisp slideshow images. Nothing else in the way.</p>
-        </section>
+        ${activeFolderPath ? `
+          <section class="folder-dashboard-header">
+            <div>
+              ${folderParentPath(activeFolderPath)
+                ? `<a class="folder-breadcrumb" href="${folderRoutePath(folderParentPath(activeFolderPath))}" data-folder-path="${escapeHtml(folderParentPath(activeFolderPath))}">${icon("back")} ${escapeHtml(folderDisplayName(folderParentPath(activeFolderPath)))}</a>`
+                : `<a class="folder-breadcrumb" href="/dashboard" data-action="open-dashboard-root">${icon("back")} Home</a>`}
+              <h1 class="folder-dashboard-title">${icon("folder")}<span>${escapeHtml(activeFolderPath.split("/").at(-1))}</span></h1>
+            </div>
+          </section>
+        ` : `
+          <section class="dashboard-hero">
+            <div>
+              <p class="eyebrow">Made for your camera roll</p>
+              <h1>Turn photos into<br><em>scroll-stoppers.</em></h1>
+            </div>
+            <p class="dashboard-intro">Upload your photos, place TikTok-style text, and export crisp slideshow images. Nothing else in the way.</p>
+          </section>
+        `}
         <section>
           <div class="section-heading">
-            <h2>Your projects</h2>
-            <span>${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"}</span>
+            <h2>${activeFolderPath ? projectCountLabel : "Your projects"}</h2>
+            ${activeFolderPath ? "" : `<span>${sortedProjects.length} ${sortedProjects.length === 1 ? "project" : "projects"} · ${folders.length} ${folders.length === 1 ? "folder" : "folders"}</span>`}
           </div>
           <div class="project-grid">
-            <button class="new-project-card" type="button" data-action="new-project">
-              <span>+</span>
-              <span><strong>Start a project</strong><small>Add photos when you’re ready</small></span>
-            </button>
-            ${sortedProjects.map((project) => {
-              const slide = project.slides[0];
-              const cover = slide ? state.projectCoverUrls.get(project.id) || slide.imageData : null;
-              return `
-                <a class="project-card" href="${projectPath(project.id)}" data-project-id="${project.id}" aria-haspopup="menu" aria-label="Open ${escapeHtml(project.name)}. Right-click for actions." title="Right-click for actions">
-                  <span class="project-preview" data-project-cover-id="${project.id}">
-                    ${cover ? `<img src="${cover}" alt=""${state.projectCoverUrls.has(project.id) ? " data-composite-cover=\"true\"" : ""} />` : `<span class="project-preview-empty">No slides yet</span>`}
-                  </span>
-                  <span class="project-meta">
-                    <strong>${escapeHtml(project.name)}</strong>
-                    <span>${project.slides.length} ${project.slides.length === 1 ? "slide" : "slides"} · ${formatDate(project.updatedAt)}</span>
-                  </span>
-                </a>
-              `;
-            }).join("")}
+            <div class="new-project-card">
+              <button class="new-project-action" type="button" data-action="new-project"><span aria-hidden="true">⊕</span> New project</button>
+              <button class="new-folder-action" type="button" data-action="new-folder">${icon("folder")} New folder</button>
+            </div>
+            ${cards}
           </div>
         </section>
       </main>
     `;
     bindDashboardEvents();
+    mountProduct("dashboard");
     // The dashboard DOM is already mounted. Start composing covers immediately so
     // background tabs are not left with raw solid-color slide backgrounds while
     // requestAnimationFrame is throttled or paused by the browser.
     refreshAllProjectCovers(sortedProjects);
+    refreshDashboardSlideThumbnails(visibleProjects);
   }
 
 
   function renderEditor() {
+    output.cancelPendingThumbnailRenders();
+    disconnectDashboardSlideThumbnails();
     disposeVideoPlayback();
     const project = activeProject();
     if (!project) return renderDashboard();
+    projects.releaseInactiveProjects();
     document.title = `${project.name} · CarouselBot`;
     if (!activeSlide() && project.slides[0]) state.activeSlideId = project.slides[0].id;
     const previousSlideList = app.querySelector(".slide-list");
@@ -343,7 +699,7 @@ export function createEditorUI({ projects, actions, output }) {
         ${renderAssetRail(project)}
         <section class="workspace" aria-label="Image editor">
           <div class="workspace-inner">
-            ${activeSlide() ? renderStage(activeSlide()) : renderEmptyStage()}
+            ${activeSlide() ? renderStage(activeSlide(), project) : renderEmptyStage(project)}
           </div>
         </section>
         ${renderInspector()}
@@ -353,6 +709,7 @@ export function createEditorUI({ projects, actions, output }) {
       <input id="asset-upload" class="hidden-input" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple />
     `;
     bindEditorEvents();
+    mountProduct("editor");
     app.querySelector('[data-action="video-sample"]')?.addEventListener("click", addVideoSample);
     disposeVideoPlayback = mountVideoPlayback(app, activeSlide(), project);
     const slideList = app.querySelector(".slide-list");
@@ -362,24 +719,24 @@ export function createEditorUI({ projects, actions, output }) {
         state.slideRailScrollPositions.set(project.id, slideList.scrollTop);
       }, { passive: true });
     }
-    requestAnimationFrame(() => {
-      if (activeSlide()) sizeStage();
-      refreshAllSlideThumbnails(project.slides);
-    });
+    if (activeSlide()) sizeStage();
+    refreshAllSlideThumbnails(project.slides, project);
     void repaintTextAfterFontLoad(project.id, state.activeSlideId);
   }
 
   async function repaintTextAfterFontLoad(projectId, slideId) {
     try {
-      await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
-      await document.fonts.ready;
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      await ensureProjectFontsLoaded(project, project.slides.find((item) => item.id === slideId)?.texts || []);
     } catch {
-      return;
+      // Missing fonts are shown with an explicit badge; the editor can still be
+      // used to replace the unavailable face.
     }
     if (state.activeProjectId !== projectId || state.activeSlideId !== slideId) return;
     requestAnimationFrame(() => {
       if (state.activeProjectId !== projectId || state.activeSlideId !== slideId) return;
-      activeSlide()?.texts.forEach(updateTextBox);
+      activeSlide()?.texts.forEach((text) => updateTextBox(text));
     });
   }
 
@@ -415,6 +772,23 @@ export function createEditorUI({ projects, actions, output }) {
       scheduleSave();
     });
 
+    app.querySelector("#project-aspect-ratio")?.addEventListener("change", (event) => {
+      const project = activeProject();
+      if (!project || project.slides.length) return;
+      const nextAspectRatio = normalizeAspectRatio(event.currentTarget.value, project.aspectRatio);
+      if (nextAspectRatio === project.aspectRatio) return;
+      recordHistory();
+      project.aspectRatio = nextAspectRatio;
+      scheduleSave();
+      renderEditor();
+    });
+
+    app.querySelector("#slide-aspect-ratio")?.addEventListener("change", (event) => {
+      const slide = activeSlide();
+      if (!slide) return;
+      setSlideAspectRatio(slide.id, event.currentTarget.value);
+    });
+
     app.querySelectorAll('[data-action="upload"]').forEach((button) => {
       button.addEventListener("click", () => app.querySelector("#photo-upload").click());
     });
@@ -424,6 +798,12 @@ export function createEditorUI({ projects, actions, output }) {
       button.addEventListener("click", () => app.querySelector("#asset-upload").click());
     });
     app.querySelector("#asset-upload")?.addEventListener("change", handleAssetUpload);
+    app.querySelector('[data-action="copy-all-texts"]')?.addEventListener("click", () => {
+      endTextEditing();
+      const text = allSlideTexts(activeProject()?.slides);
+      if (!text) return toast("No text to copy.");
+      void copyText(text, "Copied all texts");
+    });
 
     app.querySelectorAll("[data-slide-id]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -438,8 +818,10 @@ export function createEditorUI({ projects, actions, output }) {
     app.querySelector('[data-action="delete-selection"]')?.addEventListener("click", deleteSelectedLayers);
     app.querySelector('[data-action="done-crop"]')?.addEventListener("click", finishCrop);
     app.querySelector('[data-action="export"]')?.addEventListener("click", exportActiveSlide);
+    app.querySelector('[data-action="export-all"]')?.addEventListener("click", exportAllSlides);
     app.querySelector('[data-action="share"]')?.addEventListener("click", shareActiveSlide);
     app.querySelector('[data-action="share-all"]')?.addEventListener("click", shareAllSlides);
+    app.querySelector('[data-action="share-project-link"]')?.addEventListener("click", projects.shareProject);
     app.querySelector('[data-action="toggle-inspector"]')?.addEventListener("click", () => {
       state.mobileInspectorOpen = !state.mobileInspectorOpen;
       app.querySelector(".inspector")?.classList.toggle("is-mobile-open", state.mobileInspectorOpen);
@@ -560,6 +942,34 @@ export function createEditorUI({ projects, actions, output }) {
   }
 
   function bindInspectorControls() {
+    const geometryInputs = app.querySelectorAll("[data-shared-property]");
+    const updateSharedGeometryControls = () => {
+      const layers = selectedLayers();
+      geometryInputs.forEach((input) => {
+        if (input === document.activeElement) return;
+        const property = input.dataset.sharedProperty;
+        const values = layers.map(({ kind, item }) => property === "height" && kind === "overlay" ? getOverlayMetrics(item).height : item[property] || 0);
+        input.value = values.length && values.every((value) => value === values[0])
+          ? Math.round(values[0] * (property === "rotation" ? 10 : 1000)) / 10
+          : "";
+      });
+    };
+    geometryInputs.forEach((input) => {
+      input.addEventListener("focus", recordHistory);
+      input.addEventListener("input", () => {
+        if (input.value === "" || !Number.isFinite(Number(input.value))) return;
+        const property = input.dataset.sharedProperty;
+        const value = Number(input.value);
+        if (property !== "rotation" && value <= 0) return;
+        selectedLayers().forEach(({ kind, item }) => {
+          item[property] = property === "rotation" ? ((value % 360) + 360) % 360 : value / 100;
+          if (kind === "text") updateTextBox(item);
+          else updateOverlayBox(item);
+        });
+        updateSharedGeometryControls();
+        scheduleSave();
+      });
+    });
     const textarea = app.querySelector("#text-value");
     textarea?.addEventListener("input", () => {
       const text = selectedText();
@@ -570,66 +980,128 @@ export function createEditorUI({ projects, actions, output }) {
       scheduleSave();
     });
 
-    app.querySelectorAll("[data-text-style]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.style = button.dataset.textStyle;
-        ensureBoxedTextContrast(text);
-        scheduleSave();
+    const fontSelect = app.querySelector("#text-font");
+    fontSelect?.addEventListener("change", async () => {
+      if (fontSelect.value === "__add_local_font__") {
         refreshSelection();
-        updateTextBox(text);
-        ensureTextFits(text);
-      });
+        openFontPicker();
+        return;
+      }
+      fontSelect.disabled = true;
+      try {
+        await applyFontToSelectedText(fontSelect.value || null);
+      } catch (error) {
+        console.error(error);
+        toast(error.code === "FONT_UNAVAILABLE" ? error.message.replace(/^\[FONT_UNAVAILABLE\]\s*/, "") : "That font couldn’t be applied.");
+        refreshSelection();
+      } finally {
+        fontSelect.disabled = false;
+      }
     });
 
-    app.querySelectorAll("[data-text-align]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.align = button.dataset.textAlign;
-        app.querySelectorAll("[data-text-align]").forEach((item) => {
-          const active = item === button;
-          item.classList.toggle("is-active", active);
-          item.setAttribute("aria-pressed", String(active));
-        });
-        updateTextBox(text);
-        scheduleSave();
+    const editSelectedTexts = (edit, { fit = false } = {}) => {
+      selectedLayers().filter(({ kind }) => kind === "text").forEach(({ item }) => {
+        edit(item);
+        updateTextBox(item);
+        if (fit) ensureTextFits(item);
       });
+      updateSharedGeometryControls();
+      scheduleSave();
+    };
+    const bindTextButtons = (selector, edit, options) => {
+      app.querySelectorAll(selector).forEach((button) => {
+        button.addEventListener("click", () => {
+          recordHistory();
+          editSelectedTexts((text) => edit(text, button), options);
+          refreshSelection();
+        });
+      });
+    };
+    bindTextButtons("[data-text-style]", (text, button) => {
+      text.style = button.dataset.textStyle;
+      ensureBoxedTextContrast(text);
+    }, { fit: true });
+    bindTextButtons("[data-text-align]", (text, button) => { text.align = button.dataset.textAlign; });
+
+    const weightNumber = app.querySelector("#font-weight-number");
+    const weightRange = app.querySelector("#font-weight");
+    let weightUpdate = 0;
+    let weightHistoryRecorded = false;
+    const setWeight = async (value, { fromSlider = false } = {}) => {
+      if (value === "" || !Number.isFinite(Number(value))) return;
+      const update = ++weightUpdate;
+      const project = activeProject();
+      const targets = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => item);
+      const selection = selectedLayerKeys().join("|");
+      try {
+        const candidates = targets.map((item) => applyTextWeight(project, { ...item }, value));
+        await ensureProjectFontsLoaded(project, candidates);
+        if (update !== weightUpdate || activeProject() !== project || selectedLayerKeys().join("|") !== selection) return;
+        if (!fromSlider || !weightHistoryRecorded) recordHistory(project);
+        if (fromSlider) weightHistoryRecorded = true;
+        targets.forEach((item, index) => {
+          Object.assign(item, candidates[index]);
+          updateTextBox(item);
+          ensureTextFits(item, { force: true });
+        });
+        if (fromSlider) {
+          if (weightNumber) weightNumber.value = String(candidates[0]?.fontWeight ?? value);
+          if (weightRange) weightRange.dataset.mixed = "false";
+        } else refreshSelection();
+        scheduleSave();
+      } catch (error) {
+        if (update === weightUpdate) window.alert(error.message);
+      }
+    };
+    weightNumber?.addEventListener("change", () => void setWeight(weightNumber.value));
+    weightRange?.addEventListener("pointerdown", () => { weightHistoryRecorded = false; });
+    weightRange?.addEventListener("keydown", (event) => { if (!event.repeat) weightHistoryRecorded = false; });
+    weightRange?.addEventListener("input", () => {
+      if (weightNumber) weightNumber.value = weightRange.value;
+      void setWeight(weightRange.value, { fromSlider: true });
     });
 
     const range = app.querySelector("#font-size");
     const number = app.querySelector("#font-size-number");
     const setSize = (value, { fromSlider = false } = {}) => {
-      const text = selectedText();
-      if (!text) return;
-      text.size = fromSlider
+      if (value === "" || !Number.isFinite(Number(value))) return;
+      const size = fromSlider
         ? fontSizeFromSliderPosition(value)
-        : Math.round(clamp(Number(value) || FONT_SIZE_MIN, FONT_SIZE_MIN, FONT_SIZE_MAX) * 2) / 2;
-      if (range) range.value = sliderPositionFromFontSize(text.size);
-      if (range) range.setAttribute("aria-valuetext", `${formatFontSize(text.size)} pixels`);
-      if (number) number.value = formatFontSize(text.size);
-      const output = app.querySelector(".control-label output");
-      if (output) output.textContent = `${formatFontSize(text.size)} px`;
-      updateTextBox(text);
-      ensureTextFits(text);
-      scheduleSave();
+        : Math.round(clamp(Number(value), FONT_SIZE_MIN, FONT_SIZE_MAX) * 2) / 2;
+      editSelectedTexts((text) => { text.size = size; }, { fit: true });
+      if (range) {
+        range.value = sliderPositionFromFontSize(size);
+        range.dataset.mixed = "false";
+        range.setAttribute("aria-valuetext", `${formatFontSize(size)} pixels`);
+      }
+      if (number) number.value = formatFontSize(size);
+      const output = app.querySelector('[for="font-size"] output');
+      if (output) output.textContent = `${formatFontSize(size)} px`;
     };
     range?.addEventListener("pointerdown", recordHistory);
+    range?.addEventListener("keydown", (event) => { if (!event.repeat && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) recordHistory(); });
     range?.addEventListener("input", () => setSize(range.value, { fromSlider: true }));
-    number?.addEventListener("pointerdown", recordHistory);
+    range?.addEventListener("pointerup", () => {
+      if (range.dataset.mixed === "true") setSize(range.value, { fromSlider: true });
+    });
+    number?.addEventListener("focus", recordHistory);
     number?.addEventListener("input", () => setSize(number.value));
 
     const colorPicker = app.querySelector("#text-color-picker");
     const hexInput = app.querySelector("#text-color-hex");
     const rgbInput = app.querySelector("#text-color-rgb");
+    const sharedTextColor = () => {
+      const colors = selectedLayers().filter(({ kind }) => kind === "text").map(({ item }) => textColor(item));
+      return colors.every((color) => color === colors[0]) ? colors[0] || "" : "";
+    };
     const setTextColor = (value, { source = null } = {}) => {
       const text = selectedText();
       const color = normalizeHexColor(value);
       if (!text || !color) return false;
-      text.color = color;
+      editSelectedTexts((item) => { item.color = color; });
+      const colorLabel = app.querySelector(".color-picker-wrap span");
+      if (colorLabel) colorLabel.textContent = "Color wheel";
+      app.querySelectorAll("[data-copy-color]").forEach((button) => { button.disabled = false; });
       if (colorPicker && source !== "picker") colorPicker.value = color;
       if (hexInput && source !== "hex") hexInput.value = color;
       if (rgbInput && source !== "rgb") rgbInput.value = formatRgb(color);
@@ -651,7 +1123,7 @@ export function createEditorUI({ projects, actions, output }) {
     });
     colorPicker?.addEventListener("pointerdown", recordHistory);
     colorPicker?.addEventListener("input", () => setTextColor(colorPicker.value, { source: "picker" }));
-    hexInput?.addEventListener("focus", recordHistory, { once: true });
+    hexInput?.addEventListener("focus", recordHistory);
     hexInput?.addEventListener("input", () => {
       const fullHex = hexInput.value.trim().replace(/^#/, "");
       if (/^[0-9a-f]{6}$/i.test(fullHex)) setTextColor(fullHex, { source: "hex" });
@@ -659,9 +1131,9 @@ export function createEditorUI({ projects, actions, output }) {
     hexInput?.addEventListener("change", () => {
       const color = normalizeHexColor(hexInput.value);
       if (color) setTextColor(color);
-      else hexInput.value = textColor(selectedText());
+      else hexInput.value = sharedTextColor();
     });
-    rgbInput?.addEventListener("focus", recordHistory, { once: true });
+    rgbInput?.addEventListener("focus", recordHistory);
     rgbInput?.addEventListener("input", () => {
       const color = rgbToHex(rgbInput.value);
       if (color) setTextColor(color, { source: "rgb" });
@@ -669,7 +1141,7 @@ export function createEditorUI({ projects, actions, output }) {
     rgbInput?.addEventListener("change", () => {
       const color = rgbToHex(rgbInput.value);
       if (color) setTextColor(color);
-      else rgbInput.value = formatRgb(textColor(selectedText()));
+      else rgbInput.value = sharedTextColor() ? formatRgb(sharedTextColor()) : "";
     });
     app.querySelectorAll("[data-copy-color]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -678,31 +1150,13 @@ export function createEditorUI({ projects, actions, output }) {
       });
     });
 
-    app.querySelectorAll("[data-background-tone]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.background = button.dataset.backgroundTone;
-        ensureBoxedTextContrast(text);
-        refreshSelection();
-        updateTextBox(text);
-        scheduleSave();
-      });
+    bindTextButtons("[data-background-tone]", (text, button) => {
+      text.background = button.dataset.backgroundTone;
+      ensureBoxedTextContrast(text);
     });
-
-    app.querySelectorAll("[data-background-shape]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const text = selectedText();
-        if (!text) return;
-        recordHistory();
-        text.backgroundShape = button.dataset.backgroundShape;
-        app.querySelectorAll("[data-background-shape]").forEach((item) => item.classList.toggle("is-active", item === button));
-        updateTextBox(text);
-        ensureTextFits(text);
-        scheduleSave();
-      });
-    });
+    bindTextButtons("[data-background-shape]", (text, button) => {
+      text.backgroundShape = button.dataset.backgroundShape;
+    }, { fit: true });
 
     const photoZoom = app.querySelector("#photo-zoom");
     photoZoom?.addEventListener("pointerdown", recordHistory);
@@ -834,32 +1288,50 @@ export function createEditorUI({ projects, actions, output }) {
   function sizeStage() {
     const inner = app.querySelector(".workspace-inner");
     const workspace = app.querySelector(".workspace");
+    const screenPreview = app.querySelector(".tiktok-screen-preview");
+    const stageFrame = app.querySelector(".stage-frame");
     const stage = app.querySelector(".stage");
     const slide = activeSlide();
-    if (!inner || !workspace || !stage || !slide) return;
+    if (!inner || !workspace || !screenPreview || !stageFrame || !stage || !slide) return;
     const innerStyle = getComputedStyle(inner);
     const horizontalPadding = (parseFloat(innerStyle.paddingLeft) || 0) + (parseFloat(innerStyle.paddingRight) || 0);
     const verticalPadding = (parseFloat(innerStyle.paddingTop) || 0) + (parseFloat(innerStyle.paddingBottom) || 0);
     const availableWidth = Math.max(1, workspace.clientWidth - horizontalPadding);
-    const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding - (app.querySelector(".video-controls") ? 112 : 0));
+    const availableHeight = Math.max(1, workspace.clientHeight - verticalPadding - (app.querySelector(".video-controls") ? 96 : 0));
     const actions = inner.querySelector(".canvas-actions");
     const composition = inner.querySelector(".canvas-composition");
     const toolbarGap = composition ? parseFloat(getComputedStyle(composition).columnGap) || 0 : 0;
     const canvasWidth = Math.max(1, availableWidth - (actions?.offsetWidth || 0) - toolbarGap);
-    const ratio = OUTPUT_WIDTH / OUTPUT_HEIGHT;
-    let width = canvasWidth;
-    let height = width / ratio;
-    if (height > availableHeight) {
-      height = availableHeight;
-      width = height * ratio;
+    const canvas = slideCanvasDimensions(activeProject(), slide);
+    const screenRatio = 9 / 16;
+    let screenWidth = canvasWidth;
+    let screenHeight = screenWidth / screenRatio;
+    if (screenHeight > availableHeight) {
+      screenHeight = availableHeight;
+      screenWidth = screenHeight * screenRatio;
     }
-    width *= state.canvasZoom;
-    height *= state.canvasZoom;
+    screenWidth *= state.canvasZoom;
+    screenHeight *= state.canvasZoom;
+
+    const slideRatio = canvas.width / canvas.height;
+    let width;
+    let height;
+    if (slideRatio >= screenRatio) {
+      width = screenWidth;
+      height = width / slideRatio;
+    } else {
+      height = screenHeight;
+      width = height * slideRatio;
+    }
     state.stageWidth = width;
     state.stageHeight = height;
+    screenPreview.style.width = `${screenWidth}px`;
+    screenPreview.style.height = `${screenHeight}px`;
+    stageFrame.style.width = `${width}px`;
+    stageFrame.style.height = `${height}px`;
     stage.style.width = `${width}px`;
     stage.style.height = `${height}px`;
-    stage.style.setProperty("--stage-scale", width / OUTPUT_WIDTH);
+    stage.style.setProperty("--stage-scale", width / canvas.width);
     updateStageImage(slide);
     activeSlide().texts.forEach(updateTextBox);
     (activeSlide().overlays || []).forEach(updateOverlayBox);
@@ -909,18 +1381,19 @@ export function createEditorUI({ projects, actions, output }) {
     updateStageImage(slide);
   }
 
-  function ensureTextFits(text) {
+  function ensureTextFits(text, { force = false } = {}) {
     requestAnimationFrame(() => {
-      const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
+      const box = app.querySelector(`.text-box[data-text-id="${CSS.escape(text.id)}"]`);
       const contentWrap = box?.querySelector(".text-content-wrap");
       if (!box || !contentWrap || !state.stageHeight) return;
       const previousMaxHeight = contentWrap.style.maxHeight;
       contentWrap.style.maxHeight = "none";
       const neededPixels = contentWrap.scrollHeight + 4;
       contentWrap.style.maxHeight = previousMaxHeight;
-      if (neededPixels <= box.clientHeight) return;
+      if (!force && neededPixels <= box.clientHeight) return;
 
-      const nextHeight = Math.min(1, neededPixels / state.stageHeight);
+      const nextHeight = clamp(neededPixels / state.stageHeight, 0.045, 1);
+      if (Math.abs(nextHeight - text.height) < 0.0005) return;
       text.height = nextHeight;
       updateTextBox(text);
       scheduleSave();
@@ -1003,6 +1476,17 @@ export function createEditorUI({ projects, actions, output }) {
     app.querySelectorAll(".asset-item").forEach((item) => {
       const assetId = item.dataset.assetId;
       const previewSrc = item.querySelector("img")?.src;
+      item.addEventListener("contextmenu", (event) => showAssetMenu(event, assetId));
+      item.addEventListener("click", (event) => {
+        if (event.target.closest("button") || state.draggingAssetId) return;
+        openAssetPreview(assetId);
+      });
+      item.addEventListener("keydown", (event) => {
+        if (event.target !== item || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openAssetPreview(assetId);
+      });
       item.addEventListener("pointerenter", (event) => {
         if (state.draggingAssetId || !previewSrc) return;
         showAssetPreview(previewSrc, event.clientX, event.clientY);
@@ -1027,15 +1511,64 @@ export function createEditorUI({ projects, actions, output }) {
         hideAssetPreview();
       });
     });
-    app.querySelectorAll('[data-action="delete-asset"]').forEach((button) => {
-      button.addEventListener("click", (event) => {
-        showAssetDeleteMenu(event, button.dataset.assetId);
-      });
-    });
     bindAssetTrash();
   }
 
+  function openAssetPreview(assetId) {
+    const asset = projectAsset(assetId);
+    if (!asset) return;
+    hideAssetPreview();
+    closeLayerMenu();
+    document.querySelector(".asset-preview-modal")?.close();
+    const modal = document.createElement("dialog");
+    modal.className = "asset-preview-modal";
+    modal.setAttribute("aria-label", `Preview ${asset.name}`);
+    const image = document.createElement(asset.videoData ? "video" : "img");
+    image.src = asset.videoData || asset.imageData;
+    if (asset.videoData) {
+      image.controls = true;
+      image.loop = true;
+      image.playsInline = true;
+      image.setAttribute("aria-label", asset.name);
+      image.addEventListener("click", (event) => event.stopPropagation());
+    } else image.alt = asset.name;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "asset-preview-close";
+    close.setAttribute("aria-label", "Close asset preview");
+    close.textContent = "×";
+    close.addEventListener("click", () => modal.close());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) modal.close();
+    });
+    modal.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (asset.videoData && (event.code === "Space" || event.key === " ")) {
+        event.preventDefault();
+        if (!event.repeat) {
+          if (image.paused) void image.play().catch(() => {});
+          else image.pause();
+        }
+      }
+    }, true);
+    modal.addEventListener("keyup", (event) => {
+      if (asset.videoData && (event.code === "Space" || event.key === " ")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+    modal.addEventListener("close", () => {
+      if (asset.videoData) releaseVideo(image);
+      modal.remove();
+    }, { once: true });
+    modal.append(image, close);
+    document.body.appendChild(modal);
+    modal.showModal();
+    if (asset.videoData) void image.play().catch(() => {});
+  }
+
   function showAssetPreview(src, clientX, clientY) {
+    if (document.querySelector(".layer-menu")) return;
     let preview = document.querySelector(".asset-hover-preview");
     if (!preview) {
       preview = document.createElement("img");
@@ -1163,6 +1696,8 @@ export function createEditorUI({ projects, actions, output }) {
   return {
     toast,
     renderDashboard,
+    renderLanding,
+    renderStorageBlocked,
     renderEditor,
     navigateSlides,
     refreshSelection,

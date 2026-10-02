@@ -5,9 +5,9 @@
   "workspaces": [
     "packages/*"
   ],
-  "description": "Local-first carousel editor with an optional MCP companion",
+  "description": "Carousel editor with local MCP and hosted AI text and layout editing",
   "homepage": "https://carousel.bot",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/alexgusevski/carouselbot.git"
@@ -26,7 +26,7 @@
     "test:migration:browser": "node scripts/test-domain-migration-browser.mjs",
     "test:editor": "node --test test/*.test.mjs",
     "test:editor:browser": "node scripts/test-editor-browser.mjs",
-    "test": "npm run test:migration && npm run test:editor && npm run test:mcp",
+    "test": "npm run test:migration && npm run test:editor && npm run test:mcp && npm run test:product",
     "test:mcp": "node --test packages/mcp/test/*.test.mjs",
     "test:mcp:browser": "node scripts/test-mcp-browser-local.mjs --deployed --shared-daemon",
     "test:mcp:browser:local": "node scripts/test-mcp-browser-local.mjs",
@@ -34,10 +34,21 @@
     "preview:cloudflare": "npm run build && wrangler pages dev dist",
     "deploy:test": "node scripts/deploy-test.mjs",
     "deploy:dev": "node scripts/deploy-dev.mjs",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "test:product": "node --test backend/test/*.test.mjs test/hosted-agent.test.mjs",
+    "preview:product": "npm run build && wrangler dev --config wrangler.product.jsonc",
+    "deploy:product:dev": "npm run build && wrangler deploy --config wrangler.product.jsonc",
+    "deploy:product": "node scripts/deploy-product.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
-    "wrangler": "^4.123.0"
+    "wrangler": "^4.145.0"
+  },
+  "dependencies": {
+    "mediabunny": "1.60.0",
+    "@clerk/backend": "^3.21.1",
+    "@cloudflare/puppeteer": "^1.4.0",
+    "@polar-sh/sdk": "^1.0.1",
+    "openai": "^7.25.0"
   }
 }

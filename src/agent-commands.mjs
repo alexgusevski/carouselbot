@@ -1,9 +1,11 @@
+import { readVideoAsset } from "./video-media.mjs";
+import { renderVideoFrame } from "./video-frame.mjs";
+import { renderSlideMp4 } from "./video-export.mjs";
+import { controlVideoPlayback } from "./video-playback.mjs";
+import { slideVideoDuration } from "./editor-model.mjs";
+import { allSlideTexts } from "./editor-model.mjs";
 import {
-  DESIGN_WIDTH,
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
   DEFAULT_OUTLINE_WIDTH,
-  TEXT_WEIGHT,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -15,13 +17,24 @@ import {
   CANVAS_ZOOM_MAX,
   uid,
   projectPath,
+  aspectRatioFromDimensions,
+  normalizeAspectRatio,
+  normalizeFolderPath,
+  duplicateProjectData,
+  folderContains,
+  folderAncestors,
+  folderParentPath,
   normalizeHexColor,
+  projectCanvasDimensions,
+  slideCanvasDimensions,
+  scaleCanvasDimensions,
   textColor,
   ensureBoxedTextContrast,
   layerKey,
   overlayCrop,
   textAlignment,
   initialOverlayWidth,
+  remapLayerGeometryBetweenCanvases,
   slideItems,
   nextLayerZ,
   clamp,
@@ -41,7 +54,7 @@ import {
   constrainImagePosition,
 } from "./editor-state.mjs";
 import {
-  getProjectFromDb,
+  getProjectMetadataFromDb,
   staleProjectError,
   putProject,
   deleteProjectFromDb,
@@ -49,11 +62,28 @@ import {
 import { measureCanvas } from "./editor-view.mjs";
 import { getImageDimensions, renderSlideCanvas, fingerprintData } from "./slide-renderer.mjs";
 import {
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_FONT_WEIGHT,
+  applyProjectFontToText,
+  applyTextWeight,
+  createProjectFont,
+  ensureProjectFontsLoaded,
+  projectFontForText,
+  publicProjectFont,
+  textCanvasFont,
+  textFontVariationCss,
+  textFontWeight,
+  textWeightOptions,
+} from "./project-fonts.mjs";
+import { reconcileAgentFontWeightPatch } from "./agent-font-patch.mjs";
+import { canonicalSolidBackgroundColor, solidBackgroundDataUrl } from "./slide-background.mjs";
+import {
   recordHistory,
   undo,
   redo,
   updateBrowserRoute,
   reloadProjectFromDb,
+  flushPendingSave,
   clearLayerSelection,
   toast,
   renderDashboard,
@@ -97,28 +127,71 @@ function agentSelect(project, slide = null) {
 }
 
 function agentProjectSummary(project) {
+  const canvas = projectCanvasDimensions(project);
   return {
     id: project.id,
     name: project.name,
+    aspectRatio: canvas.aspectRatio,
+    canvasWidth: canvas.width,
+    canvasHeight: canvas.height,
+    folderPath: project.folderPath || null,
     revision: Number(project.revision) || 0,
     slideCount: project.slides.length,
     assetCount: (project.assets || []).length,
+    fontCount: (project.fonts || []).length,
     updatedAt: project.updatedAt,
   };
 }
 
-function agentSlideSummary(slide, index) {
+function agentFolderSummaries() {
+  const folders = new Map();
+  for (const project of state.projects) {
+    if (!project.folderPath) continue;
+    for (const path of folderAncestors(project.folderPath)) {
+      const folder = folders.get(path) || {
+        path,
+        parentPath: folderParentPath(path),
+        projectIds: [],
+        projectCount: 0,
+        updatedAt: 0,
+      };
+      folder.projectIds.push(project.id);
+      folder.projectCount += 1;
+      folder.updatedAt = Math.max(folder.updatedAt, Number(project.updatedAt) || 0);
+      folders.set(path, folder);
+    }
+  }
+  return [...folders.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path));
+}
+
+function agentSlideBackgroundSummary(slide, project) {
+  if (slide.videoData || slide.__hasVideoData) return { type: "video", duration: slide.duration };
+  const color = canonicalSolidBackgroundColor(slide, project);
+  return color
+    ? { type: "solid", color }
+    : { type: "image" };
+}
+
+function agentSlideSummary(slide, index, project) {
+  const canvas = slideCanvasDimensions(project, slide);
   return {
     id: slide.id,
     index,
     name: slide.name,
+    aspectRatio: canvas.aspectRatio,
+    canvasWidth: canvas.width,
+    canvasHeight: canvas.height,
     width: slide.width,
     height: slide.height,
+    background: agentSlideBackgroundSummary(slide, project),
     imageScale: slide.imageScale || 1,
     imageX: slide.imageX || 0,
     imageY: slide.imageY || 0,
     textCount: slide.texts.length,
     imageCount: (slide.overlays || []).length,
+    mode: slideVideoDuration(slide, project) ? "video" : "image",
+    duration: slideVideoDuration(slide, project),
+    loop: true,
   };
 }
 
@@ -127,27 +200,24 @@ function agentInspect({ projectId, slideId, includeAllProjects = true } = {}) {
   const slide = project?.slides.find((item) => item.id === (slideId || state.activeSlideId)) || null;
   return {
     protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
+    capabilities: { videoImport: true, videoFrames: true, videoPlayback: true, videoExport: true, maxVideoExportDuration: 120 },
     activeProjectId: state.activeProjectId,
     activeSlideId: state.activeSlideId,
+    activeFolderPath: state.activeFolderPath,
     view: { canvasZoom: state.canvasZoom, showTikTokOverlay: state.showTikTokOverlay },
-    ...(includeAllProjects ? { projects: state.projects.map(agentProjectSummary) } : {}),
+    ...(includeAllProjects ? { projects: state.projects.map(agentProjectSummary), folders: agentFolderSummaries() } : {}),
     project: project ? {
       ...agentProjectSummary(project),
-      slides: project.slides.map(agentSlideSummary),
-      assets: (project.assets || []).map(({ id, name, width, height }) => ({ id, name, width, height })),
+      slides: project.slides.map((projectSlide, index) => agentSlideSummary(projectSlide, index, project)),
+      assets: (project.assets || []).map(({ id, name, width, height, videoData, __hasVideoData, duration }) => ({ id, name, width, height, type: videoData || __hasVideoData ? "video" : "image", ...(videoData || __hasVideoData ? { duration } : {}) })),
+      fonts: (project.fonts || []).map((font) => publicProjectFont(project, font)),
     } : null,
     slide: slide ? {
-      ...agentSlideSummary(slide, project.slides.indexOf(slide)),
-      texts: slide.texts.map((text) => ({ ...text })),
-      images: (slide.overlays || []).map((overlay) => ({ ...overlay })),
+      ...agentSlideSummary(slide, project.slides.indexOf(slide), project),
+      texts: slide.texts.map((text) => ({ ...text, effectiveFontWeight: textFontWeight(project, text), supportedWeights: textWeightOptions(project, text) })),
+      images: (slide.overlays || []).map((overlay) => ({ ...overlay, type: project.assets?.some((asset) => asset.id === overlay.assetId && (asset.videoData || asset.__hasVideoData)) ? "video" : "image" })),
     } : null,
   };
-}
-
-function agentSolidBackground(color = "#EEEDE7") {
-  const fill = normalizeHexColor(color, "#EEEDE7");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${OUTPUT_WIDTH}" height="${OUTPUT_HEIGHT}" viewBox="0 0 ${OUTPUT_WIDTH} ${OUTPUT_HEIGHT}"><rect width="100%" height="100%" fill="${fill}"/></svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 function agentNextFrame() {
@@ -169,12 +239,25 @@ async function agentMedia(mediaId) {
   if (!mediaId) return null;
   const media = await window.carouselBotLocalMcpBridge.fetchMedia(mediaId);
   const imageData = await fileToDataUrl(media.file);
+  if (media.file.type.startsWith("video/")) return { ...await readVideoAsset(imageData), name: media.name };
   const dimensions = await getImageDimensions(imageData);
   return { imageData, ...dimensions, name: media.name };
 }
 
+async function agentMarkFontsUsed(project, textLayers) {
+  const bridge = window.carouselBotLocalMcpBridge;
+  if (!bridge?.markFontUsed) return;
+  const localFontIds = [...new Set(textLayers.flatMap((text) => {
+    const font = projectFontForText(project, text);
+    return font?.localFontId ? [font.localFontId] : [];
+  }))];
+  await Promise.all(localFontIds.map((localFontId) => bridge.markFontUsed(localFontId).catch((error) => {
+    console.warn(`Could not update recent font usage for ${localFontId}:`, error);
+  })));
+}
+
 async function agentCommit(project, slide, mutate, message) {
-  const stored = await getProjectFromDb(project.id);
+  const stored = await getProjectMetadataFromDb(project.id);
   const baseRevision = Number(project.revision) || 0;
   const storedRevision = Number(stored?.revision) || 0;
   if (stored && (storedRevision !== baseRevision || Number(stored.updatedAt) > Number(project.updatedAt))) {
@@ -202,18 +285,23 @@ async function agentCommit(project, slide, mutate, message) {
   project.updatedAt = Date.now();
   project.revision = baseRevision + 1;
   state.shareAllCache = null;
-  if (targetIsVisible) renderEditor();
-  else if (!visibleView.projectId) {
-    renderDashboard();
-    bindGlobalActions();
-  }
-  await agentNextFrame();
+  // Dashboard previews hydrate from storage, so expose only the committed revision.
   try {
     await putProject(project, { expectedRevision: baseRevision });
   } catch (error) {
     if (error.code === "STALE_PROJECT") await reloadProjectFromDb(project.id);
     throw error;
   }
+  if (targetIsVisible) renderEditor();
+  else if (!visibleView.projectId) {
+    if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
+      state.activeFolderPath = null;
+      updateBrowserRoute("/dashboard", "replace");
+    }
+    renderDashboard();
+    bindGlobalActions();
+  }
+  await agentNextFrame();
   if (message) toast(message);
   return {
     projectId: project.id,
@@ -225,7 +313,13 @@ async function agentCommit(project, slide, mutate, message) {
   };
 }
 
-function agentApplyTextPatch(text, patch = {}) {
+function agentFontError(code, message) {
+  const error = new Error(`[${code}] ${message}`);
+  error.code = code;
+  return error;
+}
+
+function agentApplyTextPatch(text, patch = {}, project = null) {
   if (patch.text != null) text.text = String(patch.text).slice(0, 4000);
   if (patch.role != null && Object.hasOwn(AGENT_TEXT_ROLE_SIZES, patch.role)) text.role = patch.role;
   if (patch.width != null) text.width = clamp(Number(patch.width), 0.1, 1.5);
@@ -239,39 +333,74 @@ function agentApplyTextPatch(text, patch = {}) {
   if (patch.background != null) text.background = patch.background === "black" ? "black" : "white";
   if (patch.backgroundShape != null) text.backgroundShape = patch.backgroundShape === "full" ? "full" : "lines";
   if (patch.align != null) text.align = ["left", "center", "right"].includes(patch.align) ? patch.align : text.align;
+  if (Object.hasOwn(patch, "fontId")) {
+    if (!project) throw new Error("A project is required when changing a text font.");
+    applyProjectFontToText(project, text, patch.fontId);
+  }
+  let projectFont = projectFontForText(project, text);
+  if (patch.fontWeight != null) {
+    const requestedWeight = clamp(Math.round(Number(patch.fontWeight) || DEFAULT_FONT_WEIGHT), 1, 1000);
+    applyTextWeight(project, text, requestedWeight);
+    projectFont = projectFontForText(project, text);
+  }
+  if (patch.fontStyle != null) {
+    const requestedStyle = patch.fontStyle === "italic" ? "italic" : "normal";
+    const exactStyle = projectFont?.italic ? "italic" : "normal";
+    if (projectFont && requestedStyle !== exactStyle) {
+      throw agentFontError("FONT_FACE_MISMATCH", `${projectFont.fullName} is ${exactStyle}. Import and use the exact installed ${requestedStyle} face.`);
+    }
+    text.fontStyle = requestedStyle;
+  }
+  if (patch.fontVariationSettings != null) {
+    const axes = new Map((projectFont?.variableAxes || []).map((axis) => [axis.tag, axis]));
+    if (projectFont) {
+      const unsupported = Object.keys(patch.fontVariationSettings).find((tag) => !axes.has(tag));
+      if (unsupported) throw agentFontError("FONT_AXIS_UNSUPPORTED", `${projectFont.fullName} does not expose the ${unsupported} axis.`);
+    }
+    text.fontVariationSettings = Object.fromEntries(Object.entries(patch.fontVariationSettings)
+      .filter(([tag, value]) => /^[A-Za-z0-9]{4}$/.test(tag) && Number.isFinite(Number(value)))
+      .map(([tag, value]) => {
+        const axis = axes.get(tag);
+        const numeric = tag === "wght" ? Math.round(Number(value)) : Number(value);
+        return [tag, axis ? clamp(numeric, axis.min, axis.max) : tag === "wght" ? clamp(numeric, 1, 1000) : numeric];
+      }));
+  }
+  reconcileAgentFontWeightPatch(text, patch);
   if (patch.rotation != null) text.rotation = ((Number(patch.rotation) || 0) % 360 + 360) % 360;
   if (patch.z != null) text.z = Number(patch.z) || text.z;
   ensureBoxedTextContrast(text);
   return text;
 }
 
-function agentFitTextBox(text, mode = "both") {
+function agentFitTextBox(text, mode = "both", project = agentProject(), slide = null) {
   const context = measureCanvas.getContext("2d");
   const fontSize = text.size;
-  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  const canvas = slideCanvasDimensions(project, slide);
+  context.font = textCanvasFont(project, text, fontSize);
+  if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(project, text);
   const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
   const fullBox = text.style === "boxed" && text.backgroundShape === "full";
   const horizontalInset = perLineBox
     ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
-    : fullBox ? fontSize * 0.76 : fontSize * 0.32;
-  const currentWidth = text.width * DESIGN_WIDTH;
+    : fontSize * 0.32;
+  const currentWidth = text.width * canvas.width;
   const longestParagraph = Math.max(...String(text.text || " ").split("\n").map((line) => context.measureText(line || " ").width));
   const fittedWidth = mode === "height"
     ? currentWidth
-    : Math.min(currentWidth, Math.max(DESIGN_WIDTH * 0.12, longestParagraph + horizontalInset));
+    : Math.min(currentWidth, Math.max(canvas.width * 0.12, longestParagraph + horizontalInset));
   const lines = wrapText(context, text.text, Math.max(1, fittedWidth - horizontalInset));
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
   const contentHeight = perLineBox
     ? Math.max(fontSize * BOX_LINE_HEIGHT, (lines.length - 1) * lineHeight + fontSize * BOX_LINE_HEIGHT) + fontSize * AGENT_TEXT_VERTICAL_SAFETY_PADDING
     : lines.length * lineHeight + fontSize * (fullBox ? 0.76 : 0.28);
-  const fittedHeight = Math.max(OUTPUT_HEIGHT * 0.045, contentHeight);
+  const fittedHeight = Math.max(canvas.height * 0.045, contentHeight);
   const previous = { x: text.x, y: text.y, width: text.width, height: text.height };
   const horizontalAnchor = textAlignment(text);
   const right = text.x + text.width;
   const centerX = text.x + text.width / 2;
   const centerY = text.y + text.height / 2;
-  text.width = clamp(fittedWidth / DESIGN_WIDTH, 0.1, 1.5);
-  text.height = clamp(fittedHeight / OUTPUT_HEIGHT, 0.045, 1.5);
+  text.width = clamp(fittedWidth / canvas.width, 0.1, 1.5);
+  text.height = clamp(fittedHeight / canvas.height, 0.045, 1.5);
   if (mode !== "height") {
     if (horizontalAnchor === "right") text.x = right - text.width;
     else if (horizontalAnchor === "center") text.x = centerX - text.width / 2;
@@ -285,25 +414,34 @@ function agentFitTextBox(text, mode = "both") {
   };
 }
 
-function agentAutoFitTextBox(text) {
+function agentAutoFitTextBox(text, project = agentProject(), slide = null, mode = "height") {
   text.width = clamp(text.width, 0.1, 1);
   text.x = clamp(text.x, 0, 1 - text.width);
   const requestedTop = text.y;
-  const result = agentFitTextBox(text, "height");
+  const previous = { x: text.x, y: text.y, width: text.width, height: text.height };
+  const requestedSize = text.size;
+  let result = agentFitTextBox(text, mode, project, slide);
+  while (text.height > 1 && text.size > FONT_SIZE_MIN) {
+    text.size = Math.max(FONT_SIZE_MIN, text.size - 1);
+    result = agentFitTextBox(text, mode, project, slide);
+  }
   if (text.height > 1) {
-    throw new Error(`Text requires ${result.lineCount} lines and cannot fit on one slide at this width and font size. Shorten it, widen it, reduce it within the role range, or split it across slides.`);
+    throw new Error(`Text still requires ${result.lineCount} lines at the minimum font size (${FONT_SIZE_MIN}px). Shorten it, widen it, or split it across slides.`);
   }
   text.y = clamp(requestedTop, 0, 1 - text.height);
   result.fitted = { x: text.x, y: text.y, width: text.width, height: text.height };
+  result.previous = previous;
   result.automatic = true;
+  result.requestedSize = requestedSize;
+  result.size = text.size;
   return result;
 }
 
-function agentApplyImagePatch(image, patch = {}, asset = projectAsset(image.assetId)) {
+function agentApplyImagePatch(image, patch = {}, asset = projectAsset(image.assetId), project = activeProject(), slide = null) {
   for (const key of ["x", "y", "width", "height", "rotation", "z", "cropX", "cropY", "cropW", "cropH"]) {
     if (patch[key] != null && Number.isFinite(Number(patch[key]))) image[key] = Number(patch[key]);
   }
-  constrainOverlay(image, asset);
+  constrainOverlay(image, asset, { project, slide });
   const crop = overlayCrop(image);
   Object.assign(image, { cropX: crop.x, cropY: crop.y, cropW: crop.w, cropH: crop.h });
   return image;
@@ -317,10 +455,13 @@ function agentFindLayer(slide, layerId) {
   throw new Error(`Layer not found: ${layerId}`);
 }
 
-async function agentRender(project, slide, { width = 540, format = "png", quality = 0.9 } = {}) {
-  const safeWidth = Math.round(clamp(Number(width) || 540, 180, OUTPUT_WIDTH));
-  const safeHeight = Math.round(safeWidth * OUTPUT_HEIGHT / OUTPUT_WIDTH);
-  const canvas = await renderSlideCanvas(slide, safeWidth, safeHeight, project);
+async function agentRender(project, slide, { width = 540, format = "png", quality = 0.9, time = 0 } = {}) {
+  const dimensions = slideCanvasDimensions(project, slide);
+  const safeWidth = Math.round(clamp(Number(width) || 540, 180, dimensions.width));
+  const safeHeight = scaleCanvasDimensions(project, safeWidth, slide).height;
+  const canvas = slideVideoDuration(slide, project)
+    ? await renderVideoFrame(slide, project, safeWidth, safeHeight, time)
+    : await renderSlideCanvas(slide, safeWidth, safeHeight, project);
   const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
   const dataUrl = canvas.toDataURL(mimeType, clamp(Number(quality) || 0.9, 0.4, 1));
   return {
@@ -335,8 +476,15 @@ async function agentRender(project, slide, { width = 540, format = "png", qualit
 async function executeCarouselBotAgentOperation(operation) {
   if (!operation || typeof operation.type !== "string") throw new Error("Operation type is required.");
 
+  // Agent reads and mutations reload their target from IndexedDB. Flush a
+  // visible project's debounced UI edit first so that reload cannot replace it
+  // with the previous stored revision.
+  if (operation.projectId) await flushPendingSave();
+
   if (operation.type === "editor.inspect") {
     if (operation.projectId) await reloadProjectFromDb(operation.projectId, { render: false });
+    const project = state.projects.find((item) => item.id === (operation.projectId || state.activeProjectId));
+    if (project) await ensureProjectFontsLoaded(project).catch(() => {});
     return agentInspect(operation);
   }
   if (operation.type === "ui.notify") {
@@ -352,22 +500,75 @@ async function executeCarouselBotAgentOperation(operation) {
     if (actual !== Number(operation.expectedRevision)) throw new Error(`Project revision changed: expected ${operation.expectedRevision}, current ${actual}. Inspect the editor and retry with current IDs and state.`);
   }
 
+  if (operation.type === "project.copyAllTexts") {
+    const project = agentProject(operation.projectId);
+    return { projectId: project.id, text: allSlideTexts(project.slides) };
+  }
+
   if (operation.type === "project.create") {
     const dashboardVisible = !state.activeProjectId && Boolean(app.querySelector(".dashboard"));
     const now = Date.now();
+    const folderPath = normalizeFolderPath(operation.folderPath);
+    if (operation.folderPath != null && String(operation.folderPath).trim() && !folderPath) {
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
+    }
+    const aspectRatio = normalizeAspectRatio(operation.aspectRatio);
     const project = {
       id: uid(), name: String(operation.name || "New Project").slice(0, 160), createdAt: now,
-      updatedAt: now, revision: 1, slides: [], assets: [],
+      aspectRatio, folderPath, updatedAt: now, revision: 1, slides: [], assets: [], fonts: [],
     };
     state.projects.push(project);
-    await putProject(project);
+    await putProject(project, { expectedRevision: 0 });
     if (dashboardVisible || !state.activeProjectId) {
       renderDashboard();
       bindGlobalActions();
     }
     await agentNextFrame();
     toast("AI agent created a project");
-    return { projectId: project.id, name: project.name, revision: project.revision, opened: false, visibleProjectId: state.activeProjectId };
+    const canvas = projectCanvasDimensions(project);
+    return {
+      projectId: project.id,
+      name: project.name,
+      aspectRatio: canvas.aspectRatio,
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      folderPath: project.folderPath,
+      revision: project.revision,
+      opened: false,
+      visibleProjectId: state.activeProjectId,
+    };
+  }
+
+  if (operation.type === "project.duplicate") {
+    const source = agentProject(operation.projectId);
+    const copy = duplicateProjectData(source, operation);
+    await putProject(copy);
+    state.projects.push(copy);
+    if (!state.activeProjectId) {
+      renderDashboard();
+      bindGlobalActions();
+    }
+    await agentNextFrame();
+    toast("AI agent duplicated a project");
+    // Keep the editing session bound to the source; the new project has its own ID.
+    return { projectId: source.id, createdProjectId: copy.id, name: copy.name, folderPath: copy.folderPath, revision: source.revision, opened: false };
+  }
+
+  if (operation.type === "project.move") {
+    const project = agentProject(operation.projectId);
+    const slide = project.slides.find((item) => item.id === state.activeSlideId) || project.slides[0] || null;
+    const folderPath = normalizeFolderPath(operation.folderPath);
+    if (operation.folderPath != null && String(operation.folderPath).trim() && !folderPath) {
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
+    }
+    const result = await agentCommit(project, slide, () => {
+      project.folderPath = folderPath;
+      return { folderPath };
+    }, folderPath ? `AI agent moved the project to ${folderPath}` : "AI agent moved the project to the home screen");
+    if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
+      state.activeFolderPath = null;
+    }
+    return result;
   }
 
   if (operation.type === "project.open") {
@@ -393,12 +594,18 @@ async function executeCarouselBotAgentOperation(operation) {
     const expectedRevision = Number(project.revision) || 0;
     await deleteProjectFromDb(project.id, { expectedRevision });
     state.projects = state.projects.filter((item) => item.id !== project.id);
+    project.slides.forEach((slide) => clearSlideThumbnail(slide.id, project.id));
     clearProjectCover(project.id);
+    if (state.activeFolderPath && !state.projects.some((item) => folderContains(state.activeFolderPath, item.folderPath))) {
+      state.activeFolderPath = null;
+      updateBrowserRoute("/dashboard", "replace");
+    }
     if (targetIsVisible) {
+      state.activeFolderPath = null;
       state.activeProjectId = null;
       state.activeSlideId = null;
       clearLayerSelection();
-      updateBrowserRoute("/", "push");
+      updateBrowserRoute("/dashboard", "push");
       renderDashboard();
       bindGlobalActions();
     } else if (!state.activeProjectId) {
@@ -412,17 +619,27 @@ async function executeCarouselBotAgentOperation(operation) {
   if (operation.type === "slide.add") {
     const project = agentProject(operation.projectId);
     const media = await agentMedia(operation.mediaId);
+    const backgroundColor = media ? null : normalizeHexColor(operation.backgroundColor, "#EEEDE7");
     const slide = {
       id: uid(), name: String(operation.name || `Slide ${project.slides.length + 1}`).slice(0, 160),
-      imageData: media?.imageData || agentSolidBackground(operation.backgroundColor),
-      width: media?.width || OUTPUT_WIDTH, height: media?.height || OUTPUT_HEIGHT,
+      aspectRatio: operation.aspectRatio != null
+        ? normalizeAspectRatio(operation.aspectRatio, project.aspectRatio)
+        : media
+          ? aspectRatioFromDimensions(media.width, media.height, project.aspectRatio)
+          : normalizeAspectRatio(project.aspectRatio),
+      imageData: media?.imageData || "",
+      width: media?.width || 0, height: media?.height || 0,
+      ...(backgroundColor ? { backgroundColor } : {}),
+      ...(media?.videoData ? { videoData: media.videoData, duration: media.duration } : {}),
       imageScale: 1, imageX: 0, imageY: 0, texts: [], overlays: [],
     };
+    const canvas = slideCanvasDimensions(project, slide);
+    if (!media) Object.assign(slide, { imageData: solidBackgroundDataUrl(backgroundColor, project, slide), width: canvas.width, height: canvas.height });
     const index = operation.index == null ? project.slides.length : clamp(Math.round(operation.index), 0, project.slides.length);
     return agentCommit(project, slide, () => {
       project.slides.splice(index, 0, slide);
       state.activeSlideId = slide.id;
-      return { createdSlideId: slide.id, index, name: slide.name };
+      return { createdSlideId: slide.id, index, name: slide.name, aspectRatio: canvas.aspectRatio, canvasWidth: canvas.width, canvasHeight: canvas.height };
     }, "AI agent added a slide");
   }
 
@@ -433,14 +650,49 @@ async function executeCarouselBotAgentOperation(operation) {
     return agentCommit(project, slide, () => {
       if (operation.name != null) slide.name = String(operation.name || "Slide").slice(0, 160);
       if (media || operation.backgroundColor) { delete slide.videoData; delete slide.duration; }
-      if (media) Object.assign(slide, { imageData: media.imageData, width: media.width, height: media.height, backgroundRevision: uid() });
-      if (operation.backgroundColor) Object.assign(slide, { imageData: agentSolidBackground(operation.backgroundColor), width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT, backgroundRevision: uid() });
+      if (operation.aspectRatio != null) {
+        const sourceCanvas = slideCanvasDimensions(project, slide);
+        const solidBackgroundColor = canonicalSolidBackgroundColor(slide, project);
+        slide.aspectRatio = normalizeAspectRatio(operation.aspectRatio, project.aspectRatio);
+        const targetCanvas = slideCanvasDimensions(project, slide);
+        slide.texts = slide.texts.map((text) => remapLayerGeometryBetweenCanvases(text, sourceCanvas, targetCanvas, { maxHeight: 2.4 }));
+        slide.overlays = (slide.overlays || []).map((overlay) => {
+          const remapped = remapLayerGeometryBetweenCanvases(overlay, sourceCanvas, targetCanvas, { maxHeight: 2.4 });
+          const asset = (project.assets || []).find((item) => item.id === remapped.assetId);
+          return constrainOverlay(remapped, asset, { project, slide });
+        });
+        if (solidBackgroundColor) {
+          Object.assign(slide, {
+            imageData: solidBackgroundDataUrl(solidBackgroundColor, project, slide),
+            width: targetCanvas.width,
+            height: targetCanvas.height,
+            backgroundColor: solidBackgroundColor,
+            backgroundRevision: uid(),
+          });
+        }
+      }
+      if (media) {
+        Object.assign(slide, { imageData: media.imageData, width: media.width, height: media.height, ...(media.videoData ? { videoData: media.videoData, duration: media.duration } : {}), backgroundRevision: uid() });
+        delete slide.backgroundColor;
+      }
+      if (operation.backgroundColor != null) {
+        const canvas = slideCanvasDimensions(project, slide);
+        const backgroundColor = normalizeHexColor(operation.backgroundColor, "#EEEDE7");
+        Object.assign(slide, {
+          imageData: solidBackgroundDataUrl(backgroundColor, project, slide),
+          width: canvas.width,
+          height: canvas.height,
+          backgroundColor,
+          backgroundRevision: uid(),
+        });
+      }
       if (operation.imageScale != null) slide.imageScale = clamp(Number(operation.imageScale), 1, 3);
       if (operation.imageX != null) slide.imageX = Number(operation.imageX) || 0;
       if (operation.imageY != null) slide.imageY = Number(operation.imageY) || 0;
-      constrainImagePosition(slide);
-      clearSlideThumbnail(slide.id);
-      return { updatedSlideId: slide.id, name: slide.name };
+      constrainImagePosition(slide, project);
+      clearSlideThumbnail(slide.id, project.id);
+      const canvas = slideCanvasDimensions(project, slide);
+      return { updatedSlideId: slide.id, name: slide.name, aspectRatio: canvas.aspectRatio, canvasWidth: canvas.width, canvasHeight: canvas.height };
     }, "AI agent updated the slide");
   }
 
@@ -474,77 +726,156 @@ async function executeCarouselBotAgentOperation(operation) {
     const index = project.slides.indexOf(slide);
     return agentCommit(project, slide, () => {
       project.slides.splice(index, 1);
-      clearSlideThumbnail(slide.id);
+      clearSlideThumbnail(slide.id, project.id);
       state.activeSlideId = project.slides[index]?.id || project.slides[index - 1]?.id || null;
       return { deletedSlideId: slide.id };
     }, "AI agent deleted a slide");
   }
 
+  if (operation.type === "font.list") {
+    const project = agentProject(operation.projectId);
+    await ensureProjectFontsLoaded(project).catch(() => {});
+    return {
+      projectId: project.id,
+      revision: Number(project.revision) || 0,
+      fonts: (project.fonts || []).map((font) => publicProjectFont(project, font)),
+    };
+  }
+
+  if (operation.type === "font.import") {
+    const project = agentProject(operation.projectId);
+    const current = project.slides.find((item) => item.id === state.activeSlideId) || project.slides[0] || null;
+    const existing = (project.fonts || []).find((font) => font.localFontId === operation.localFontId);
+    if (existing) {
+      try {
+        await ensureProjectFontsLoaded(project, [{ fontId: existing.id }]);
+        return {
+          projectId: project.id,
+          fontId: existing.id,
+          localFontId: existing.localFontId,
+          family: existing.family,
+          subfamily: existing.subfamily,
+          weight: existing.weight,
+          italic: existing.italic,
+          revision: Number(project.revision) || 0,
+          existing: true,
+          repaired: false,
+        };
+      } catch (error) {
+        if (error?.code !== "FONT_UNAVAILABLE") throw error;
+      }
+    }
+    if (!operation.fontMediaId || !operation.font?.localFontId) throw new Error("The local font transfer is incomplete. List the font again and retry import_font.");
+    if (operation.font.localFontId !== operation.localFontId) throw new Error("The selected local font no longer matches the prepared transfer. List fonts and retry.");
+    const transfer = await window.carouselBotLocalMcpBridge.fetchFontMedia(operation.fontMediaId);
+    const source = transfer?.file instanceof Blob
+      ? transfer.file
+      : transfer instanceof Blob
+        ? transfer
+        : new Blob([transfer?.arrayBuffer || transfer?.buffer || transfer], { type: transfer?.mimeType || "font/otf" });
+    const fontData = await fileToDataUrl(source);
+    const font = createProjectFont(operation.font, fontData, existing
+      ? { id: existing.id, addedAt: existing.addedAt }
+      : undefined);
+    const candidateFonts = existing
+      ? (project.fonts || []).map((item) => item.id === existing.id ? font : item)
+      : [...(project.fonts || []), font];
+    const candidate = { ...project, fonts: candidateFonts };
+    await ensureProjectFontsLoaded(candidate, [{ fontId: font.id }]);
+    return agentCommit(project, current, () => {
+      project.fonts ||= [];
+      if (existing) project.fonts.splice(project.fonts.findIndex((item) => item.id === existing.id), 1, font);
+      else project.fonts.push(font);
+      return {
+        fontId: font.id,
+        localFontId: font.localFontId,
+        family: font.family,
+        subfamily: font.subfamily,
+        weight: font.weight,
+        italic: font.italic,
+        existing: Boolean(existing),
+        repaired: Boolean(existing),
+      };
+    }, existing ? "AI agent repaired a local font" : "AI agent added a local font");
+  }
+
   if (operation.type === "text.add") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
     const role = agentTextRole(operation.text, operation.role);
     const text = agentApplyTextPatch({
       id: uid(), text: "Your text", x: 0.12, y: 0.4, width: 0.76, height: 0.12,
       role, size: AGENT_TEXT_ROLE_SIZES[role], style: "plain", outlineWidth: DEFAULT_OUTLINE_WIDTH, color: "#FFFFFF",
+      fontFamily: DEFAULT_FONT_FAMILY, fontWeight: DEFAULT_FONT_WEIGHT, fontStyle: "normal",
       background: "black", backgroundShape: "lines", align: "center", rotation: 0,
       z: nextLayerZ(slide),
-    }, operation);
-    const fittedTextBox = agentAutoFitTextBox(text);
-    return agentCommit(project, slide, () => {
+    }, operation, project);
+    await ensureProjectFontsLoaded(project, [text]);
+    const fittedTextBox = agentAutoFitTextBox(text, project, slide);
+    const result = await agentCommit(project, slide, () => {
       slide.texts.push(text);
       selectOnlyLayer("text", text.id);
       return { createdTextId: text.id, fittedTextBox };
     }, "AI agent added text");
+    if (operation.fontId) await agentMarkFontsUsed(project, [text]);
+    return result;
   }
 
   if (operation.type === "text.update") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
-    return agentCommit(project, slide, () => {
-      const fittedTextBoxes = operation.updates.map(({ id, ...patch }) => {
-        const text = slide.texts.find((item) => item.id === id);
-        if (!text) throw new Error(`Text layer not found: ${id}`);
-        const next = agentApplyTextPatch({ ...text }, patch);
-        const fitted = agentAutoFitTextBox(next);
-        Object.assign(text, next);
-        return fitted;
-      });
+    const candidates = operation.updates.map(({ id, ...patch }) => {
+      const text = slide.texts.find((item) => item.id === id);
+      if (!text) throw new Error(`Text layer not found: ${id}`);
+      return {
+        text,
+        next: agentApplyTextPatch({ ...text }, patch, project),
+        appliesFont: Object.hasOwn(patch, "fontId") && Boolean(patch.fontId),
+      };
+    });
+    await ensureProjectFontsLoaded(project, candidates.map(({ next }) => next));
+    const fittedTextBoxes = candidates.map(({ next }) => agentAutoFitTextBox(next, project, slide));
+    const result = await agentCommit(project, slide, () => {
+      candidates.forEach(({ text, next }) => Object.assign(text, next));
       const updated = fittedTextBoxes.map(({ id }) => id);
       if (updated.length === 1) selectOnlyLayer("text", updated[0]);
       return { updatedTextIds: updated, fittedTextBoxes };
     }, "AI agent updated text");
+    await agentMarkFontsUsed(project, candidates.filter(({ appliesFont }) => appliesFont).map(({ next }) => next));
+    return result;
   }
 
   if (operation.type === "text.fit") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
-    await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
-    return agentCommit(project, slide, () => ({
-      fittedTextBoxes: operation.textIds.map((id) => {
-        const text = slide.texts.find((item) => item.id === id);
-        if (!text) throw new Error(`Text layer not found: ${id}`);
-        return agentFitTextBox(text, operation.mode);
-      }),
-    }), "AI agent fitted text boxes to their content");
+    const textLayers = operation.textIds.map((id) => {
+      const text = slide.texts.find((item) => item.id === id);
+      if (!text) throw new Error(`Text layer not found: ${id}`);
+      return text;
+    });
+    await ensureProjectFontsLoaded(project, textLayers);
+    const candidates = textLayers.map((text) => ({ ...text }));
+    const fittedTextBoxes = candidates.map((text) => agentAutoFitTextBox(text, project, slide, operation.mode || "both"));
+    return agentCommit(project, slide, () => {
+      textLayers.forEach((text, index) => Object.assign(text, candidates[index]));
+      return { fittedTextBoxes };
+    }, "AI agent fitted text boxes to their content");
   }
 
   if (operation.type === "asset.import") {
     const project = agentProject(operation.projectId);
     const current = project.slides.find((item) => item.id === (operation.slideId || state.activeSlideId)) || project.slides[0] || null;
     const media = await agentMedia(operation.mediaId);
-    if (!media) throw new Error("An image path is required.");
-    const fingerprint = await fingerprintData(media.imageData);
+    if (!media) throw new Error("A local image or video path is required.");
+    const fingerprint = await fingerprintData(media.videoData || media.imageData);
     const existing = (project.assets || []).find((item) => item.fingerprint === fingerprint);
-    if (existing) return { projectId: project.id, assetId: existing.id, existing: true };
-    const asset = { id: uid(), name: String(operation.name || media.name || "Image").replace(/\.[^.]+$/, ""), imageData: media.imageData, width: media.width, height: media.height, fingerprint };
+    if (existing) return { projectId: project.id, assetId: existing.id, existing: true, type: existing.videoData ? "video" : "image", width: existing.width, height: existing.height, ...(existing.videoData ? { duration: existing.duration } : {}) };
+    const asset = { id: uid(), name: String(operation.name || media.name || "Image").replace(/\.[^.]+$/, ""), imageData: media.imageData, width: media.width, height: media.height, fingerprint, ...(media.videoData ? { videoData: media.videoData, duration: media.duration } : {}) };
     return agentCommit(project, current, () => {
       if (!project.assets) project.assets = [];
       project.assets.push(asset);
-      return { assetId: asset.id, width: asset.width, height: asset.height };
-    }, "AI agent imported an image");
+      return { assetId: asset.id, width: asset.width, height: asset.height, type: asset.videoData ? "video" : "image", ...(asset.videoData ? { duration: asset.duration } : {}) };
+    }, "AI agent imported media");
   }
 
   if (operation.type === "asset.update") {
@@ -575,12 +906,12 @@ async function executeCarouselBotAgentOperation(operation) {
     return agentCommit(project, slide, () => {
       const asset = (project.assets || []).find((item) => item.id === operation.assetId);
       if (!asset) throw new Error(`Asset not found: ${operation.assetId}`);
-      const image = agentApplyImagePatch({ id: uid(), assetId: asset.id, x: 0.3, y: 0.34, width: initialOverlayWidth(asset), rotation: 0, z: nextLayerZ(slide) }, operation, asset);
+      const image = agentApplyImagePatch({ id: uid(), assetId: asset.id, x: 0.3, y: 0.34, width: initialOverlayWidth(asset, project, slide), rotation: 0, z: nextLayerZ(slide) }, operation, asset, project, slide);
       slide.overlays ||= [];
       slide.overlays.push(image);
       selectOnlyLayer("overlay", image.id);
       return { createdImageId: image.id, assetId: asset.id };
-    }, "AI agent placed an image");
+    }, "AI agent placed media");
   }
 
   if (operation.type === "image.update") {
@@ -591,7 +922,7 @@ async function executeCarouselBotAgentOperation(operation) {
         const image = (slide.overlays || []).find((item) => item.id === id);
         if (!image) throw new Error(`Image layer not found: ${id}`);
         const asset = (project.assets || []).find((item) => item.id === image.assetId);
-        agentApplyImagePatch(image, patch, asset);
+        agentApplyImagePatch(image, patch, asset, project, slide);
         return id;
       });
       if (updated.length === 1) selectOnlyLayer("overlay", updated[0]);
@@ -662,6 +993,26 @@ async function executeCarouselBotAgentOperation(operation) {
     return { projectId: project?.id || null, slideId: slide?.id || null, canvasZoom: state.canvasZoom, showTikTokOverlay: state.showTikTokOverlay };
   }
 
+  if (operation.type === "video.playback") {
+    const project = agentProject(operation.projectId);
+    const slide = agentSlide(project, operation.slideId);
+    if (state.activeProjectId !== project.id || state.activeSlideId !== slide.id) throw new Error("Playback controls require the visible slide. Use open_project only when the user wants to see it; render_slide(time) previews any slide without navigation.");
+    return controlVideoPlayback(slide.id, operation);
+  }
+
+  if (operation.type === "slide.export") {
+    const project = agentProject(operation.projectId);
+    const slide = agentSlide(project, operation.slideId);
+    const duration = slideVideoDuration(slide, project);
+    const format = operation.format === "auto" || !operation.format ? (duration ? "mp4" : "png") : operation.format;
+    if (format === "png") return agentRender(project, slide, { width: 1080, format: "png", time: operation.time || 0 });
+    if (!duration) throw new Error("MP4 export requires a video background or placed video asset.");
+    if (duration > 120) throw new Error("Agent MP4 export supports slides up to 120 seconds. Shorten the source video before importing it.");
+    const blob = await renderSlideMp4(slide, project);
+    const dataUrl = await fileToDataUrl(blob);
+    return { mimeType: "video/mp4", data: dataUrl.slice(dataUrl.indexOf(",") + 1), filename: `${safeFilename(slide.name)}.mp4`, duration, ...slideCanvasDimensions(project, slide) };
+  }
+
   if (operation.type === "slide.render") {
     const project = agentProject(operation.projectId);
     const slide = agentSlide(project, operation.slideId);
@@ -674,6 +1025,7 @@ async function executeCarouselBotAgentOperation(operation) {
 export function installAgentGlobals() {
   const agent = {
     protocolVersion: CAROUSELBOT_AGENT_PROTOCOL,
+    capabilities: { videoImport: true, videoFrames: true, videoPlayback: true, videoExport: true, maxVideoExportDuration: 120 },
     execute: executeCarouselBotAgentOperation,
     inspect: agentInspect,
   };

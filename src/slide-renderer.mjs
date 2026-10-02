@@ -1,9 +1,5 @@
 import {
   DESIGN_WIDTH,
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
-  OUTLINE_RATIO,
-  TEXT_WEIGHT,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -11,8 +7,11 @@ import {
   BOX_BACKGROUND_VERTICAL_OFFSET,
   TEXT_BOX_EDGE_PADDING,
   BOX_CORNER_RADIUS,
+  slideCanvasDimensions,
+  scaleCanvasDimensions,
   textColor,
   outlineColorFor,
+  outlineWidthForFontSize,
   overlayCrop,
   textAlignment,
   slideItems,
@@ -21,10 +20,15 @@ import {
   wrapText,
 } from "./editor-model.mjs";
 import { activeProject, getOverlayMetrics } from "./editor-state.mjs";
+import { ensureProjectFontsLoaded, textCanvasFont, textFontVariationCss } from "./project-fonts.mjs";
+import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 
 export function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not render thumbnail")), "image/png", 1);
+    canvas.toBlob((blob) => {
+      canvas.width = canvas.height = 0;
+      blob ? resolve(blob) : reject(new Error("Could not render thumbnail"));
+    }, "image/png", 1);
   });
 }
 
@@ -52,56 +56,120 @@ export function loadImage(src) {
   });
 }
 
-export async function renderSlideCanvas(slide, width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT, project = activeProject()) {
-  await document.fonts.load(`${TEXT_WEIGHT} 64px "TikTok Sans"`);
-  const image = await loadImage(slide.imageData);
+async function renderImage(src) {
+  // ImageBitmaps have explicit lifetimes; detached HTMLImages leave decoded originals
+  // in the browser image cache long after thumbnail rendering has completed.
+  if (typeof createImageBitmap === "function" && /^data:image\/(?!svg)[^,]*;base64,/i.test(src)) {
+    // Decode locally: fetch(data:) would violate production's connect-src CSP.
+    try {
+      const comma = src.indexOf(",");
+      const payload = src.slice(comma + 1);
+      let bytes;
+      if (typeof Uint8Array.fromBase64 === "function") bytes = Uint8Array.fromBase64(payload);
+      else {
+        const binary = atob(payload);
+        bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+      }
+      return await createImageBitmap(new Blob([bytes], { type: src.slice(5, src.indexOf(";")) }));
+    } catch { /* use HTMLImage for unsupported formats */ }
+  }
+  return loadImage(src);
+}
+
+function releaseRenderImage(image) {
+  if (typeof image.close === "function") image.close();
+  else image.removeAttribute("src");
+}
+
+export async function renderAssetThumbnail(asset) {
+  const image = await renderImage(asset.imageData);
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const scale = Math.min(1, 256 / Math.max(width, height));
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  try { canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height); }
+  finally { releaseRenderImage(image); }
+  return canvasToBlob(canvas);
+}
+
+export async function renderSlideCanvas(slide, width, height, project = activeProject(), media = null) {
+  await ensureProjectFontsLoaded(project, slide.texts || []);
+  const dimensions = slideCanvasDimensions(project, slide);
+  const canvasWidth = Number.isFinite(Number(width)) && Number(width) > 0
+    ? Math.round(Number(width))
+    : dimensions.width;
+  const canvasHeight = Number.isFinite(Number(height)) && Number(height) > 0
+    ? Math.round(Number(height))
+    : width == null
+      ? dimensions.height
+      : scaleCanvasDimensions(project, canvasWidth, slide).height;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
   const context = canvas.getContext("2d");
-  const imageLayout = getImageLayout(slide, width, height);
-  context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height);
-  await drawSlideLayers(context, slide, width, height, project);
+  const backgroundColor = canonicalSolidBackgroundColor(slide, project);
+  if (backgroundColor && !slide.videoData) {
+    context.fillStyle = backgroundColor;
+    context.fillRect(0, 0, canvasWidth, canvasHeight);
+  } else {
+    const image = media?.get(slide.id) || await renderImage(slide.imageData);
+    const imageLayout = getImageLayout(slide, canvasWidth, canvasHeight);
+    try { context.drawImage(image, imageLayout.left, imageLayout.top, imageLayout.width, imageLayout.height); }
+    finally { if (!media?.has(slide.id)) releaseRenderImage(image); }
+  }
+  await drawSlideLayers(context, slide, canvasWidth, canvasHeight, project, media);
   return canvas;
 }
 
 export async function drawSlideLayers(context, slide, canvasWidth, canvasHeight, project = activeProject(), media = null) {
   for (const { kind, item } of slideItems(slide)) {
-    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project, media);
-    else drawTextLayer(context, item, canvasWidth, canvasHeight);
+    if (kind === "overlay") await drawOneOverlay(context, item, canvasWidth, canvasHeight, project, slide, media);
+    else drawTextLayer(context, item, canvasWidth, canvasHeight, project);
   }
 }
 
-export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject(), media = null) {
+export async function drawOneOverlay(context, overlay, canvasWidth, canvasHeight, project = activeProject(), slide = null, media = null) {
   const asset = project?.assets?.find((item) => item.id === overlay.assetId);
   if (!asset) return;
-  const image = media?.get(asset.id) || await loadImage(asset.imageData);
-  const metrics = getOverlayMetrics(overlay, asset);
+  const image = media?.get(asset.id) || await renderImage(asset.imageData);
+  const metrics = getOverlayMetrics(overlay, asset, { project, slide });
   const width = metrics.width * canvasWidth;
   const height = metrics.height * canvasHeight;
   const x = overlay.x * canvasWidth;
   const y = overlay.y * canvasHeight;
   const crop = overlayCrop(overlay);
-  const sx = crop.x * (image.videoWidth || image.naturalWidth);
-  const sy = crop.y * (image.videoHeight || image.naturalHeight);
-  const sw = Math.max(1, crop.w * (image.videoWidth || image.naturalWidth));
-  const sh = Math.max(1, crop.h * (image.videoHeight || image.naturalHeight));
+  const sx = crop.x * (image.videoWidth || image.naturalWidth || image.width);
+  const sy = crop.y * (image.videoHeight || image.naturalHeight || image.height);
+  const sw = Math.max(1, crop.w * (image.videoWidth || image.naturalWidth || image.width));
+  const sh = Math.max(1, crop.h * (image.videoHeight || image.naturalHeight || image.height));
   context.save();
   context.translate(x + width / 2, y + height / 2);
   context.rotate(((overlay.rotation || 0) * Math.PI) / 180);
-  context.drawImage(image, sx, sy, sw, sh, -width / 2, -height / 2, width, height);
-  context.restore();
+  try { context.drawImage(image, sx, sy, sw, sh, -width / 2, -height / 2, width, height); }
+  finally {
+    context.restore();
+    if (!media?.has(asset.id)) releaseRenderImage(image);
+  }
 }
 
-export function drawTextLayer(context, text, imageWidth, imageHeight) {
+export function drawTextLayer(context, text, imageWidth, imageHeight, project = activeProject()) {
+  // Lay out and draw in design pixels, then scale the canvas. Measuring a
+  // smaller font can select a different optical master and add extra lines.
+  const renderScale = imageWidth / DESIGN_WIDTH;
+  context.save();
+  context.scale(renderScale, renderScale);
+  imageHeight /= renderScale;
+  imageWidth = DESIGN_WIDTH;
   const width = text.width * imageWidth;
   const height = text.height * imageHeight;
   const centerX = (text.x + text.width / 2) * imageWidth;
   const centerY = (text.y + text.height / 2) * imageHeight;
   const x = -width / 2;
   const y = -height / 2;
-  const exportScale = imageWidth / DESIGN_WIDTH;
-  const fontSize = text.size * exportScale;
+  const fontSize = text.size;
   const align = textAlignment(text);
   const perLineBox = text.style === "boxed" && text.backgroundShape !== "full";
   const lineHeight = fontSize * (perLineBox ? BOX_TEXT_LINE_HEIGHT : TEXT_LINE_HEIGHT);
@@ -109,10 +177,10 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
   const edgePadding = perLineBox ? fontSize * TEXT_BOX_EDGE_PADDING : 0;
   const verticalPadding = fontSize * 0.1;
   const color = textColor(text);
-  context.save();
   context.translate(centerX, centerY);
   context.rotate(((text.rotation || 0) * Math.PI) / 180);
-  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  context.font = textCanvasFont(project, text, fontSize);
+  if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(project, text);
   context.textAlign = align;
   context.textBaseline = "middle";
   context.lineJoin = "round";
@@ -157,8 +225,11 @@ export function drawTextLayer(context, text, imageWidth, imageHeight) {
     const lineY = startY + index * lineHeight;
     if (text.style === "outline") {
       context.strokeStyle = outlineColorFor(color);
-      context.lineWidth = fontSize * OUTLINE_RATIO;
-      context.strokeText(line, textX, lineY);
+      const outlineWidth = outlineWidthForFontSize(fontSize, text.outlineWidth);
+      if (outlineWidth > 0) {
+        context.lineWidth = outlineWidth;
+        context.strokeText(line, textX, lineY);
+      }
       context.fillStyle = color;
       context.fillText(line, textX, lineY);
     } else {

@@ -1,16 +1,40 @@
 export const DESIGN_WIDTH = 1080;
 
-export const OUTPUT_WIDTH = 1080;
+export const DEFAULT_ASPECT_RATIO = "9:16";
 
-export const OUTPUT_HEIGHT = 1920;
+export const ASPECT_RATIO_PRESETS = Object.freeze({
+  "9:16": Object.freeze({ width: 1080, height: 1920 }),
+  "2:3": Object.freeze({ width: 1080, height: 1620 }),
+  "3:4": Object.freeze({ width: 1080, height: 1440 }),
+  "4:5": Object.freeze({ width: 1080, height: 1350 }),
+  "1:1": Object.freeze({ width: 1080, height: 1080 }),
+  "4:3": Object.freeze({ width: 1080, height: 810 }),
+  "16:9": Object.freeze({ width: 1080, height: 608 }),
+});
+
+export const SUPPORTED_ASPECT_RATIOS = Object.freeze(Object.keys(ASPECT_RATIO_PRESETS));
+
+export const CANVAS_HEIGHT_MIN = 180;
+
+export const CANVAS_HEIGHT_MAX = 3840;
+
+export const ASPECT_RATIO_INPUT_MAX_LENGTH = 80;
+
+export const OUTPUT_WIDTH = ASPECT_RATIO_PRESETS[DEFAULT_ASPECT_RATIO].width;
+
+export const OUTPUT_HEIGHT = ASPECT_RATIO_PRESETS[DEFAULT_ASPECT_RATIO].height;
 
 export const INITIAL_OVERLAY_MAX_SIZE = 0.82;
 
 export const DEFAULT_OUTLINE_WIDTH = 12;
 
-export const OUTLINE_RATIO = 0.17;
+// SVG and canvas strokes straddle the glyph edge. Painting the fill last hides
+// the inner half, leaving a native TikTok-sized visible border of about 7.2%.
+export const OUTLINE_RATIO = 0.144;
 
-export const TEXT_WEIGHT = 500;
+// The native TikTok Sans outline silhouette resolves closest to this point on
+// the bundled font's variable weight axis.
+export const TEXT_WEIGHT = 535;
 
 export const TEXT_LINE_HEIGHT = 1.12;
 
@@ -70,12 +94,47 @@ export function cloneProject(project) {
   return {
     ...project,
     assets: (project.assets || []).map((asset) => ({ ...asset })),
+    fonts: (project.fonts || []).map((font) => ({
+      ...font,
+      variableAxes: (font.variableAxes || []).map((axis) => ({ ...axis })),
+    })),
     slides: (project.slides || []).map((slide) => ({
       ...slide,
-      texts: (slide.texts || []).map((text) => ({ ...text })),
+      texts: (slide.texts || []).map((text) => ({
+        ...text,
+        ...(text.fontVariationSettings ? { fontVariationSettings: { ...text.fontVariationSettings } } : {}),
+      })),
       overlays: (slide.overlays || []).map((overlay) => ({ ...overlay })),
     })),
   };
+}
+
+export function duplicateProjectData(source, { name, folderPath = source.folderPath } = {}) {
+  const copy = cloneProject(source);
+  copy.id = uid();
+  copy.name = String(name || `${source.name} copy`).slice(0, 160);
+  copy.folderPath = normalizeFolderPath(folderPath);
+  if (folderPath != null && String(folderPath).trim() && !copy.folderPath) {
+    throw new Error("Use at most two folder levels: Client/Account.");
+  }
+  copy.createdAt = copy.updatedAt = Date.now();
+  copy.revision = 1;
+  const assets = new Map(copy.assets.map((asset) => [asset.id, uid()]));
+  const fonts = new Map(copy.fonts.map((font) => [font.id, uid()]));
+  copy.assets.forEach((asset) => { asset.id = assets.get(asset.id); });
+  copy.fonts.forEach((font) => { font.id = fonts.get(font.id); });
+  for (const slide of copy.slides) {
+    slide.id = uid();
+    for (const text of slide.texts) {
+      text.id = uid();
+      if (fonts.has(text.fontId)) text.fontId = fonts.get(text.fontId);
+    }
+    for (const overlay of slide.overlays) {
+      overlay.id = uid();
+      if (assets.has(overlay.assetId)) overlay.assetId = assets.get(overlay.assetId);
+    }
+  }
+  return copy;
 }
 
 export const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -84,15 +143,205 @@ export function projectPath(projectId) {
   return `/projects/${encodeURIComponent(projectId)}`;
 }
 
-export function routeFromPathname(pathname = window.location.pathname) {
-  if (pathname === "/" || pathname === "/index.html") return { view: "dashboard" };
-  const match = pathname.match(/^\/projects\/([^/]+)\/?$/);
-  if (!match) return { view: "not-found" };
-  try {
-    return { view: "project", projectId: decodeURIComponent(match[1]) };
-  } catch {
-    return { view: "not-found" };
+export function sharePath(shareId) {
+  return `/share/${encodeURIComponent(shareId)}`;
+}
+
+export function folderDisplayName(value) {
+  return String(value ?? "").replace(/^\/+/, "");
+}
+
+// Older versions allowed arbitrarily deep strings as flat folder names.
+// Keep those projects grouped while limiting the new hierarchy to two levels.
+export function normalizeStoredFolderPath(value) {
+  const parts = String(value ?? "").trim().replace(/^\/+/, "").split("/");
+  return normalizeFolderPath(parts.length > 2 ? `${parts[0]}/${parts.slice(1).join(" ∕ ")}` : value);
+}
+
+export function folderPreviewItems(projects, folderPath, folders = []) {
+  const children = new Map();
+  for (const folder of folders) {
+    if (folderParentPath(folder.path) === folderPath) {
+      children.set(folder.path, { type: "folder", path: folder.path, projects: [], updatedAt: Number(folder.updatedAt) || 0 });
+    }
   }
+  const direct = [];
+  for (const project of projects) {
+    if (!folderContains(folderPath, project.folderPath)) continue;
+    if (project.folderPath === folderPath) {
+      direct.push({ type: "project", project, updatedAt: Number(project.updatedAt) || 0 });
+      continue;
+    }
+    const path = `${folderPath}/${project.folderPath.slice(folderPath.length + 1).split("/")[0]}`;
+    if (!children.has(path)) children.set(path, { type: "folder", path, projects: [], updatedAt: 0 });
+    const child = children.get(path);
+    child.projects.push(project);
+    child.updatedAt = Math.max(child.updatedAt, Number(project.updatedAt) || 0);
+  }
+  const recentFirst = (a, b) => b.updatedAt - a.updatedAt;
+  for (const child of children.values()) child.projects.sort(recentFirst);
+  // Show subfolders first so their contents cannot crowd them out of the preview.
+  return [...children.values()].sort(recentFirst).concat(direct.sort(recentFirst));
+}
+
+export function folderParentPath(value) {
+  const path = String(value || "");
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : null;
+}
+
+export function folderContains(folderPath, projectFolderPath) {
+  return Boolean(folderPath && (projectFolderPath === folderPath || projectFolderPath?.startsWith(`${folderPath}/`)));
+}
+
+export function folderAncestors(value) {
+  if (!value) return [];
+  return folderParentPath(value) ? [folderParentPath(value), value] : [value];
+}
+
+export function movedFolderPath(path, source, destination) {
+  if (!folderContains(source, path)) return path;
+  if (!destination) return null;
+  const result = destination + path.slice(source.length);
+  if (!normalizeFolderPath(result) || result.length > 160) throw new Error("Use at most two folder levels: Client/Account (160 characters maximum).");
+  return result;
+}
+
+export function normalizeFolderPath(value) {
+  if (value == null) return null;
+  let content = String(value).trim();
+  while (content.startsWith("/")) content = content.slice(1).trimStart();
+  content = content.trim();
+  if (!content || content.split("/").length > 2 || content.split("/").some((part) => !part.trim() || part !== part.trim() || part === "." || part === "..")) return null;
+
+  // Keep the complete canonical path within the UI/MCP 160-code-unit limit
+  // without cutting an emoji's surrogate pair in half. Invalid standalone
+  // surrogates are replaced so encodeURIComponent can always build a route.
+  let bounded = "";
+  for (let index = 0; index < content.length && bounded.length < 159; index += 1) {
+    const code = content.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = content.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        if (bounded.length + 2 > 159) break;
+        bounded += content[index] + content[index + 1];
+        index += 1;
+      } else bounded += "\uFFFD";
+    } else if (code >= 0xDC00 && code <= 0xDFFF) bounded += "\uFFFD";
+    else bounded += content[index];
+  }
+  return bounded && !bounded.endsWith("/") ? `/${bounded}` : null;
+}
+
+function greatestCommonDivisor(left, right) {
+  let a = left;
+  let b = right;
+  while (b) [a, b] = [b, a % b];
+  return a;
+}
+
+function parseAspectRatio(value) {
+  const requested = String(value ?? "").trim();
+  if (requested.length > ASPECT_RATIO_INPUT_MAX_LENGTH) return null;
+  if (!/^\d+:\d+$/.test(requested)) return null;
+  const [rawWidth, rawHeight] = requested.split(":").map((part) => BigInt(part));
+  if (rawWidth <= 0n || rawHeight <= 0n) return null;
+  const divisor = greatestCommonDivisor(rawWidth, rawHeight);
+  const ratioWidth = rawWidth / divisor;
+  const ratioHeight = rawHeight / divisor;
+  const height = Number((BigInt(DESIGN_WIDTH) * ratioHeight + ratioWidth / 2n) / ratioWidth);
+  if (height < CANVAS_HEIGHT_MIN || height > CANVAS_HEIGHT_MAX) return null;
+  return { aspectRatio: `${ratioWidth}:${ratioHeight}`, width: DESIGN_WIDTH, height };
+}
+
+export function normalizeAspectRatio(value, fallback = DEFAULT_ASPECT_RATIO) {
+  return parseAspectRatio(value)?.aspectRatio
+    || parseAspectRatio(fallback)?.aspectRatio
+    || DEFAULT_ASPECT_RATIO;
+}
+
+export function aspectRatioFromDimensions(width, height, fallback = DEFAULT_ASPECT_RATIO) {
+  const numericWidth = Number(width);
+  const numericHeight = Number(height);
+  if (
+    !Number.isFinite(numericWidth) || numericWidth <= 0
+    || !Number.isFinite(numericHeight) || numericHeight <= 0
+  ) return normalizeAspectRatio(fallback);
+  const integerWidth = Math.max(1, Math.round(numericWidth));
+  const integerHeight = Math.max(1, Math.round(numericHeight));
+  return normalizeAspectRatio(`${integerWidth}:${integerHeight}`, fallback);
+}
+
+export function projectCanvasDimensions(project = null) {
+  const aspectRatio = normalizeAspectRatio(project?.aspectRatio);
+  const dimensions = ASPECT_RATIO_PRESETS[aspectRatio] || parseAspectRatio(aspectRatio);
+  return { aspectRatio, width: dimensions.width, height: dimensions.height };
+}
+
+export function slideCanvasDimensions(project = null, slide = null) {
+  const projectDimensions = projectCanvasDimensions(project);
+  const aspectRatio = normalizeAspectRatio(slide?.aspectRatio, projectDimensions.aspectRatio);
+  const dimensions = ASPECT_RATIO_PRESETS[aspectRatio] || parseAspectRatio(aspectRatio);
+  return { aspectRatio, width: dimensions.width, height: dimensions.height };
+}
+
+export function scaleCanvasDimensions(project, requestedWidth, slide = null) {
+  const dimensions = slideCanvasDimensions(project, slide);
+  const numericWidth = Number(requestedWidth);
+  const width = Number.isFinite(numericWidth) && numericWidth > 0
+    ? Math.max(1, Math.round(numericWidth))
+    : dimensions.width;
+  return {
+    aspectRatio: dimensions.aspectRatio,
+    width,
+    height: Math.max(1, Math.round(width * dimensions.height / dimensions.width)),
+  };
+}
+
+export function initialTextBoxHeight(project = null, size = 64, slide = null) {
+  const canvas = slideCanvasDimensions(project, slide);
+  const fontSize = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 64;
+  const fittedPixels = fontSize * (TEXT_LINE_HEIGHT + 0.28) + 4;
+  return clamp(Math.max(0.08, fittedPixels / canvas.height), 0.045, 1);
+}
+
+export function folderRoutePath(value) {
+  const folderPath = normalizeFolderPath(value);
+  return folderPath ? `/folders/${encodeURIComponent(folderPath.slice(1))}` : "/dashboard";
+}
+
+export function routeFromPathname(pathname = window.location.pathname) {
+  if (pathname === "/" || pathname === "/index.html") return { view: "landing" };
+  if (/^\/dashboard\/?$/.test(pathname)) return { view: "dashboard" };
+  const shareMatch = pathname.match(/^\/share\/([^/]+)\/?$/);
+  if (shareMatch) {
+    try {
+      const shareId = decodeURIComponent(shareMatch[1]);
+      return /^[0-9a-z]{8}-[0-9a-f]{32}(?:\.[0-9a-f]{64})?$/.test(shareId)
+        ? { view: "share", shareId }
+        : { view: "not-found" };
+    } catch {
+      return { view: "not-found" };
+    }
+  }
+  const projectMatch = pathname.match(/^\/projects\/([^/]+)\/?$/);
+  if (projectMatch) {
+    try {
+      return { view: "project", projectId: decodeURIComponent(projectMatch[1]) };
+    } catch {
+      return { view: "not-found" };
+    }
+  }
+  const folderMatch = pathname.match(/^\/folders\/([^/]+)\/?$/);
+  if (folderMatch) {
+    try {
+      const folderPath = normalizeFolderPath(decodeURIComponent(folderMatch[1]));
+      return folderPath ? { view: "folder", folderPath } : { view: "not-found" };
+    } catch {
+      return { view: "not-found" };
+    }
+  }
+  return { view: "not-found" };
 }
 
 export function adjacentSlideId(slides, activeSlideId, offset) {
@@ -150,13 +399,23 @@ export function formatRgb(hex) {
 export function outlineColorFor(hex) {
   const { r, g, b } = hexToRgb(hex);
   const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return luminance > 0.55 ? "#111111" : "#FFFFFF";
+  return luminance > 0.55 ? "#000000" : "#FFFFFF";
+}
+
+export function outlineWidthForFontSize(fontSize, outlineWidth = DEFAULT_OUTLINE_WIDTH) {
+  const size = Number(fontSize);
+  if (!Number.isFinite(size) || size <= 0) return 0;
+  const requestedWidth = Number(outlineWidth);
+  const relativeWidth = Number.isFinite(requestedWidth)
+    ? Math.max(0, requestedWidth) / DEFAULT_OUTLINE_WIDTH
+    : 1;
+  return size * OUTLINE_RATIO * relativeWidth;
 }
 
 export function ensureBoxedTextContrast(text) {
   if (text?.style !== "boxed") return;
   const backgroundColor = text.background === "black" ? "#111111" : "#FFFFFF";
-  if (textColor(text) === backgroundColor) text.color = outlineColorFor(backgroundColor);
+  if (textColor(text) === backgroundColor) text.color = text.background === "black" ? "#FFFFFF" : "#111111";
 }
 
 export function layerKey(kind, id) {
@@ -195,14 +454,15 @@ export function layerClipCss(x, y, width, height) {
   return `inset(${inset.top * 100}% ${inset.right * 100}% ${inset.bottom * 100}% ${inset.left * 100}%)`;
 }
 
-export function initialOverlayWidth(asset) {
+export function initialOverlayWidth(asset, project = null, slide = null) {
   const sourceWidth = Number(asset?.width);
   const sourceHeight = Number(asset?.height);
   if (!Number.isFinite(sourceWidth) || sourceWidth <= 0 || !Number.isFinite(sourceHeight) || sourceHeight <= 0) {
     return 0.34;
   }
-  const naturalWidth = sourceWidth / OUTPUT_WIDTH;
-  const naturalHeight = sourceHeight / OUTPUT_HEIGHT;
+  const canvas = slideCanvasDimensions(project, slide);
+  const naturalWidth = sourceWidth / canvas.width;
+  const naturalHeight = sourceHeight / canvas.height;
   const fitScale = Math.min(
     1,
     INITIAL_OVERLAY_MAX_SIZE / naturalWidth,
@@ -432,10 +692,8 @@ export function wrapText(context, value, maxWidth) {
       const test = line ? `${line} ${word}` : word;
       if (context.measureText(test).width <= maxWidth) {
         line = test;
-      } else if (line) {
-        lines.push(line);
-        line = word;
       } else {
+        if (line) lines.push(line);
         const characters = [...word];
         let chunk = "";
         characters.forEach((character) => {
@@ -466,6 +724,61 @@ export function isEditingTextTarget(target) {
   return Boolean(target?.closest?.("input, textarea, [contenteditable]"));
 }
 
+function isCopiedLayerCanvas(value) {
+  return Boolean(
+    value
+    && typeof value.aspectRatio === "string"
+    && value.aspectRatio.length <= ASPECT_RATIO_INPUT_MAX_LENGTH
+    && /^\d+:\d+$/.test(value.aspectRatio)
+    && Number.isInteger(value.width)
+    && value.width > 0
+    && Number.isInteger(value.height)
+    && value.height > 0
+  );
+}
+
+export function remapLayerGeometryBetweenCanvases(item, sourceCanvas, targetCanvas, { maxHeight = Infinity } = {}) {
+  const remapped = { ...item };
+  const sourceHeight = Number(sourceCanvas?.height);
+  const targetHeight = Number(targetCanvas?.height);
+  const originalHeight = Number(item?.height);
+  if (
+    !Number.isFinite(sourceHeight) || sourceHeight <= 0
+    || !Number.isFinite(targetHeight) || targetHeight <= 0
+    || !Number.isFinite(originalHeight) || originalHeight <= 0
+    || sourceHeight === targetHeight
+  ) return remapped;
+  const originalX = Number.isFinite(Number(item?.x)) ? Number(item.x) : 0;
+  const originalWidth = Number(item?.width);
+  const centerY = (Number.isFinite(Number(item?.y)) ? Number(item.y) : 0) + originalHeight / 2;
+  const desiredHeight = originalHeight * sourceHeight / targetHeight;
+  const boundedMaxHeight = Number.isFinite(Number(maxHeight)) && Number(maxHeight) > 0
+    ? Number(maxHeight)
+    : Infinity;
+  let capScale = desiredHeight > boundedMaxHeight ? boundedMaxHeight / desiredHeight : 1;
+  const originalFontSize = Number(item?.size);
+  if (capScale < 1 && Number.isFinite(originalFontSize) && originalFontSize > 0) {
+    const minimumFontScale = Math.min(1, FONT_SIZE_MIN / originalFontSize);
+    if (desiredHeight * minimumFontScale <= boundedMaxHeight) {
+      capScale = Math.max(capScale, minimumFontScale);
+    }
+  }
+  remapped.height = desiredHeight * capScale;
+  remapped.y = centerY - remapped.height / 2;
+  if (capScale < 1 && Number.isFinite(originalWidth) && originalWidth > 0) {
+    const centerX = originalX + originalWidth / 2;
+    remapped.width = originalWidth * capScale;
+    remapped.x = centerX - remapped.width / 2;
+    if (Number.isFinite(originalFontSize) && originalFontSize > 0) remapped.size = originalFontSize * capScale;
+  }
+  return remapped;
+}
+
+export function clampLayerCoordinate(value, size) {
+  const extent = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 0;
+  return clamp(Number(value) || 0, Math.min(0, 1 - extent), Math.max(0, 1 - extent));
+}
+
 export function isCopiedLayer(value) {
   return Boolean(
     value
@@ -473,6 +786,7 @@ export function isCopiedLayer(value) {
     && value.token
     && Array.isArray(value.layers)
     && value.layers.length
+    && (!Object.hasOwn(value, "sourceCanvas") || isCopiedLayerCanvas(value.sourceCanvas))
     && value.layers.every((layer) => (
       layer
       && (layer.kind === "text" || layer.kind === "overlay")
@@ -503,5 +817,33 @@ export function isVideoFile(file) {
 
 export function slideVideoDuration(slide, project) {
   const media = [slide, ...(slide?.overlays || []).map((layer) => project?.assets?.find((asset) => asset.id === layer.assetId))];
-  return Math.max(0, ...media.filter((asset) => asset?.videoData).map((asset) => Number.isFinite(asset.duration) && asset.duration > 0 ? asset.duration : 0));
+  return Math.max(0, ...media.filter((asset) => asset?.videoData || asset?.__hasVideoData).map((asset) => Number.isFinite(asset.duration) && asset.duration > 0 ? asset.duration : 0));
+}
+
+// Keep each text layer on one row, and separate nonempty slides by one blank row.
+export function allSlideTexts(slides = []) {
+  return slides.map((slide) => (slide.texts || [])
+    .map((item) => String(item.text ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim())
+    .filter(Boolean).join("\n"))
+    .filter(Boolean).join("\n\n");
+}
+
+// The catalog is derived metadata. Original media stays in the projects store.
+export function projectCatalogEntry(project) {
+  const records = (value) => Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
+  const withoutMedia = ({ imageData, videoData, fontData, ...metadata }) => ({
+    ...metadata,
+    ...(videoData ? { __hasVideoData: true } : {}),
+    ...(fontData ? { __hasFontData: true } : {}),
+    // Solid backgrounds are tiny SVG strings, needed to validate their color.
+    ...(typeof imageData === "string" && imageData.length < 2048 && imageData.startsWith("data:image/svg+xml") ? { imageData } : {}),
+  });
+  return {
+    ...withoutMedia(project),
+    __catalog: true,
+    folderPath: normalizeStoredFolderPath(project.folderPath),
+    slides: records(project.slides).map((slide) => ({ ...withoutMedia(slide), texts: records(slide.texts), overlays: records(slide.overlays) })),
+    assets: records(project.assets).map(withoutMedia),
+    fonts: records(project.fonts).map(withoutMedia),
+  };
 }

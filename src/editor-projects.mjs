@@ -1,14 +1,24 @@
+import { verifyShareRequest } from "./share-verification.mjs";
 import {
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
   DEFAULT_OUTLINE_WIDTH,
   HISTORY_LIMIT,
   cloneProject,
   uid,
   projectPath,
+  sharePath,
+  duplicateProjectData,
+  folderRoutePath,
+  folderDisplayName,
+  folderContains,
+  folderAncestors,
+  movedFolderPath,
+  normalizeStoredFolderPath,
   routeFromPathname,
   escapeHtml,
+  normalizeAspectRatio,
+  normalizeFolderPath,
   normalizeHexColor,
+  slideCanvasDimensions,
   textColor,
   overlayCrop,
   clamp,
@@ -22,33 +32,72 @@ import {
   selectedLayerKeys,
   setLayerSelection,
 } from "./editor-state.mjs";
+import { projectCatalogEntry } from "./editor-model.mjs";
 import { icon } from "./editor-view.mjs";
 import {
+  decodeSharedProject,
+  encodeSharedProject,
+  SHARED_FOLDER_PATH,
+} from "./project-share-codec.mjs";
+import {
   STORE_NAME,
+  CATALOG_STORE,
+  getProjectCatalog,
   PROJECT_SYNC_STORAGE_KEY,
   projectChannel,
   projectChannelSource,
+  isCurrentAccountEvent,
   getAllProjects,
+  getAllFolders,
+  createFolderInDb,
   getProjectFromDb,
   announceProjectChange,
   putProject,
   deleteProjectFromDb,
+  moveProjectsFromFolderInDb,
 } from "./project-store.mjs";
+import { normalizeProjectFonts, ensureProjectFontsLoaded } from "./project-fonts.mjs";
+import { canonicalSolidBackgroundColor } from "./slide-background.mjs";
 
 export function normalizeLoadedProjects(projects) {
   projects.forEach((project) => {
+    const previous = state.projects.find((item) => item.id === project.id && !item.__catalog)
+      || history.past.findLast((item) => item.id === project.id);
+    if (!project.__catalog && previous && previous !== project) {
+      for (const field of ["slides", "assets", "fonts"]) {
+        const byId = new Map((previous[field] || []).map((item) => [item.id, item]));
+        for (const item of project[field] || []) {
+          const prior = byId.get(item.id);
+          if (!prior) continue;
+          for (const key of ["imageData", "videoData", "fontData"]) {
+            if (item[key] === prior[key] && prior[key]) item[key] = prior[key];
+          }
+        }
+      }
+    }
+    if (!project.__catalog) normalizeProjectFonts(project);
     if (!Number.isFinite(Number(project.revision))) project.revision = 0;
+    project.aspectRatio = normalizeAspectRatio(project.aspectRatio);
+    project.folderPath = normalizeStoredFolderPath(project.folderPath);
     if (!Array.isArray(project.assets)) project.assets = [];
+    if (!Array.isArray(project.slides)) project.slides = [];
     project.slides.forEach((slide) => {
+      slide.aspectRatio = normalizeAspectRatio(slide.aspectRatio, project.aspectRatio);
+      const canvas = slideCanvasDimensions(project, slide);
       if (slide.imageScale == null) slide.imageScale = 1;
       if (slide.imageX == null) slide.imageX = 0;
       if (slide.imageY == null) slide.imageY = 0;
+      if (slide.backgroundColor != null) {
+        const backgroundColor = canonicalSolidBackgroundColor(slide, project);
+        if (backgroundColor) slide.backgroundColor = backgroundColor;
+        else delete slide.backgroundColor;
+      }
       if (!Array.isArray(slide.overlays)) slide.overlays = [];
       slide.overlays.forEach((overlay, index) => {
         const asset = project.assets.find((item) => item.id === overlay.assetId);
         if (overlay.height == null && asset) {
           const crop = overlayCrop(overlay);
-          overlay.height = overlay.width * (OUTPUT_WIDTH / OUTPUT_HEIGHT) * ((asset.height * crop.h) / (asset.width * crop.w));
+          overlay.height = overlay.width * (canvas.width / canvas.height) * ((asset.height * crop.h) / (asset.width * crop.w));
         }
         if (overlay.z == null) overlay.z = index + 1;
       });
@@ -71,14 +120,189 @@ export function createEditorProjects({
   domainMigration,
   renderDashboard,
   renderEditor,
+  renderLanding = () => {},
   clearLayerSelection,
   toast,
   scheduleThumbnailRefresh,
   clearProjectCover,
   clearSlideThumbnail,
+  pruneSlideThumbnails,
+  onSaveStatus = () => {},
 }) {
   let migrationModalDismissed = false;
   let dashboardRefreshPromise = null;
+  let dashboardPreviewResizeObserver = null;
+  let dashboardPreviewResizeHandler = null;
+  let pendingSaveProject = null;
+  let saveInFlight = null;
+  const dirtySaveProjects = new Map();
+  let shareRouteGeneration = 0;
+
+  function showShareLink(link, expiresAt, returnFocus) {
+    document.querySelector(".share-link-dialog")?.remove();
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop share-link-dialog";
+    backdrop.innerHTML = `
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="share-link-title" aria-describedby="share-link-description">
+        <h2 id="share-link-title">Project link ready</h2>
+        <p id="share-link-description">This is a snapshot of your project. The link expires ${escapeHtml(new Date(expiresAt).toLocaleString())}. Making another link will not change this one.</p>
+        <input type="text" readonly aria-label="Share link" />
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-action="close-share-link">Done</button>
+          <button class="button button--primary" type="button" data-action="copy-share-link">Copy link</button>
+        </div>
+      </section>`;
+    const input = backdrop.querySelector("input");
+    input.value = link;
+    const close = () => {
+      backdrop.remove();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    backdrop.querySelector('[data-action="close-share-link"]').addEventListener("click", close);
+    backdrop.querySelector('[data-action="copy-share-link"]').addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(link);
+        toast("Share link copied");
+      } catch {
+        input.select();
+        toast("Select and copy the link above");
+      }
+    });
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-action="copy-share-link"]').focus();
+  }
+
+  async function shareProject(event) {
+    const button = event.currentTarget;
+    const projectId = activeProject()?.id;
+    if (!projectId || button.disabled) return;
+    const oldLabel = button.innerHTML;
+    button.disabled = true;
+    button.textContent = "Creating link…";
+    try {
+      await flushPendingSave();
+      const project = state.projects.find((item) => item.id === projectId);
+      if (!project) throw new Error("This project is no longer available.");
+      const { payload, format } = await encodeSharedProject(structuredClone(project));
+      const token = await verifyShareRequest();
+      const response = await fetch("/api/shares", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": format, "X-CarouselBot-Share-Bytes": String(payload.byteLength), "X-CarouselBot-Turnstile": token },
+        body: payload,
+        cache: "no-store",
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) throw new Error(result.error || "Couldn’t create a share link.");
+      const origin = domainMigration.isLegacyOrigin ? domainMigration.config.canonicalOrigin : window.location.origin;
+      const link = new URL(sharePath(result.id), origin).href;
+      showShareLink(link, result.expiresAt, button);
+    } catch (error) {
+      console.error("Could not share project", error);
+      toast(error.message || "Couldn’t create a share link.");
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        button.innerHTML = oldLabel;
+      }
+    }
+  }
+
+  function showShareRouteStatus(title, message, { loading = true } = {}) {
+    app.innerHTML = `
+      <header class="app-header"><a class="brand" href="/dashboard" aria-label="Go to projects"><span class="brand-mark" aria-hidden="true"></span><span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span></a></header>
+      <main class="share-import-page"><section class="share-import-card" role="status" aria-live="polite" data-state="${loading ? "loading" : "error"}">
+        <div class="share-import-indicator" aria-hidden="true"><span class="share-import-spinner"></span></div>
+        <p class="share-import-eyebrow">Shared project</p>
+        <h1>${escapeHtml(title)}</h1><p class="share-import-message" data-share-status>${escapeHtml(message)}</p>
+        <a class="button button--quiet" href="/dashboard">Go to projects</a>
+      </section></main>`;
+    document.title = `${title} · CarouselBot`;
+  }
+
+  async function openSharedProject(shareId) {
+    const generation = ++shareRouteGeneration;
+    const route = sharePath(shareId);
+    const stillHere = () => generation === shareRouteGeneration && window.location.pathname.replace(/\/$/, "") === route;
+    showShareRouteStatus("Opening shared project", "Getting the editable copy…");
+    try {
+      const savedProjects = await getProjectCatalog();
+      const existing = savedProjects.find((project) => project.shareSourceId === shareId);
+      if (!stillHere()) return;
+      if (existing) {
+        if (!state.projects.some((project) => project.id === existing.id)) {
+          normalizeLoadedProjects([existing]);
+          state.projects.push(existing);
+        }
+        openProject(existing.id, { historyMode: "replace" });
+        return;
+      }
+      let response;
+      for (const delay of [0, 1000, 2000, 4000, 8000, 15000, 30000]) {
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!stillHere()) return;
+        response = await fetch(`/api/shares/${encodeURIComponent(shareId)}`, { cache: "no-store" });
+        if (response.status !== 425) break;
+        const status = app.querySelector("[data-share-status]");
+        if (status) status.textContent = "This new link is still becoming available. Retrying…";
+      }
+      if (!stillHere()) return;
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        if (response.status === 429) throw new Error("Too many requests from this network. Try again in a few seconds.");
+        throw new Error(result.error || "This share link is unavailable or has expired.");
+      }
+      const format = response.headers.get("X-CarouselBot-Share-Format");
+      const project = await decodeSharedProject(await response.arrayBuffer(), format);
+      if (!stillHere()) return;
+      const status = app.querySelector("[data-share-status]");
+      if (status) status.textContent = `Adding “${project.name}” to your Shared folder…`;
+      const imported = duplicateProjectData(project, { name: project.name, folderPath: SHARED_FOLDER_PATH });
+      imported.shareSourceId = shareId;
+      normalizeLoadedProjects([imported]);
+      await putProject(imported, { expectedRevision: 0 });
+      state.projects.push(imported);
+      await ensureProjectFontsLoaded(imported).catch(() => {});
+      if (stillHere()) {
+        openProject(imported.id, { historyMode: "replace" });
+        toast("Added to Shared as your own editable project");
+      }
+    } catch (error) {
+      if (!stillHere()) return;
+      console.error("Could not import shared project", error);
+      showShareRouteStatus("Couldn’t open this link", error.message || "This share link is unavailable or has expired.", { loading: false });
+    }
+  }
+
+  function projectsInFolder(folderPath) {
+    return state.projects.filter((project) => folderContains(folderPath, project.folderPath));
+  }
+
+  function folderExists(folderPath) {
+    return Boolean(folderPath && (projectsInFolder(folderPath).length || state.folders.some((folder) => folderContains(folderPath, folder.path))));
+  }
+
+  function clearProjectHistory(projectIds) {
+    const ids = new Set(projectIds);
+    history.past = history.past.filter((snapshot) => !ids.has(snapshot.id));
+    history.future = history.future.filter((snapshot) => !ids.has(snapshot.id));
+  }
+
+  function replaceMovedProjects(movedProjects) {
+    const byId = new Map(normalizeLoadedProjects(movedProjects).map((project) => [project.id, project]));
+    state.projects = state.projects.map((project) => byId.get(project.id) || project);
+    clearProjectHistory(byId.keys());
+  }
+
+  function leaveMissingActiveFolder({ notify = false } = {}) {
+    if (!state.activeFolderPath || folderExists(state.activeFolderPath)) return false;
+    state.activeFolderPath = null;
+    updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", "replace");
+    if (notify) toast("That folder is empty now, so it was removed.");
+    return true;
+  }
 
   function recordHistory(project = activeProject()) {
     if (!project || history.applying) return;
@@ -98,12 +322,14 @@ export function createEditorProjects({
     const expectedRevision = Number(state.projects[index].revision) || 0;
     history.applying = true;
     state.projects[index] = { ...cloneProject(snapshot), revision: expectedRevision + 1, updatedAt: Date.now() };
+    normalizeLoadedProjects([state.projects[index]]);
     state.activeProjectId = snapshot.id;
     if (!state.projects[index].slides.some((slide) => slide.id === state.activeSlideId)) {
       state.activeSlideId = state.projects[index].slides[0]?.id || null;
     }
     setLayerSelection(selectedLayerKeys());
     state.croppingOverlayId = null;
+    await ensureProjectFontsLoaded(state.projects[index]).catch(() => {});
     renderEditor();
     try {
       await putProject(state.projects[index], { expectedRevision });
@@ -126,6 +352,10 @@ export function createEditorProjects({
     return applyHistorySnapshot(snapshot);
   }
 
+  function hasUndo() {
+    return history.past.some((snapshot) => snapshot.id === state.activeProjectId);
+  }
+
   function redo() {
     if (isEditingTextTarget(document.activeElement)) return;
     const project = activeProject();
@@ -144,7 +374,7 @@ export function createEditorProjects({
   async function importMigratedProject(project) {
     const incoming = structuredClone(project);
     const result = await new Promise((resolve, reject) => {
-      const transaction = state.db.transaction(STORE_NAME, "readwrite");
+      const transaction = state.db.transaction([STORE_NAME, CATALOG_STORE], "readwrite");
       const store = transaction.objectStore(STORE_NAME);
       let outcome = "invalid";
       const read = store.get(incoming.id);
@@ -155,7 +385,11 @@ export function createEditorProjects({
           transaction.abort();
           return;
         }
-        if (outcome !== "skipped") store.put(incoming);
+        if (outcome !== "skipped") {
+          normalizeLoadedProjects([incoming]);
+          store.put(incoming);
+          transaction.objectStore(CATALOG_STORE).put(projectCatalogEntry(incoming));
+        }
       };
       transaction.oncomplete = () => resolve(outcome);
       transaction.onerror = () => reject(transaction.error);
@@ -173,27 +407,49 @@ export function createEditorProjects({
 
   async function reloadProjectFromDb(projectId, { render = true } = {}) {
     const latest = await getProjectFromDb(projectId);
+    if (pendingSaveProject?.id === projectId) {
+      clearTimeout(state.saveTimer);
+      state.saveTimer = null;
+      pendingSaveProject = null;
+    }
+    dirtySaveProjects.delete(projectId);
+    if (latest) normalizeLoadedProjects([latest]);
     const index = state.projects.findIndex((project) => project.id === projectId);
+    const previous = index >= 0 ? state.projects[index] : null;
     if (!latest) {
+      previous?.slides.forEach((slide) => clearSlideThumbnail(slide.id, projectId));
       if (index >= 0) state.projects.splice(index, 1);
       clearProjectCover(projectId);
       if (state.activeProjectId === projectId) {
+        state.activeFolderPath = null;
         state.activeProjectId = null;
         state.activeSlideId = null;
-        updateBrowserRoute("/", "replace");
+        updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", "replace");
       }
     } else if (index >= 0) {
+      const latestSlideIds = new Set(latest.slides.map((slide) => slide.id));
+      previous.slides.filter((slide) => !latestSlideIds.has(slide.id)).forEach((slide) => clearSlideThumbnail(slide.id, projectId));
       state.projects[index] = latest;
       if (state.activeProjectId === projectId && !latest.slides.some((slide) => slide.id === state.activeSlideId)) state.activeSlideId = latest.slides[0]?.id || null;
     } else state.projects.push(latest);
+    if (!state.activeProjectId) leaveMissingActiveFolder();
     if (render) {
       if (!state.activeProjectId) renderDashboard();
-      else if (state.activeProjectId === projectId) renderEditor();
+      else if (state.activeProjectId === projectId) {
+        await ensureProjectFontsLoaded(latest).catch(() => {});
+        renderEditor();
+      }
     }
     return latest;
   }
 
   async function handleExternalProjectEvent(data) {
+    if (!data || !isCurrentAccountEvent(data)) return;
+    if (state.db && data?.type === "folders.updated" && data.source !== projectChannelSource) {
+      state.folders = await getAllFolders();
+      if (!state.activeProjectId) { leaveMissingActiveFolder(); renderDashboard(); }
+      return;
+    }
     if (!data || data.source === projectChannelSource || !data.projectId || !state.db) return;
     const local = state.projects.find((project) => project.id === data.projectId);
     if (data.type === "project.deleted" || !local || Number(data.revision) > (Number(local.revision) || 0) || Number(data.updatedAt) > (Number(local.updatedAt) || 0)) {
@@ -212,25 +468,72 @@ export function createEditorProjects({
     }
   });
 
-  function scheduleSave() {
-    const project = activeProject();
+  async function persistScheduledProject(project) {
+    const baseRevision = Number(project.revision) || 0;
+    try {
+      project.revision = baseRevision + 1;
+      await putProject(project, { expectedRevision: baseRevision });
+      if (dirtySaveProjects.get(project.id)?.project === project) dirtySaveProjects.delete(project.id);
+      onSaveStatus(dirtySaveProjects.values().next().value?.error || null);
+      releaseInactiveProjects();
+    } catch (error) {
+      // A failed transaction did not advance the stored revision. Keep the
+      // in-memory edit retryable and let explicit folder/agent operations abort
+      // instead of continuing from an older database record.
+      project.revision = baseRevision;
+      console.error(error);
+      if (error.code === "STALE_PROJECT") {
+        dirtySaveProjects.delete(project.id);
+        await reloadProjectFromDb(project.id);
+        toast("This project changed in another tab. Reloaded the latest version.");
+      } else {
+        dirtySaveProjects.set(project.id, { project, error });
+        toast("Couldn’t save this project. Your changes are still open.");
+      }
+      onSaveStatus(dirtySaveProjects.values().next().value?.error || null);
+      throw error;
+    }
+  }
+
+  function startScheduledSave(project) {
+    const previousSave = saveInFlight;
+    const request = (previousSave || Promise.resolve())
+      .catch(() => {})
+      .then(() => persistScheduledProject(project));
+    saveInFlight = request;
+    const clearSave = () => {
+      if (saveInFlight === request) saveInFlight = null;
+    };
+    request.then(clearSave, clearSave);
+    return request;
+  }
+
+  async function flushPendingSave() {
+    const requests = saveInFlight ? [saveInFlight] : [];
+    clearTimeout(state.saveTimer);
+    state.saveTimer = null;
+    const projects = new Map([...dirtySaveProjects].map(([projectId, entry]) => [projectId, entry.project]));
+    if (pendingSaveProject) projects.set(pendingSaveProject.id, pendingSaveProject);
+    pendingSaveProject = null;
+    projects.forEach((project) => requests.push(startScheduledSave(project)));
+    const results = await Promise.allSettled(requests);
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected) throw rejected.reason;
+    if (dirtySaveProjects.size) throw dirtySaveProjects.values().next().value.error;
+  }
+
+  function scheduleSave(project = activeProject()) {
     if (!project) return;
     project.updatedAt = Date.now();
     scheduleThumbnailRefresh();
     state.shareAllCache = null;
+    pendingSaveProject = project;
     clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(async () => {
-      try {
-        const baseRevision = Number(project.revision) || 0;
-        project.revision = baseRevision + 1;
-        await putProject(project, { expectedRevision: baseRevision });
-      } catch (error) {
-        console.error(error);
-        if (error.code === "STALE_PROJECT") {
-          await reloadProjectFromDb(project.id);
-          toast("This project changed in another tab. Reloaded the latest version.");
-        } else toast("Couldn’t save this project in your browser.");
-      }
+    state.saveTimer = setTimeout(() => {
+      state.saveTimer = null;
+      const scheduledProject = pendingSaveProject;
+      pendingSaveProject = null;
+      if (scheduledProject) startScheduledSave(scheduledProject);
     }, 180);
   }
 
@@ -247,6 +550,322 @@ export function createEditorProjects({
     menu.style.top = `${top}px`;
   }
 
+  function enableLayerMenuKeyboard(menu, trigger) {
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    menu.addEventListener("keydown", (event) => {
+      const index = items.indexOf(document.activeElement);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLayerMenu();
+        trigger?.focus({ preventScroll: true });
+        return;
+      }
+      const nextIndex = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : event.key === "ArrowDown"
+            ? (index + 1) % items.length
+            : event.key === "ArrowUp"
+              ? (index - 1 + items.length) % items.length
+              : null;
+      if (nextIndex == null) return;
+      event.preventDefault();
+      items[nextIndex]?.focus();
+    });
+    items[0]?.focus({ preventScroll: true });
+  }
+
+  function closeFolderDialog() {
+    document.querySelector(".folder-dialog")?.remove();
+  }
+
+  async function moveProjectToFolder(projectId, requestedFolderPath) {
+    await flushPendingSave();
+    const index = state.projects.findIndex((project) => project.id === projectId);
+    if (index < 0) throw new Error(`Project not found: ${projectId}`);
+    const project = state.projects[index].__catalog
+      ? await reloadProjectFromDb(projectId, { render: false }) : state.projects[index];
+    const folderPath = normalizeFolderPath(requestedFolderPath);
+    if (requestedFolderPath != null && String(requestedFolderPath).trim() && !folderPath) {
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
+    }
+    if (project.folderPath === folderPath) return project;
+    const baseRevision = Number(project.revision) || 0;
+    const updated = {
+      ...project,
+      folderPath,
+      revision: baseRevision + 1,
+      updatedAt: Date.now(),
+    };
+    try {
+      await putProject(updated, { expectedRevision: baseRevision });
+      state.projects[index] = updated;
+      clearProjectHistory([projectId]);
+      leaveMissingActiveFolder();
+      renderDashboard();
+      toast(folderPath ? `Moved to ${folderDisplayName(folderPath)}` : "Moved to all projects");
+      return updated;
+    } catch (error) {
+      if (error.code === "STALE_PROJECT") await reloadProjectFromDb(projectId);
+      throw error;
+    }
+  }
+
+  async function moveFolderProjects(sourceFolderPath, requestedDestinationFolderPath) {
+    const destinationFolderPath = normalizeFolderPath(requestedDestinationFolderPath);
+    if (requestedDestinationFolderPath != null && String(requestedDestinationFolderPath).trim() && !destinationFolderPath) {
+      throw new Error("Use at most two folder levels: Client/Account, with no empty, dot, or double-dot names.");
+    }
+    if (sourceFolderPath === destinationFolderPath) return [];
+    // A project can reach the dashboard before its debounced editor save fires.
+    // Persist that edit before the folder transaction reads and rewrites records.
+    await flushPendingSave();
+    const moved = await moveProjectsFromFolderInDb(sourceFolderPath, destinationFolderPath);
+    state.folders = await getAllFolders();
+    replaceMovedProjects(moved);
+    if (folderContains(sourceFolderPath, state.activeFolderPath)) {
+      state.activeFolderPath = movedFolderPath(state.activeFolderPath, sourceFolderPath, destinationFolderPath);
+      updateBrowserRoute(folderRoutePath(state.activeFolderPath), "replace");
+    }
+    leaveMissingActiveFolder();
+    renderDashboard();
+    return moved;
+  }
+
+  function showNewFolderDialog(returnFocus) {
+    closeFolderDialog();
+    const parent = state.activeFolderPath || "";
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop folder-dialog";
+    backdrop.innerHTML = `
+      <form class="modal new-folder-modal" data-folder-create-form role="dialog" aria-modal="true" aria-labelledby="folder-create-title">
+        <button class="icon-button folder-modal-close" type="button" aria-label="Close"><span aria-hidden="true">×</span></button>
+        <h2 id="folder-create-title">New folder</h2>
+        <input name="folderName" placeholder="Folder name" maxlength="160" autocomplete="off" aria-label="Folder name" required />
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-cancel>Cancel</button>
+          <button class="button button--primary" type="submit">Create</button>
+        </div>
+      </form>`;
+    const form = backdrop.querySelector("form");
+    const input = form.elements.folderName;
+    let saving = false;
+    const close = () => {
+      if (saving) return;
+      backdrop.remove();
+      (returnFocus?.isConnected ? returnFocus : app.querySelector('[data-action="new-folder"]'))?.focus({ preventScroll: true });
+    };
+    backdrop.querySelector("[data-cancel]").addEventListener("click", close);
+    backdrop.querySelector(".folder-modal-close").addEventListener("click", close);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); close(); }
+      if (event.key === "Tab") {
+        const controls = [...form.querySelectorAll("button, input")].filter((item) => !item.disabled);
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    });
+    input.addEventListener("input", () => input.setCustomValidity(""));
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (saving) return;
+      const name = input.value.trim();
+      const path = normalizeFolderPath(`${parent}/${name}`);
+      if (!name || name.includes("/") || !path || folderExists(path)) {
+        input.setCustomValidity(folderExists(path) ? "A folder with this name already exists." : "Enter a folder name. Folders support a maximum of two levels.");
+        input.reportValidity();
+        return;
+      }
+      saving = true;
+      const submit = form.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        await createFolderInDb(path);
+        state.folders = await getAllFolders();
+        renderDashboard();
+        saving = false;
+        close();
+      } catch (error) {
+        saving = false;
+        submit.disabled = false;
+        input.setCustomValidity(error.name === "ConstraintError" ? "A folder with this name already exists." : "Couldn’t save this folder. Please try again.");
+        input.reportValidity();
+      }
+    });
+    document.body.appendChild(backdrop);
+    input.focus();
+    input.select();
+  }
+
+  function showProjectMoveDialog(projectId, returnFocus = null) {
+    closeFolderDialog();
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) return;
+    const folderPaths = [...new Set([...state.folders.flatMap((item) => folderAncestors(item.path)), ...state.projects.flatMap((item) => folderAncestors(item.folderPath))])]
+      .sort((a, b) => a.localeCompare(b));
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop folder-dialog";
+    backdrop.innerHTML = `
+      <form class="modal" data-folder-move-form role="dialog" aria-modal="true" aria-labelledby="folder-move-title" aria-describedby="folder-move-description">
+        <h2 id="folder-move-title">Move project</h2>
+        <p id="folder-move-description">Enter <strong>Client</strong> for a folder or <strong>Client/Account</strong> for a subfolder. Leave it empty to show the project on the home screen.</p>
+        <input name="folderPath" value="${escapeHtml(folderDisplayName(project.folderPath))}" placeholder="my-folder" maxlength="160" list="folder-path-options" autocomplete="off" aria-label="Folder name" />
+        <datalist id="folder-path-options">
+          ${folderPaths.map((folderPath) => `<option value="${escapeHtml(folderDisplayName(folderPath))}"></option>`).join("")}
+        </datalist>
+        <p class="folder-path-hint">A new path creates folders automatically. Maximum two levels: Client/Account.</p>
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
+          <button class="button button--primary" type="submit">Move project</button>
+        </div>
+      </form>
+    `;
+    const form = backdrop.querySelector("[data-folder-move-form]");
+    const input = form.elements.folderPath;
+    const cancelButton = backdrop.querySelector('[data-action="cancel-folder-dialog"]');
+    const close = () => {
+      closeFolderDialog();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    cancelButton.addEventListener("click", close);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+    input.addEventListener("input", () => input.setCustomValidity(""));
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const folderPath = normalizeFolderPath(input.value);
+      if (input.value.trim() && !folderPath) {
+        input.setCustomValidity("Use Client or Client/Account, with no empty, dot, or double-dot names. Maximum two levels.");
+        input.reportValidity();
+        return;
+      }
+      const submitButton = form.querySelector('[type="submit"]');
+      cancelButton.disabled = true;
+      submitButton.disabled = true;
+      submitButton.textContent = "Moving…";
+      try {
+        await moveProjectToFolder(projectId, folderPath);
+        close();
+      } catch (error) {
+        console.error(error);
+        cancelButton.disabled = false;
+        submitButton.disabled = false;
+        submitButton.textContent = "Move project";
+        toast("Couldn’t move this project in your browser.");
+      }
+    });
+    document.body.appendChild(backdrop);
+    input.focus();
+    input.select();
+  }
+
+  function showFolderRenameDialog(sourceFolderPath, returnFocus = null) {
+    closeFolderDialog();
+    if (!folderExists(sourceFolderPath)) return;
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop folder-dialog";
+    backdrop.innerHTML = `
+      <form class="modal" data-folder-rename-form role="dialog" aria-modal="true" aria-labelledby="folder-rename-title" aria-describedby="folder-rename-description">
+        <h2 id="folder-rename-title">Rename folder</h2>
+        <p id="folder-rename-description">Changing the name moves every project in <strong>${icon("folder")} ${escapeHtml(folderDisplayName(sourceFolderPath))}</strong> together.</p>
+        <input name="folderPath" value="${escapeHtml(folderDisplayName(sourceFolderPath))}" placeholder="my-folder" maxlength="160" autocomplete="off" aria-label="Folder name" required />
+        <p class="folder-path-hint">Using an existing name merges the two folders.</p>
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
+          <button class="button button--primary" type="submit">Rename folder</button>
+        </div>
+      </form>
+    `;
+    const form = backdrop.querySelector("[data-folder-rename-form]");
+    const input = form.elements.folderPath;
+    const cancelButton = backdrop.querySelector('[data-action="cancel-folder-dialog"]');
+    const close = () => {
+      closeFolderDialog();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    cancelButton.addEventListener("click", close);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+    input.addEventListener("input", () => input.setCustomValidity(""));
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const folderPath = normalizeFolderPath(input.value);
+      if (!folderPath) {
+        input.setCustomValidity("Use Client or Client/Account, with no empty, dot, or double-dot names. Maximum two levels.");
+        input.reportValidity();
+        return;
+      }
+      input.setCustomValidity("");
+      const submitButton = form.querySelector('[type="submit"]');
+      cancelButton.disabled = true;
+      submitButton.disabled = true;
+      submitButton.textContent = "Renaming…";
+      try {
+        const moved = await moveFolderProjects(sourceFolderPath, folderPath);
+        close();
+        toast(`Moved ${moved.length} ${moved.length === 1 ? "project" : "projects"} to ${folderDisplayName(folderPath)}`);
+      } catch (error) {
+        console.error(error);
+        cancelButton.disabled = false;
+        submitButton.disabled = false;
+        submitButton.textContent = "Rename folder";
+        toast(error.message || "Couldn’t rename this folder in your browser.");
+      }
+    });
+    document.body.appendChild(backdrop);
+    input.focus();
+    input.select();
+  }
+
+  function showFolderUnfileConfirmation(folderPath, returnFocus = null) {
+    closeFolderDialog();
+    const projectCount = projectsInFolder(folderPath).length;
+    if (!folderExists(folderPath)) return;
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop folder-dialog";
+    backdrop.innerHTML = `
+      <section class="modal modal--confirm" role="alertdialog" aria-modal="true" aria-labelledby="unfile-folder-title" aria-describedby="unfile-folder-description">
+        <h2 id="unfile-folder-title">Move projects out?</h2>
+        <p id="unfile-folder-description">${projectCount} ${projectCount === 1 ? "project" : "projects"} will return to the home screen. No projects or slides will be deleted.</p>
+        <div class="modal-actions">
+          <button class="button button--quiet" type="button" data-action="cancel-folder-dialog">Cancel</button>
+          <button class="button button--primary" type="button" data-action="confirm-folder-unfile">Move projects out</button>
+        </div>
+      </section>
+    `;
+    const cancelButton = backdrop.querySelector('[data-action="cancel-folder-dialog"]');
+    const confirmButton = backdrop.querySelector('[data-action="confirm-folder-unfile"]');
+    const close = () => {
+      closeFolderDialog();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    cancelButton.addEventListener("click", close);
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(); });
+    backdrop.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); });
+    confirmButton.addEventListener("click", async () => {
+      cancelButton.disabled = true;
+      confirmButton.disabled = true;
+      confirmButton.textContent = "Moving…";
+      try {
+        const moved = await moveFolderProjects(folderPath, null);
+        close();
+        toast(`Moved ${moved.length} ${moved.length === 1 ? "project" : "projects"} to the home screen`);
+      } catch (error) {
+        console.error(error);
+        cancelButton.disabled = false;
+        confirmButton.disabled = false;
+        confirmButton.textContent = "Move projects out";
+        toast("Couldn’t move these projects in your browser.");
+      }
+    });
+    document.body.appendChild(backdrop);
+    cancelButton.focus();
+  }
+
   function showProjectMenu(event, projectId) {
     event.preventDefault();
     event.stopPropagation();
@@ -254,11 +873,25 @@ export function createEditorProjects({
 
     const project = state.projects.find((item) => item.id === projectId);
     if (!project) return;
+    const trigger = event.currentTarget;
 
     const menu = document.createElement("div");
     menu.className = "layer-menu layer-menu--confirm";
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", `Actions for ${project.name}`);
+
+    const moveButton = document.createElement("button");
+    moveButton.type = "button";
+    moveButton.className = "layer-menu-item";
+    moveButton.setAttribute("role", "menuitem");
+    moveButton.setAttribute("aria-label", `Move ${project.name} to a folder`);
+    moveButton.innerHTML = `${icon("move")}<span>Move to folder…</span>`;
+    moveButton.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      closeLayerMenu();
+      showProjectMoveDialog(projectId, trigger);
+    });
+    menu.appendChild(moveButton);
 
     const button = document.createElement("button");
     button.type = "button";
@@ -274,10 +907,55 @@ export function createEditorProjects({
     menu.appendChild(button);
     document.body.appendChild(menu);
 
-    const triggerRect = event.currentTarget.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
     const clientX = event.clientX || triggerRect.left + triggerRect.width / 2;
     const clientY = event.clientY || triggerRect.top + triggerRect.height / 2;
     positionLayerMenu(menu, clientX, clientY);
+    enableLayerMenuKeyboard(menu, trigger);
+  }
+
+  function showFolderMenu(event, folderPath) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeLayerMenu();
+    if (!folderExists(folderPath)) return;
+    const trigger = event.currentTarget;
+
+    const menu = document.createElement("div");
+    menu.className = "layer-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", `Actions for ${folderDisplayName(folderPath)}`);
+
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.className = "layer-menu-item";
+    renameButton.setAttribute("role", "menuitem");
+    renameButton.innerHTML = `${icon("edit")}<span>Rename folder…</span>`;
+    renameButton.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      closeLayerMenu();
+      showFolderRenameDialog(folderPath, trigger);
+    });
+    menu.appendChild(renameButton);
+
+    const unfileButton = document.createElement("button");
+    unfileButton.type = "button";
+    unfileButton.className = "layer-menu-item";
+    unfileButton.setAttribute("role", "menuitem");
+    unfileButton.innerHTML = `${icon("back")}<span>Move projects out…</span>`;
+    unfileButton.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      closeLayerMenu();
+      showFolderUnfileConfirmation(folderPath, trigger);
+    });
+    menu.appendChild(unfileButton);
+    document.body.appendChild(menu);
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const clientX = event.clientX || triggerRect.left + triggerRect.width / 2;
+    const clientY = event.clientY || triggerRect.top + triggerRect.height / 2;
+    positionLayerMenu(menu, clientX, clientY);
+    enableLayerMenuKeyboard(menu, trigger);
   }
 
   function closeProjectDeleteConfirmation() {
@@ -321,11 +999,13 @@ export function createEditorProjects({
       confirmButton.disabled = true;
       confirmButton.textContent = "Removing…";
       try {
+        await flushPendingSave();
         await deleteProjectFromDb(projectId, { expectedRevision: Number(project.revision) || 0 });
-        project.slides.forEach((slide) => clearSlideThumbnail(slide.id));
+        project.slides.forEach((slide) => clearSlideThumbnail(slide.id, project.id));
         clearProjectCover(projectId);
         state.slideRailScrollPositions.delete(projectId);
         state.projects = state.projects.filter((item) => item.id !== projectId);
+        leaveMissingActiveFolder();
         close();
         renderDashboard();
         toast("Project removed");
@@ -343,8 +1023,25 @@ export function createEditorProjects({
     cancelButton.focus();
   }
 
-  function openProject(projectId, { historyMode = "push" } = {}) {
-    const project = state.projects.find((item) => item.id === projectId);
+  let navigationGeneration = 0;
+  async function openProject(projectId, { historyMode = "push" } = {}) {
+    const generation = ++navigationGeneration;
+    await flushPendingSave();
+    let project = state.projects.find((item) => item.id === projectId);
+    if (project?.__catalog) {
+      const loaded = await getProjectFromDb(projectId);
+      // A cancelled navigation must not hydrate a project into a dashboard that
+      // the user has already returned to while the database read was pending.
+      if (generation !== navigationGeneration) return true;
+      project = loaded;
+      if (project) {
+        normalizeLoadedProjects([project]);
+        const index = state.projects.findIndex((item) => item.id === projectId);
+        if (index >= 0) state.projects[index] = project;
+        else state.projects.push(project);
+      }
+    }
+    if (generation !== navigationGeneration) return true;
     if (!project) return false;
     updateBrowserRoute(projectPath(projectId), historyMode);
     state.activeProjectId = projectId;
@@ -355,33 +1052,132 @@ export function createEditorProjects({
     return true;
   }
 
+  function openFolder(requestedFolderPath, { historyMode = "push" } = {}) {
+    navigationGeneration += 1;
+    const folderPath = normalizeFolderPath(requestedFolderPath);
+    if (!folderExists(folderPath)) return false;
+    updateBrowserRoute(folderRoutePath(folderPath), historyMode);
+    state.activeFolderPath = folderPath;
+    state.activeProjectId = null;
+    state.activeSlideId = null;
+    clearLayerSelection();
+    state.photoAdjustMode = false;
+    renderDashboard();
+    return true;
+  }
+
   function openDashboard({ historyMode = "push" } = {}) {
-    updateBrowserRoute("/", historyMode);
+    navigationGeneration += 1;
+    state.activeFolderPath = null;
+    updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", historyMode);
     renderDashboard();
   }
 
-  function renderCurrentRoute() {
+  async function renderCurrentRoute() {
     const route = routeFromPathname();
-    if (route.view === "project" && openProject(route.projectId, { historyMode: "none" })) return;
+    if (route.view === "landing" && !domainMigration.isLegacyOrigin) {
+      await flushPendingSave();
+      renderLanding();
+      return;
+    }
+    if (route.view === "share") {
+      void openSharedProject(route.shareId);
+      return;
+    }
+    if (route.view === "project" && await openProject(route.projectId, { historyMode: "none" })) return;
+    if (route.view === "folder" && openFolder(route.folderPath, { historyMode: "none" })) return;
     const missingProject = route.view === "project";
-    updateBrowserRoute("/", "replace");
+    const missingFolder = route.view === "folder";
+    state.activeFolderPath = null;
+    updateBrowserRoute(domainMigration.isLegacyOrigin ? "/" : "/dashboard", "replace");
     renderDashboard();
     if (missingProject) toast("This project isn’t available in this browser.");
+    else if (missingFolder) toast("This folder isn’t available in this browser.");
   }
 
-  function createProject() {
+  function createProject({ aspectRatio } = {}) {
     const now = Date.now();
-    const project = { id: uid(), name: "New Project", createdAt: now, updatedAt: now, revision: 0, slides: [], assets: [] };
+    const project = {
+      id: uid(),
+      name: "New Project",
+      aspectRatio: normalizeAspectRatio(aspectRatio),
+      folderPath: state.activeFolderPath,
+      createdAt: now,
+      updatedAt: now,
+      revision: 0,
+      slides: [],
+      assets: [],
+      fonts: [],
+    };
     state.projects.push(project);
     openProject(project.id);
-    putProject(project).catch((error) => {
+    const initialSave = putProject(project);
+    saveInFlight = initialSave;
+    initialSave.finally(() => { if (saveInFlight === initialSave) saveInFlight = null; }).catch(() => {});
+    initialSave.then(() => onSaveStatus(dirtySaveProjects.values().next().value?.error || null), () => {});
+    initialSave.catch((error) => {
+      dirtySaveProjects.set(project.id, { project, error });
+      onSaveStatus(error);
       console.error(error);
-      toast("Couldn’t save this project in your browser.");
+      toast("Couldn’t save this project. Your changes are still open.");
     });
+  }
+
+  function clearDashboardPreviewResizeTracking() {
+    dashboardPreviewResizeObserver?.disconnect();
+    dashboardPreviewResizeObserver = null;
+    if (dashboardPreviewResizeHandler) window.removeEventListener("resize", dashboardPreviewResizeHandler);
+    dashboardPreviewResizeHandler = null;
   }
 
   function bindDashboardEvents() {
     bindGlobalActions();
+    clearDashboardPreviewResizeTracking();
+
+    const previewStrips = [...app.querySelectorAll("[data-project-preview-strip]")];
+    const syncPreviewControls = (strip) => {
+      const shell = strip.closest(".project-card-shell");
+      if (!shell) return;
+      const maxScrollLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+      const edgeTolerance = 2;
+      const previous = shell.querySelector('[data-project-preview-direction="previous"]');
+      const next = shell.querySelector('[data-project-preview-direction="next"]');
+      const focusedControl = document.activeElement === previous || document.activeElement === next
+        ? document.activeElement
+        : null;
+      if (previous) previous.hidden = maxScrollLeft <= edgeTolerance || strip.scrollLeft <= edgeTolerance;
+      if (next) next.hidden = maxScrollLeft <= edgeTolerance || strip.scrollLeft >= maxScrollLeft - edgeTolerance;
+      if (focusedControl?.hidden) {
+        const fallback = focusedControl === previous ? next : previous;
+        (fallback && !fallback.hidden ? fallback : shell.querySelector(".project-card"))?.focus({ preventScroll: true });
+      }
+    };
+    previewStrips.forEach((strip) => {
+      strip.scrollLeft = 0;
+      strip.addEventListener("scroll", () => syncPreviewControls(strip), { passive: true });
+      syncPreviewControls(strip);
+    });
+    app.querySelectorAll("[data-project-preview-direction]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const strip = button.closest(".project-card-shell")?.querySelector("[data-project-preview-strip]");
+        if (!strip) return;
+        const direction = button.dataset.projectPreviewDirection === "previous" ? -1 : 1;
+        const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+        strip.scrollBy({ left: direction * Math.max(80, strip.clientWidth - 32), behavior });
+      });
+    });
+    if (typeof ResizeObserver === "function") {
+      dashboardPreviewResizeObserver = new ResizeObserver((entries) => {
+        entries.forEach((entry) => syncPreviewControls(entry.target));
+      });
+      previewStrips.forEach((strip) => dashboardPreviewResizeObserver.observe(strip));
+    } else {
+      dashboardPreviewResizeHandler = () => previewStrips.forEach(syncPreviewControls);
+      window.addEventListener("resize", dashboardPreviewResizeHandler, { passive: true });
+    }
+
     const migrationModal = app.querySelector("[data-migration-modal]");
     const dismissMigrationModal = () => {
       if (!migrationModal) return;
@@ -399,6 +1195,12 @@ export function createEditorProjects({
     });
     migrationModal?.querySelector('[data-action="close-migration-modal"]')?.focus({ preventScroll: true });
     app.querySelector('[data-action="migrate-projects"]')?.addEventListener("click", migrateLegacyProjects);
+    app.querySelector('[data-action="open-dashboard-root"]')?.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      openDashboard();
+    });
+    app.querySelectorAll('[data-action="new-folder"]').forEach((button) => button.addEventListener("click", () => showNewFolderDialog(button)));
     app.querySelectorAll('[data-action="new-project"]').forEach((button) => button.addEventListener("click", createProject));
     app.querySelectorAll("[data-project-id]").forEach((link) => {
       link.addEventListener("click", (event) => {
@@ -416,6 +1218,22 @@ export function createEditorProjects({
         showProjectMenu(event, link.dataset.projectId);
       });
     });
+    app.querySelectorAll("[data-folder-path]").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        openFolder(link.dataset.folderPath);
+      });
+      link.addEventListener("contextmenu", (event) => {
+        if (event.ctrlKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          window.open(link.href, "_blank", "noopener");
+          return;
+        }
+        showFolderMenu(event, link.dataset.folderPath);
+      });
+    });
   }
 
   async function migrateLegacyProjects(event) {
@@ -424,7 +1242,7 @@ export function createEditorProjects({
     button.disabled = true;
     button.textContent = "Opening CarouselBot…";
     try {
-      const summary = await domainMigration.start([...state.projects], {
+      const summary = await domainMigration.start(await getAllProjects(), {
         onProgress: ({ completed, total }) => {
           button.textContent = `Copying ${completed} of ${total}…`;
           if (status) status.textContent = "Keep both tabs open while your projects and images are copied.";
@@ -441,6 +1259,14 @@ export function createEditorProjects({
   }
 
   function bindGlobalActions() {
+    app.querySelector('[data-action="open-project-parent"]')?.addEventListener("click", (event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      const folderPath = activeProject()?.folderPath;
+      if (folderPath) openFolder(folderPath);
+      else openDashboard();
+    });
+    if (!app.querySelector(".dashboard")) clearDashboardPreviewResizeTracking();
     const homeLink = app.querySelector('[data-action="home"]');
     homeLink?.addEventListener("click", (event) => {
       if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -456,23 +1282,35 @@ export function createEditorProjects({
   }
 
   function refreshDashboardProjects() {
+    if (["/", "/index.html"].includes(location.pathname) && !domainMigration.isLegacyOrigin) return Promise.resolve();
     if (!state.db || state.activeProjectId) return Promise.resolve();
     if (dashboardRefreshPromise) return dashboardRefreshPromise;
-    dashboardRefreshPromise = getAllProjects()
+    dashboardRefreshPromise = flushPendingSave()
+      .then(() => getProjectCatalog())
       .then((projects) => {
         if (state.activeProjectId) return;
-        state.projects = projects;
+        const refreshedProjects = normalizeLoadedProjects(projects);
+        pruneSlideThumbnails(refreshedProjects);
+        state.projects = refreshedProjects;
+        leaveMissingActiveFolder();
         renderDashboard();
-        bindGlobalActions();
       })
       .catch((error) => console.error("Could not refresh dashboard projects", error))
       .finally(() => { dashboardRefreshPromise = null; });
     return dashboardRefreshPromise;
   }
 
+  function releaseInactiveProjects() {
+    state.projects = state.projects.map((project) => project.id === state.activeProjectId
+      || project === pendingSaveProject || dirtySaveProjects.has(project.id)
+      ? project : projectCatalogEntry(project));
+  }
+
   return {
+    releaseInactiveProjects,
     domainMigration,
     recordHistory,
+    hasUndo,
     undo,
     redo,
     updateBrowserRoute,
@@ -480,13 +1318,18 @@ export function createEditorProjects({
     reloadProjectFromDb,
     handleExternalProjectEvent,
     scheduleSave,
+    flushPendingSave,
+    hasPendingSave: () => Boolean(pendingSaveProject || saveInFlight || dirtySaveProjects.size),
     showProjectMenu,
+    showFolderMenu,
     closeProjectDeleteConfirmation,
     showProjectDeleteConfirmation,
     openProject,
+    openFolder,
     openDashboard,
     renderCurrentRoute,
     createProject,
+    shareProject,
     bindDashboardEvents,
     migrateLegacyProjects,
     bindGlobalActions,

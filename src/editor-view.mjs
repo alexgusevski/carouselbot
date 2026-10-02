@@ -1,10 +1,7 @@
 import { slideVideoDuration } from "./editor-model.mjs";
 import {
   DESIGN_WIDTH,
-  OUTPUT_WIDTH,
-  OUTPUT_HEIGHT,
-  OUTLINE_RATIO,
-  TEXT_WEIGHT,
+  SUPPORTED_ASPECT_RATIOS,
   TEXT_LINE_HEIGHT,
   BOX_TEXT_LINE_HEIGHT,
   BOX_LINE_HEIGHT,
@@ -18,9 +15,12 @@ import {
   FONT_SIZE_SLIDER_STEP,
   TEXT_COLOR_PRESETS,
   escapeHtml,
+  folderRoutePath,
+  folderDisplayName,
   textColor,
   formatRgb,
   outlineColorFor,
+  outlineWidthForFontSize,
   overlayCrop,
   textAlignment,
   layerClipCss,
@@ -28,6 +28,8 @@ import {
   sliderPositionFromFontSize,
   formatFontSize,
   getImageLayout,
+  projectCanvasDimensions,
+  slideCanvasDimensions,
   perLineBackgroundSvgPath,
   wrapText,
 } from "./editor-model.mjs";
@@ -36,6 +38,7 @@ import {
   app,
   activeProject,
   activeSlide,
+  slideThumbnailKey,
   selectedText,
   selectedOverlay,
   isLayerSelected,
@@ -44,6 +47,17 @@ import {
   getOverlayMetrics,
   overlayClipCss,
 } from "./editor-state.mjs";
+import {
+  isTextFontAvailable,
+  isTextFontLoaded,
+  textCanvasFont,
+  textCssFontFamily,
+  textFontLabel,
+  textFontStyle,
+  textFontVariationCss,
+  textFontWeight,
+  textWeightOptions,
+} from "./project-fonts.mjs";
 
 export function formatDate(timestamp) {
   const date = new Date(timestamp);
@@ -56,11 +70,18 @@ export function formatDate(timestamp) {
 
 export function icon(name) {
   const icons = {
+    "square-stack": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><path d="M10 16c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2"/><rect width="8" height="8" x="14" y="14" rx="2"/></svg>',
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-8H9v8H4a1 1 0 0 1-1-1Z"/></svg>',
+    duplicate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
+    forward: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
     airdrop: '<img class="airdrop-icon" src="/assets/airdrop.svg" alt="" />',
+    share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3m0 0 5 5m-5-5L7 8"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 14h8l1-14"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    move: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20"/><path d="m15 19-3 3-3-3"/><path d="m19 9 3 3-3 3"/><path d="M2 12h20"/><path d="m5 9-3 3 3 3"/><path d="m9 5 3-3 3 3"/></svg>',
     rotate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 4v6h-6"/></svg>',
     "align-left": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 10h11M4 14h16M4 18h9"/></svg>',
     "align-center": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M6.5 10h11M4 14h16M7.5 18h9"/></svg>',
@@ -71,6 +92,7 @@ export function icon(name) {
     "send-back": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 13 5 5 5-5"/><path d="m7 6 5 5 5-5"/></svg>',
     crop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg>',
     text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5h14"/><path d="M12 5v14"/><path d="M8 19h8"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>',
     image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4 3.5 3 3-2.5 5 4.5"/></svg>',
     adjust: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h7"/><path d="M15 7h5"/><circle cx="13" cy="7" r="2"/><path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>',
     preview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M10 6h4"/><path d="M10 17.5h4"/></svg>',
@@ -83,6 +105,7 @@ export function renderHeader({ editor = false } = {}) {
   const project = activeProject();
   const agentConnectButton = `
     <button class="button button--quiet agent-connect-button" type="button" data-action="connect-agent" aria-label="Connect via MCP" title="Connect via MCP">
+      ${!editor ? '<span class="agent-color-clouds" aria-hidden="true"><i></i><i></i><i></i></span>' : ""}
       <span class="agent-logo-stack" aria-hidden="true">
         <img src="/assets/claude-ai-icon-f3a857f4.svg" alt="" />
         <img src="/assets/codex-logo-colored-53743834.svg" alt="" />
@@ -93,7 +116,7 @@ export function renderHeader({ editor = false } = {}) {
     </button>`;
   return `
     <header class="app-header${editor ? " app-header--editor" : ""}">
-      <a class="brand" href="/" data-action="home" aria-label="Go to projects">
+      <a class="brand" href="/dashboard" data-action="home" aria-label="Go to projects">
         <span class="brand-mark" aria-hidden="true"></span>
         <span class="brand-copy"><strong>CarouselBot</strong><small>AI carousel maker</small></span>
       </a>
@@ -104,18 +127,24 @@ export function renderHeader({ editor = false } = {}) {
       ` : ""}
       <div class="header-actions">
         ${editor ? `
+          <button class="button button--quiet share-button" type="button" data-action="share-project-link" aria-label="Share editable project link" title="Create a 24-hour link to an editable copy" ${project.slides.length ? "" : "disabled"}>
+            ${icon("share")} <span>Share link</span>
+          </button>
           <button class="button button--quiet share-button" type="button" data-action="share" aria-label="AirDrop current slide" title="AirDrop current slide" ${activeSlide() ? "" : "disabled"}>
             ${icon("airdrop")} <span>AirDrop</span>
           </button>
           <button class="button button--quiet share-button" type="button" data-action="share-all" aria-label="AirDrop all slides" title="AirDrop all slides" ${project.slides.length ? "" : "disabled"}>
-            ${icon("airdrop")} <span>AirDrop all</span>
+            ${icon("airdrop")} <span>All</span>
           </button>
           ${agentConnectButton}
           <button class="button button--quiet" type="button" data-action="export" aria-label="Download current slide" title="Download ${slideVideoDuration(activeSlide(), activeProject()) ? "MP4" : "PNG"}" ${activeSlide() ? "" : "disabled"}>
             ${icon("download")} <span>${slideVideoDuration(activeSlide(), activeProject()) ? "MP4" : "PNG"}</span>
           </button>
-        ` : `${agentConnectButton}<button class="button button--primary" type="button" data-action="new-project">New project</button>`}
-        <a class="icon-button github-link" href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer" aria-label="Open CarouselBot on GitHub" title="Open GitHub repository"><img class="github-mark" src="/assets/Octicons-mark-github.svg" alt="" /></a>
+          <button class="button button--quiet" type="button" data-action="export-all" aria-label="Download all slides" title="Download all slides" ${project.slides.length ? "" : "disabled"}>
+            ${icon("download")} <span>All</span>
+          </button>
+        ` : `<div class="home-agent-connect">${agentConnectButton}<span class="agent-callout" aria-hidden="true"><span>Connect your agent</span><svg viewBox="0 0 110 90" fill="none"><path d="M5 80 C63 89 97 45 98 7 M88 18 L98 7 L106 20" /></svg></span></div><button class="button button--primary" type="button" data-action="new-project">New project</button>`}
+
       </div>
     </header>
   `;
@@ -140,8 +169,7 @@ export function renderLegacyMigrationNotice(projects, migrationController, dismi
         <p class="eyebrow">Slide Studio has moved</p>
         <h2 id="migration-modal-title">Meet CarouselBot.</h2>
         <p id="migration-modal-description" class="migration-modal-description">
-          This project now lives at <strong>carousel.bot</strong>. It is still free and
-          <a href="https://github.com/alexgusevski/carouselbot" target="_blank" rel="noopener noreferrer">open source</a>.
+          This project now lives at <strong>carousel.bot</strong>. Your existing projects and MCP connection still work.
         </p>
         <p id="migration-modal-status" class="migration-modal-status" data-migration-status>${escapeHtml(detail)}</p>
         <div class="migration-actions">
@@ -155,24 +183,27 @@ export function renderLegacyMigrationNotice(projects, migrationController, dismi
 export function renderSlideRail(project) {
   return `
     <aside class="slide-rail">
+      <a class="slide-rail-back" data-action="open-project-parent" href="${project.folderPath ? folderRoutePath(project.folderPath) : "/"}" title="${escapeHtml(folderDisplayName(project.folderPath) || "Home")}">${icon(project.folderPath ? "folder" : "home")}<span>${escapeHtml(folderDisplayName(project.folderPath) || "Home")}</span></a>
       <div class="rail-heading"><h2>Slides</h2><span>${project.slides.length}</span></div>
       <div class="slide-list">
-        ${project.slides.map((slide, index) => `
-          <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${slide.id}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
-            <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
-            <span class="thumb-image" data-thumbnail-slide-id="${slide.id}">${renderSlideThumbnail(slide)}</span>
-          </button>
-        `).join("")}
+        ${project.slides.map((slide, index) => {
+          return `
+            <button class="slide-thumb ${slide.id === state.activeSlideId ? "is-active" : ""}" type="button" data-slide-id="${escapeHtml(slide.id)}" draggable="true" aria-haspopup="menu" aria-label="Open slide ${index + 1}. Drag to reorder. Right-click for actions." title="Drag to reorder · Right-click for actions">
+              <span class="slide-number">${String(index + 1).padStart(2, "0")}</span>
+              <span class="thumb-image" data-thumbnail-slide-id="${escapeHtml(slide.id)}" data-thumbnail-project-id="${escapeHtml(project.id)}" aria-label="9:16 screen preview; black area is not exported">${renderSlideThumbnail(slide, project)}</span>
+            </button>
+          `;
+        }).join("")}
       </div>
       <div class="rail-upload"><button class="button button--quiet" type="button" data-action="upload">${icon("plus")}<span>New slide</span></button></div>
     </aside>
   `;
 }
 
-export function renderSlideThumbnail(slide) {
-  const source = state.thumbnailUrls.get(slide.id);
+export function renderSlideThumbnail(slide, project = activeProject()) {
+  const source = state.thumbnailUrls.get(slideThumbnailKey(project?.id, slide.id));
   return source
-    ? `<img class="thumb-rendered" src="${source}" alt="" draggable="false" aria-hidden="true" />`
+    ? `<img class="thumb-rendered" src="${escapeHtml(source)}" alt="" draggable="false" decoding="async" aria-hidden="true" />`
     : `<span class="thumb-rendering-placeholder" aria-hidden="true"><span></span></span>`;
 }
 
@@ -183,9 +214,9 @@ export function renderAssetRail(project) {
       <div class="rail-heading"><h2>Assets</h2><span>${assets.length}</span></div>
       <div class="asset-grid" aria-label="Uploaded assets">
         ${assets.length ? assets.map((asset) => `
-          <div class="asset-item" data-asset-id="${asset.id}" draggable="true" title="${escapeHtml(asset.name)}">
-            <img src="${asset.imageData}" alt="${escapeHtml(asset.name)}" draggable="false" />
-            <button class="asset-remove" type="button" data-action="delete-asset" data-asset-id="${asset.id}" aria-label="Remove ${escapeHtml(asset.name)}">×</button>
+          <div class="asset-item" tabindex="0" aria-label="${asset.videoData ? "Play video" : "Preview"} ${escapeHtml(asset.name)}" data-asset-id="${escapeHtml(asset.id)}" draggable="true" title="${escapeHtml(asset.name)}">
+            <img data-asset-preview-id="${escapeHtml(asset.id)}" alt="${escapeHtml(asset.name)}" draggable="false" decoding="async" />
+            ${asset.videoData ? `<span class="asset-video-badge" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 3.5v9l7-4.5z"/></svg><span>${Math.round(asset.duration)}s</span></span>` : ""}
           </div>
         `).join("") : `<p class="asset-empty">Upload photos, videos, logos, or stickers. Drag them onto a photo to place them.</p>`}
       </div>
@@ -199,35 +230,63 @@ export function renderAssetRail(project) {
   `;
 }
 
-export function renderEmptyStage() {
+export function renderEmptyStage(project = activeProject()) {
+  const canvas = projectCanvasDimensions(project);
+  const aspectRatios = SUPPORTED_ASPECT_RATIOS.includes(canvas.aspectRatio)
+    ? SUPPORTED_ASPECT_RATIOS
+    : [canvas.aspectRatio, ...SUPPORTED_ASPECT_RATIOS];
   return `
     <div class="empty-stage">
       <div>
         <div class="empty-stage-graphic" aria-hidden="true"></div>
         <h2>Add your first photos</h2>
         <p>Choose one or several images from your computer. Each one becomes a slide.</p>
+        <label class="empty-stage-format" for="project-aspect-ratio">
+          <span>Canvas format</span>
+          <select id="project-aspect-ratio" aria-describedby="project-aspect-ratio-help">
+            ${aspectRatios.map((aspectRatio) => {
+              const dimensions = projectCanvasDimensions({ aspectRatio });
+              return `<option value="${escapeHtml(aspectRatio)}" ${aspectRatio === canvas.aspectRatio ? "selected" : ""}>${escapeHtml(aspectRatio)} · ${dimensions.width} × ${dimensions.height}</option>`;
+            }).join("")}
+          </select>
+          <small id="project-aspect-ratio-help">Default for solid slides. Uploaded images keep their own shape.</small>
+        </label>
         <button class="button button--primary" type="button" data-action="upload">Choose photos</button>
       </div>
     </div>
   `;
 }
 
-export function renderStage(slide) {
+export function renderStage(slide, project = activeProject()) {
+  const canvas = slideCanvasDimensions(project, slide);
+  const aspectRatios = SUPPORTED_ASPECT_RATIOS.includes(canvas.aspectRatio)
+    ? SUPPORTED_ASPECT_RATIOS
+    : [canvas.aspectRatio, ...SUPPORTED_ASPECT_RATIOS];
+  const supportsTikTokOverlay = canvas.aspectRatio === "9:16";
   return `
     <div class="canvas-composition">
       <div class="stage-wrap">
-        <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
-          <img class="stage-image-ghost" src="${slide.imageData}" alt="" draggable="false" aria-hidden="true" />
-          <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${slide.width}" data-natural-height="${slide.height}">
-            ${slide.videoData ? `<video class="stage-image" src="${slide.videoData}" muted playsinline preload="auto" data-slide-video></video>` : `<img class="stage-image" src="${slide.imageData}" alt="${escapeHtml(slide.name)}" draggable="false" />`}
-            ${renderTikTokOverlay()}
-          </div>
-          <div class="layer-stack">
-            ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
+        <div class="tiktok-screen-preview ${supportsTikTokOverlay ? "is-native-format" : "has-letterbox"}" aria-label="9:16 TikTok screen preview. Black area is outside the slide and is not exported.">
+          <div class="stage-frame ${selectedLayers().length > 1 ? "has-multi-selection" : ""} ${state.photoAdjustMode ? "is-adjusting-photo" : ""}">
+            <img class="stage-image-ghost" src="${escapeHtml(slide.imageData)}" alt="" draggable="false" aria-hidden="true" />
+            <div class="stage ${state.photoAdjustMode ? "is-adjusting" : ""}" data-natural-width="${Number(slide.width)}" data-natural-height="${Number(slide.height)}">
+              ${slide.videoData ? `<video class="stage-image" src="${escapeHtml(slide.videoData)}" muted playsinline preload="auto" data-slide-video></video>` : `<img class="stage-image" src="${escapeHtml(slide.imageData)}" alt="${escapeHtml(slide.name)}" draggable="false" />`}
+              ${supportsTikTokOverlay ? renderTikTokOverlay() : ""}
+            </div>
+            <div class="layer-stack">
+              ${slideItems(slide).map(({ kind, item }) => (kind === "overlay" ? renderOverlayBox(item) : renderTextBox(item))).join("")}
+            </div>
           </div>
         </div>
+        ${supportsTikTokOverlay ? "" : `<span class="tiktok-screen-note">9:16 preview · black not exported</span>`}
         <span class="stage-dimensions">
-          <span>${OUTPUT_WIDTH} × ${OUTPUT_HEIGHT} · 9:16</span>
+          <span class="stage-size-label">${canvas.width} × ${canvas.height} · ${escapeHtml(canvas.aspectRatio)}</span>
+          <label class="slide-format-control" for="slide-aspect-ratio">
+            <span>Format</span>
+            <select id="slide-aspect-ratio" aria-label="Slide format">
+              ${aspectRatios.map((aspectRatio) => `<option value="${escapeHtml(aspectRatio)}" ${aspectRatio === canvas.aspectRatio ? "selected" : ""}>${escapeHtml(aspectRatio)}</option>`).join("")}
+            </select>
+          </label>
           <span class="canvas-zoom-controls" aria-label="Canvas zoom">
             <button class="canvas-zoom-button" type="button" data-action="canvas-zoom-out" aria-label="Zoom canvas out">−</button>
             <button class="canvas-zoom-level" type="button" data-action="canvas-zoom-reset" title="Reset canvas zoom">${Math.round(state.canvasZoom * 100)}%</button>
@@ -235,19 +294,33 @@ export function renderStage(slide) {
           </span>
         </span>
       </div>
-      ${renderCanvasActions()}
-      ${slideVideoDuration(slide, activeProject()) ? `<div class="video-controls" role="group" aria-label="Video playback"><button type="button" data-video-play aria-label="Pause video">❚❚</button><div class="video-timeline"><input type="range" data-video-time aria-label="Video timeline" min="0" max="${slideVideoDuration(slide, activeProject())}" step="0.01" value="0"/><div class="video-ticks">${Array.from({length: 6}, (_, i) => `<span>${(slideVideoDuration(slide, activeProject()) * i / 5).toFixed(1)}s</span>`).join("")}</div></div><output data-video-clock></output></div>` : ""}
+      ${renderCanvasActions(project, slide)}
+      ${slideVideoDuration(slide, project) ? renderVideoControls(slideVideoDuration(slide, project)) : ""}
     </div>
   `;
 }
 
-export function renderCanvasActions() {
+function renderVideoControls(duration) {
+  return `<div class="video-controls" role="group" aria-label="Video playback">
+    <button type="button" data-video-play aria-label="Pause video" title="Play / pause (Space)" aria-pressed="true">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path class="video-play-icon" d="M6 3.5v13l10-6.5z"/><path class="video-pause-icon" d="M5 4h3v12H5zm7 0h3v12h-3z"/></svg>
+    </button>
+    <div class="video-timeline">
+      <input type="range" data-video-time aria-label="Video timeline" min="0" max="${duration}" step="0.01" value="0"/>
+      <div class="video-ticks" aria-hidden="true">${Array.from({ length: 5 }, (_, i) => `<span>${Number((duration * i / 4).toFixed(1))}s</span>`).join("")}</div>
+    </div>
+    <output data-video-clock aria-live="off"></output>
+  </div>`;
+}
+
+export function renderCanvasActions(project = activeProject(), slide = activeSlide()) {
+  const supportsTikTokOverlay = slideCanvasDimensions(project, slide).aspectRatio === "9:16";
   return `
     <div class="canvas-actions" aria-label="Canvas actions">
       <button class="canvas-action" type="button" data-action="add-text" title="Add text">${icon("text")}<span>Text</span></button>
-      <button class="canvas-action" type="button" data-action="upload-assets" title="Add image">${icon("image")}<span>Image</span></button>
+      <button class="canvas-action" type="button" data-action="copy-all-texts" title="Copy all texts">${icon("copy")}<span>Copy all texts</span></button>
       <button class="canvas-action ${state.photoAdjustMode ? "is-active" : ""}" type="button" data-action="adjust-photo" aria-pressed="${state.photoAdjustMode}" title="Adjust photo">${icon("adjust")}<span>Adjust photo</span></button>
-      <button class="canvas-action ${state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${state.showTikTokOverlay}" title="Toggle TikTok UI overlay">${icon("preview")}<span>Overlay</span></button>
+      <button class="canvas-action ${supportsTikTokOverlay && state.showTikTokOverlay ? "is-active" : ""}" type="button" data-action="toggle-tiktok-overlay" aria-pressed="${supportsTikTokOverlay && state.showTikTokOverlay}" title="${supportsTikTokOverlay ? "Toggle TikTok UI overlay" : "TikTok UI preview is available for 9:16 canvases"}" ${supportsTikTokOverlay ? "" : "disabled"}>${icon("preview")}<span>Overlay</span></button>
     </div>
   `;
 }
@@ -292,13 +365,13 @@ export function renderOverlayBox(overlay) {
   return `
     <div
       class="overlay-box ${selected ? "is-selected" : ""} ${cropping ? "is-cropping" : ""}"
-      data-overlay-id="${overlay.id}"
-      style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${overlay.rotation || 0}deg);"
+      data-overlay-id="${escapeHtml(overlay.id)}"
+      style="left:${overlay.x * 100}%;top:${overlay.y * 100}%;width:${metrics.width * 100}%;height:${metrics.height * 100}%;transform:rotate(${Number(overlay.rotation) || 0}deg);"
       tabindex="0"
       aria-label="Photo overlay: ${escapeHtml(asset.name)}"
     >
-      <div class="overlay-image-clip overlay-image-clip--outside">${asset.videoData ? `<video src="${asset.videoData}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" />`}</div>
-      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}">${asset.videoData ? `<video src="${asset.videoData}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${asset.imageData}" alt="" draggable="false" style="${imageStyle}" />`}</div>
+      <div class="overlay-image-clip overlay-image-clip--outside">${asset.videoData ? `<video src="${escapeHtml(asset.videoData)}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${escapeHtml(asset.imageData)}" alt="" draggable="false" style="${imageStyle}" />`}</div>
+      <div class="overlay-image-clip overlay-image-clip--inside" style="clip-path:${overlayClipCss(overlay, asset)}">${asset.videoData ? `<video src="${escapeHtml(asset.videoData)}" muted playsinline preload="auto" data-slide-video style="${imageStyle}"></video>` : `<img src="${escapeHtml(asset.imageData)}" alt="" draggable="false" style="${imageStyle}" />`}</div>
       ${cropping ? `
         <div class="crop-rect" style="left:${crop.x * 100}%;top:${crop.y * 100}%;width:${crop.w * 100}%;height:${crop.h * 100}%;">
           <span class="crop-handle" data-crop="nw"></span>
@@ -326,20 +399,27 @@ export function renderOverlayBox(overlay) {
 }
 
 export function renderTextBox(text) {
+  const project = activeProject();
   const selected = isLayerSelected("text", text.id);
   const background = text.background || "white";
   const backgroundShape = text.backgroundShape || "lines";
   const color = textColor(text);
   const outlineColor = outlineColorFor(color);
+  const fontMissing = Boolean(text.fontId && !isTextFontAvailable(project, text));
+  const fontLoading = Boolean(text.fontId && !fontMissing && !isTextFontLoaded(project, text));
+  const fontFamily = escapeHtml(textCssFontFamily(project, text));
+  const fontWeight = textFontWeight(project, text);
+  const fontStyle = textFontStyle(project, text);
+  const fontVariations = escapeHtml(textFontVariationCss(project, text));
   return `
     <div
-      class="text-box ${selected ? "is-selected" : ""}"
-      data-text-id="${text.id}"
-      data-style="${text.style}"
-      data-background="${background}"
-      data-box-shape="${backgroundShape}"
+      class="text-box ${selected ? "is-selected" : ""} ${fontMissing ? "is-font-missing" : ""} ${fontLoading ? "is-font-loading" : ""}"
+      data-text-id="${escapeHtml(text.id)}"
+      data-style="${escapeHtml(text.style)}"
+      data-background="${escapeHtml(background)}"
+      data-box-shape="${escapeHtml(backgroundShape)}"
       data-align="${textAlignment(text)}"
-      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${text.rotation || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;"
+      style="left:${text.x * 100}%;top:${text.y * 100}%;width:${text.width * 100}%;height:${text.height * 100}%;transform:rotate(${Number(text.rotation) || 0}deg);--text-color:${color};--outline-color:${outlineColor};--box-text-line-height:${BOX_TEXT_LINE_HEIGHT}em;--box-horizontal-padding:${BOX_HORIZONTAL_PADDING}em;--text-font-family:${fontFamily};--text-font-weight:${fontWeight};--text-font-style:${fontStyle};--text-font-variations:${fontVariations};"
       tabindex="0"
       aria-label="Text layer: ${escapeHtml(text.text)}"
     >
@@ -358,20 +438,25 @@ export function renderTextBox(text) {
       <span class="resize-handle" data-corner="ne" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="sw" aria-hidden="true"></span>
       <span class="resize-handle" data-corner="se" aria-hidden="true"></span>
+      ${fontMissing ? `<span class="missing-font-badge" title="${escapeHtml(textFontLabel(project, text))} is unavailable">Missing font</span>` : ""}
     </div>
   `;
 }
 
 export function renderInspector() {
-  const text = selectedText();
+  const layers = selectedLayers();
+  const texts = layers.filter(({ kind }) => kind === "text").map(({ item }) => item);
+  const text = texts.length === layers.length ? (texts[0] || selectedText()) : null;
+  const shared = (read) => layers.length && layers.every((entry) => Object.is(read(entry.item, entry.kind), read(layers[0].item, layers[0].kind))) ? read(layers[0].item, layers[0].kind) : null;
+  const commonText = (read) => !multiMode || texts.every((item) => Object.is(read(item), read(text)));
   const overlay = selectedOverlay();
-  const selectionCount = selectedLayers().length;
+  const selectionCount = layers.length;
   const multiMode = selectionCount > 1;
   const overlayAsset = overlay ? projectAsset(overlay.assetId) : null;
   const slide = activeSlide();
   const photoMode = Boolean(state.photoAdjustMode && slide);
   const overlayMode = Boolean(!photoMode && !multiMode && overlay);
-  const color = textColor(text);
+  const color = commonText(textColor) ? textColor(text) : "";
   return `
     <aside class="inspector ${state.mobileInspectorOpen ? "is-mobile-open" : ""}">
       <div class="inspector-header">
@@ -386,7 +471,7 @@ export function renderInspector() {
           </div>
           <button class="button button--quiet reset-photo-button" type="button" data-action="reset-photo">Reset photo</button>
         </div>
-      ` : multiMode ? "" : overlayMode && state.croppingOverlayId === overlay.id ? `
+      ` : overlayMode && state.croppingOverlayId === overlay.id ? `
         <div class="inspector-body">
           <button class="button button--primary" type="button" data-action="done-crop">Done</button>
         </div>
@@ -406,29 +491,45 @@ export function renderInspector() {
         </div>
       ` : text ? `
         <div class="inspector-body">
-          <div class="control-group">
+          ${!multiMode ? `<div class="control-group">
             <label class="control-label" for="text-value">Words</label>
             <textarea id="text-value" class="text-input" maxlength="500" placeholder="Type something…">${escapeHtml(text.text)}</textarea>
+          </div>` : ""}
+          <div class="control-group">
+            <label class="control-label" for="text-font">Font</label>
+            <select id="text-font" class="font-select" aria-label="Text font">
+              ${!commonText((item) => item.fontId || "") ? `<option value="__mixed__" selected disabled>— Mixed fonts</option>` : ""}
+              <option value="" ${commonText((item) => item.fontId || "") && !text.fontId ? "selected" : ""}>TikTok Sans</option>
+              ${(activeProject()?.fonts || []).map((font) => `<option value="${escapeHtml(font.id)}" ${commonText((item) => item.fontId || "") && text.fontId === font.id ? "selected" : ""}>${escapeHtml(font.fullName || `${font.family} ${font.subfamily || ""}`.trim())}</option>`).join("")}
+              <option value="__add_local_font__">Add font from Mac…</option>
+            </select>
+            ${text.fontId && !isTextFontAvailable(activeProject(), text) ? `<p class="font-warning">${escapeHtml(textFontLabel(activeProject(), text))} is unavailable on this device.</p>` : ""}
+          </div>
+          <div class="control-group">
+            <label class="control-label" for="font-weight-number">Weight</label>
+            ${textWeightOptions(activeProject(), text).weights
+              ? `<select id="font-weight-number" class="font-select" aria-label="Font weight">${textWeightOptions(activeProject(), text).weights.map((weight) => `<option value="${weight}" ${weight === textFontWeight(activeProject(), text) ? "selected" : ""}>${weight}</option>`).join("")}</select><small>Import another face to add more weights.</small>`
+              : `<div class="range-wrap"><input id="font-weight" type="range" min="${textWeightOptions(activeProject(), text).min}" max="${textWeightOptions(activeProject(), text).max}" step="1" value="${textFontWeight(activeProject(), text)}" aria-label="Font weight slider" /><input id="font-weight-number" class="number-input" type="number" min="${textWeightOptions(activeProject(), text).min}" max="${textWeightOptions(activeProject(), text).max}" step="1" value="${textFontWeight(activeProject(), text)}" aria-label="Font weight" /></div>`}
           </div>
           <div class="control-group">
             <div class="control-label">Style</div>
             <div class="style-options">
-              <button class="style-option ${text.style === "plain" ? "is-active" : ""}" type="button" data-text-style="plain">
+              <button class="style-option ${commonText((item) => item.style) && text.style === "plain" ? "is-active" : ""}" type="button" data-text-style="plain">
                 <span class="style-preview">Aa</span><small>Clean</small>
               </button>
-              <button class="style-option ${text.style === "outline" ? "is-active" : ""}" type="button" data-text-style="outline">
+              <button class="style-option ${commonText((item) => item.style) && text.style === "outline" ? "is-active" : ""}" type="button" data-text-style="outline">
                 <span class="style-preview style-preview--outline">Aa</span><small>Outline</small>
               </button>
-              <button class="style-option ${text.style === "boxed" ? "is-active" : ""}" type="button" data-text-style="boxed">
+              <button class="style-option ${commonText((item) => item.style) && text.style === "boxed" ? "is-active" : ""}" type="button" data-text-style="boxed">
                 <span class="style-preview style-preview--boxed">Aa</span><small>Box</small>
               </button>
             </div>
           </div>
           <div class="control-group">
-            <label class="control-label" for="font-size">Size <output>${formatFontSize(text.size)} px</output></label>
+            <label class="control-label" for="font-size">Size <output>${commonText((item) => item.size) ? `${formatFontSize(text.size)} px` : "—"}</output></label>
             <div class="range-wrap">
-              <input id="font-size" type="range" min="0" max="${FONT_SIZE_SLIDER_MAX}" step="${FONT_SIZE_SLIDER_STEP}" value="${sliderPositionFromFontSize(text.size)}" aria-valuetext="${formatFontSize(text.size)} pixels" />
-              <input id="font-size-number" class="number-input" type="number" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${formatFontSize(text.size)}" aria-label="Font size in pixels" />
+              <input id="font-size" data-mixed="${!commonText((item) => item.size)}" type="range" min="0" max="${FONT_SIZE_SLIDER_MAX}" step="${FONT_SIZE_SLIDER_STEP}" value="${sliderPositionFromFontSize(text.size)}" aria-valuetext="${commonText((item) => item.size) ? `${formatFontSize(text.size)} pixels` : "Mixed sizes"}" />
+              <input placeholder="—" id="font-size-number" class="number-input" type="number" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${commonText((item) => item.size) ? formatFontSize(text.size) : ""}" aria-label="Font size in pixels" />
             </div>
           </div>
           <div class="control-group color-control">
@@ -447,19 +548,19 @@ export function renderInspector() {
             </div>
             <div class="color-custom">
               <label class="color-picker-wrap" for="text-color-picker">
-                <input id="text-color-picker" type="color" value="${color}" aria-label="Choose a custom text color" />
-                <span>Color wheel</span>
+                <input id="text-color-picker" type="color" value="${color || "#ffffff"}" aria-label="Choose a custom text color" />
+                <span>${color ? "Color wheel" : "— Mixed colors"}</span>
               </label>
               <div class="color-values">
                 <div class="color-value-row">
                   <label for="text-color-hex">Hex</label>
-                  <input id="text-color-hex" type="text" value="${color}" maxlength="7" spellcheck="false" aria-label="Text color hex value" />
-                  <button type="button" data-copy-color="hex" aria-label="Copy hex color">Copy</button>
+                  <input id="text-color-hex" placeholder="—" type="text" value="${color}" maxlength="7" spellcheck="false" aria-label="Text color hex value" />
+                  <button type="button" data-copy-color="hex" ${color ? "" : "disabled"} aria-label="Copy hex color">Copy</button>
                 </div>
                 <div class="color-value-row">
                   <label for="text-color-rgb">RGB</label>
-                  <input id="text-color-rgb" type="text" value="${formatRgb(color)}" spellcheck="false" aria-label="Text color RGB value" />
-                  <button type="button" data-copy-color="rgb" aria-label="Copy RGB color">Copy</button>
+                  <input id="text-color-rgb" type="text" placeholder="—" value="${color ? formatRgb(color) : ""}" spellcheck="false" aria-label="Text color RGB value" />
+                  <button type="button" data-copy-color="rgb" ${color ? "" : "disabled"} aria-label="Copy RGB color">Copy</button>
                 </div>
               </div>
             </div>
@@ -467,29 +568,37 @@ export function renderInspector() {
           <div class="control-group">
             <div class="control-label">Alignment</div>
             <div class="alignment-options" role="group" aria-label="Text alignment">
-              ${["left", "center", "right"].map((align) => `<button class="alignment-option ${textAlignment(text) === align ? "is-active" : ""}" type="button" data-text-align="${align}" aria-label="Align text ${align}" aria-pressed="${textAlignment(text) === align}">${icon(`align-${align}`)}</button>`).join("")}
+              ${["left", "center", "right"].map((align) => `<button class="alignment-option ${commonText(textAlignment) && textAlignment(text) === align ? "is-active" : ""}" type="button" data-text-align="${align}" aria-label="Align text ${align}" aria-pressed="${commonText(textAlignment) && textAlignment(text) === align}">${icon(`align-${align}`)}</button>`).join("")}
             </div>
           </div>
-          ${text.style === "boxed" ? `
+          ${commonText((item) => item.style) && text.style === "boxed" ? `
             <div class="control-group">
               <div class="control-label">Background</div>
               <div class="tone-options">
-                <button class="tone-option ${text.background !== "black" ? "is-active" : ""}" type="button" data-background-tone="white"><span class="tone-swatch tone-swatch--white">Aa</span>White</button>
-                <button class="tone-option ${text.background === "black" ? "is-active" : ""}" type="button" data-background-tone="black"><span class="tone-swatch tone-swatch--black">Aa</span>Black</button>
+                <button class="tone-option ${commonText((item) => item.background || "white") && text.background !== "black" ? "is-active" : ""}" type="button" data-background-tone="white"><span class="tone-swatch tone-swatch--white">Aa</span>White</button>
+                <button class="tone-option ${commonText((item) => item.background) && text.background === "black" ? "is-active" : ""}" type="button" data-background-tone="black"><span class="tone-swatch tone-swatch--black">Aa</span>Black</button>
               </div>
             </div>
             <div class="control-group">
               <div class="control-label">Shape</div>
               <div class="shape-options">
-                <button class="shape-option ${text.backgroundShape !== "full" ? "is-active" : ""}" type="button" data-background-shape="lines"><span class="shape-preview shape-preview--lines"><i>Text line</i><i>Shorter</i></span><small>Per line</small></button>
-                <button class="shape-option ${text.backgroundShape === "full" ? "is-active" : ""}" type="button" data-background-shape="full"><span class="shape-preview shape-preview--full">Text box</span><small>Full box</small></button>
+                <button class="shape-option ${commonText((item) => item.backgroundShape || "lines") && text.backgroundShape !== "full" ? "is-active" : ""}" type="button" data-background-shape="lines"><span class="shape-preview shape-preview--lines"><i>Text line</i><i>Shorter</i></span><small>Per line</small></button>
+                <button class="shape-option ${commonText((item) => item.backgroundShape) && text.backgroundShape === "full" ? "is-active" : ""}" type="button" data-background-shape="full"><span class="shape-preview shape-preview--full">Text box</span><small>Full box</small></button>
               </div>
             </div>
           ` : ""}
         </div>
-      ` : `
+      ` : multiMode ? "" : `
         <div class="inspector-empty"><span>T</span><p>${slide ? "Select text or an overlay, or add one to this photo." : "Add a photo to start placing text."}</p></div>
       `}
+      ${multiMode && !photoMode ? `<div class="inspector-body">
+        ${["width", "height", "rotation"].map((property) => {
+          const rotation = property === "rotation";
+          const value = shared((item, kind) => property === "height" && kind === "overlay" ? getOverlayMetrics(item).height : item[property] || 0);
+          const display = value === null ? "" : Math.round(value * (rotation ? 10 : 1000)) / 10;
+          return `<div class="control-group"><label class="control-label" for="shared-${property}">${rotation ? "Rotation (°)" : property === "width" ? "Width (% of slide)" : "Height (% of slide)"}</label><input id="shared-${property}" class="number-input" type="number" step="${rotation ? 1 : 0.1}" ${rotation ? "" : 'min="0.1"'} placeholder="—" value="${display}" data-shared-property="${property}" /></div>`;
+        }).join("")}
+      </div>` : ""}
     </aside>
   `;
 }
@@ -507,37 +616,56 @@ export function updateStageImage(slide) {
 }
 
 export function updateTextBox(text) {
-  const box = app.querySelector(`.text-box[data-text-id="${text.id}"]`);
+  const project = activeProject();
+  const box = app.querySelector(`.text-box[data-text-id="${CSS.escape(text.id)}"]`);
   if (!box) return;
   box.style.left = `${text.x * 100}%`;
   box.style.top = `${text.y * 100}%`;
   box.style.width = `${text.width * 100}%`;
   box.style.height = `${text.height * 100}%`;
-  box.style.transform = `rotate(${text.rotation || 0}deg)`;
+  box.style.transform = `rotate(${Number(text.rotation) || 0}deg)`;
   box.dataset.style = text.style;
   box.dataset.background = text.background || "white";
   box.dataset.boxShape = text.backgroundShape || "lines";
   box.dataset.align = textAlignment(text);
+  const fontMissing = Boolean(text.fontId && !isTextFontAvailable(project, text));
+  const fontLoading = Boolean(text.fontId && !fontMissing && !isTextFontLoaded(project, text));
+  box.classList.toggle("is-font-missing", fontMissing);
+  box.classList.toggle("is-font-loading", fontLoading);
+  let missingBadge = box.querySelector(".missing-font-badge");
+  if (fontMissing && !missingBadge) {
+    missingBadge = document.createElement("span");
+    missingBadge.className = "missing-font-badge";
+    missingBadge.textContent = "Missing font";
+    box.appendChild(missingBadge);
+  } else if (!fontMissing) missingBadge?.remove();
+  if (missingBadge) missingBadge.title = `${textFontLabel(project, text)} is unavailable`;
   const color = textColor(text);
   box.style.setProperty("--text-color", color);
   box.style.setProperty("--outline-color", outlineColorFor(color));
   box.style.setProperty("--box-text-line-height", `${BOX_TEXT_LINE_HEIGHT}em`);
   box.style.setProperty("--box-horizontal-padding", `${BOX_HORIZONTAL_PADDING}em`);
+  box.style.setProperty("--text-font-family", textCssFontFamily(project, text));
+  box.style.setProperty("--text-font-weight", String(textFontWeight(project, text)));
+  box.style.setProperty("--text-font-style", textFontStyle(project, text));
+  box.style.setProperty("--text-font-variations", textFontVariationCss(project, text));
   const insideVisual = box.querySelector(".text-visual--inside");
   if (insideVisual) insideVisual.style.clipPath = layerClipCss(text.x, text.y, text.width, text.height);
   box.querySelectorAll(".text-content-wrap").forEach((contentWrap) => {
     contentWrap.style.textAlign = textAlignment(text);
+    contentWrap.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
+    contentWrap.style.paddingInline = text.style === "boxed" && text.backgroundShape !== "full" ? "0.3em" : "0.16em";
   });
   box.querySelectorAll(".text-content").forEach((content) => {
     content.style.textAlign = textAlignment(text);
     content.style.alignItems = textAlignment(text) === "left" ? "flex-start" : textAlignment(text) === "right" ? "flex-end" : "center";
     content.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    paintTextContent(text, content, box);
+    if (fontLoading) content.textContent = text.text;
+    else paintTextContent(text, content, box);
   });
   const editor = box.querySelector(".text-editor");
   if (editor) {
-    editor.style.fontSize = `${text.size * (state.stageWidth / DESIGN_WIDTH)}px`;
-    editor.style.textAlign = textAlignment(text);
+    updateInlineTextLayout(text, editor, box);
   }
 }
 
@@ -546,19 +674,41 @@ export const measureCanvas = typeof document === "undefined" ? null : document.c
 export function measureFont(text) {
   const fontSize = text.size * ((state.stageWidth || DESIGN_WIDTH) / DESIGN_WIDTH);
   const context = measureCanvas.getContext("2d");
-  context.font = `${TEXT_WEIGHT} ${fontSize}px "TikTok Sans"`;
+  // Measure at design size: optical font sizing must not change line breaks with zoom.
+  context.font = textCanvasFont(activeProject(), text, text.size);
+  if ("fontVariationSettings" in context) context.fontVariationSettings = textFontVariationCss(activeProject(), text);
   return { context, fontSize };
 }
 
 export function wrappedLinesForBox(text, box) {
   const { context, fontSize } = measureFont(text);
-  const boxWidth = box?.clientWidth || (state.stageWidth || DESIGN_WIDTH) * text.width;
+  const boxWidth = DESIGN_WIDTH * text.width;
   const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
   const horizontalInset = perLineBox
-    ? fontSize * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
-    : fontSize * 0.32;
+    ? text.size * (TEXT_BOX_EDGE_PADDING * 2 + BOX_HORIZONTAL_PADDING * 2)
+    : text.size * 0.32;
   const maxWidth = Math.max(1, boxWidth - horizontalInset);
-  return { lines: wrapText(context, text.text, maxWidth), fontSize, context };
+  return { lines: wrapText(context, text.text, maxWidth), fontSize, context, maxWidth };
+}
+
+// The editable surface must use the same wrapping width as the painted rows.
+// Its origin follows the existing painted padding; it must not move the background.
+export function updateInlineTextLayout(text, editor, box) {
+  const content = box.querySelector(".text-visual--inside .text-content");
+  const { fontSize, maxWidth } = wrappedLinesForBox(text, box);
+  const width = maxWidth * fontSize / text.size;
+  const perLineBox = text.style === "boxed" && (text.backgroundShape || "lines") !== "full";
+  const padding = perLineBox ? fontSize * BOX_HORIZONTAL_PADDING : 0;
+  const align = textAlignment(text);
+  const left = content.offsetLeft + (align === "left" ? padding
+    : align === "right" ? content.clientWidth - padding - width
+    : (content.clientWidth - width) / 2);
+  editor.style.fontSize = `${fontSize}px`;
+  editor.style.textAlign = align;
+  editor.style.left = `${left}px`;
+  editor.style.top = `${content.offsetTop}px`;
+  editor.style.width = `${width}px`;
+  editor.style.height = `${content.offsetHeight}px`;
 }
 
 export function createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth) {
@@ -603,12 +753,14 @@ export function paintTextContent(text, content, box) {
       node.setAttribute("dominant-baseline", "middle");
       node.setAttribute("fill", textColor(text));
       node.setAttribute("stroke", outlineColorFor(textColor(text)));
-      node.setAttribute("stroke-width", String(fontSize * OUTLINE_RATIO));
+      node.setAttribute("stroke-width", String(outlineWidthForFontSize(fontSize, text.outlineWidth)));
       node.setAttribute("stroke-linejoin", "round");
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("paint-order", "stroke fill");
-      node.setAttribute("font-family", "TikTok Sans, sans-serif");
-      node.setAttribute("font-weight", String(TEXT_WEIGHT));
+      node.setAttribute("font-family", textCssFontFamily(activeProject(), text));
+      node.setAttribute("font-weight", String(textFontWeight(activeProject(), text)));
+      node.setAttribute("font-style", textFontStyle(activeProject(), text));
+      node.style.fontVariationSettings = textFontVariationCss(activeProject(), text);
       node.setAttribute("font-size", `${fontSize}px`);
       node.textContent = line || " ";
       svg.appendChild(node);
@@ -626,13 +778,13 @@ export function paintTextContent(text, content, box) {
     const renderedWidth = lineNode.getBoundingClientRect().width;
     return renderedWidth > 0
       ? renderedWidth
-      : context.measureText(lines[index] || " ").width + padX * 2;
+      : context.measureText(lines[index] || " ").width * fontSize / text.size + padX * 2;
   });
   content.prepend(createPerLineBackground(text, widths, lineHeight, fontSize, contentWidth));
 }
 
 export function updateOverlayBox(overlay) {
-  const box = app.querySelector(`.overlay-box[data-overlay-id="${overlay.id}"]`);
+  const box = app.querySelector(`.overlay-box[data-overlay-id="${CSS.escape(overlay.id)}"]`);
   const asset = projectAsset(overlay.assetId);
   if (!box || !asset) return;
   const metrics = getOverlayMetrics(overlay, asset);
@@ -642,7 +794,7 @@ export function updateOverlayBox(overlay) {
   box.style.top = `${overlay.y * 100}%`;
   box.style.width = `${metrics.width * 100}%`;
   box.style.height = `${metrics.height * 100}%`;
-  box.style.transform = `rotate(${overlay.rotation || 0}deg)`;
+  box.style.transform = `rotate(${Number(overlay.rotation) || 0}deg)`;
   const images = box.querySelectorAll(".overlay-image-clip img, .overlay-image-clip video");
   images.forEach((image) => {
     if (cropping) {

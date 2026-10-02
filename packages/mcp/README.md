@@ -1,13 +1,16 @@
 # CarouselBot MCP
 
-Local-first MCP companion for the hosted [CarouselBot editor](https://carousel.bot). It exposes project, slide, text, image, layer, history, rendering, and export controls to any stdio MCP client while the editor remains in the browser.
+Local-first MCP companion for the hosted [CarouselBot editor](https://carousel.bot). It exposes project, folder, slide, text, image, layer, history, rendering, and export controls to any stdio MCP client while the editor remains in the browser.
 
 ```bash
 npx carouselbot@latest setup
 ```
 
-Setup pins that exact package version in the generated MCP configuration. Rerun
-the command when you intentionally want to update.
+Setup pins that exact package version in the generated MCP configuration, refreshes
+the agent skill, and automatically upgrades an older shared daemon. Rerun the
+command when you intentionally want to update. When setup runs inside a named
+Hermes profile, it also installs the skill into that profile's active
+HERMES_HOME and non-interactively enables the discovered CarouselBot tools.
 
 For non-interactive agent setup, select the current client explicitly:
 
@@ -25,16 +28,48 @@ The same validated tool surface is available through the package CLI when a runn
 npx -y carouselbot@latest call get_design_guidance
 npx -y carouselbot@latest call list_editors
 npx -y carouselbot@latest call begin_edit_session --json '{"editorId":"EDITOR_ID","purpose":"Build my deck"}'
-npx -y carouselbot@latest call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation"}'
+npx -y carouselbot@latest call create_project --json '{"editSessionId":"SESSION_ID","name":"My presentation","aspectRatio":"3:4","folderPath":"/campaigns"}'
 ```
 
 Every MCP tool name and JSON argument shape works with `call`. The CLI-only `list_tools` helper lists names compactly or returns selected schemas. `render_slide` writes image output to a temporary `previewPath` instead of dumping base64 into the terminal.
 
+Folders use exact canonical slash paths such as `/campaigns` and are derived from project membership. Pass `folderPath` to `create_project` to create a project in a folder. Use `move_project` with another slash path to move it between folders, or with `folderPath: null` to move it back to the dashboard root. Embedded slashes are part of the virtual path and do not create a nested UI hierarchy. Because folders are implicit, moving the last project out removes the empty folder card automatically. `inspect_editor` returns each project's current folder path.
+
+## Canvas formats and backgrounds
+
+Choose `aspectRatio` when creating a project to set the default for new slides. The editor offers `9:16`, `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, and `16:9`; MCP callers may also use another positive `W:H` ratio that produces a canvas between 180 and 3840 pixels high at the fixed 1080-pixel export width. Pass `aspectRatio` to `add_slide` when one slide should differ from the project default, or to `update_slide` to change only that slide. Existing text and image layers keep their proportions and relative centers when a slide ratio changes.
+
+An image-backed `add_slide` automatically adopts the source image's exact reduced ratio when `backgroundPath` is supplied without `aspectRatio`. The image therefore scales to the 1080-pixel canvas width without adding workspace padding to the output; exports contain only the image-shaped slide canvas and its layers. Pass `aspectRatio` alongside `backgroundPath` only for an intentional crop-to-format slide. Native browser uploads use the same source-ratio behavior.
+
+For example, a `3:4` project can contain an inherited `3:4` opener, a square slide, and a custom ultra-wide slide:
+
+```bash
+npx -y carouselbot@latest call add_slide --json '{"editSessionId":"SESSION_ID","projectId":"PROJECT_ID","backgroundColor":"#F4EFE6"}'
+npx -y carouselbot@latest call add_slide --json '{"editSessionId":"SESSION_ID","projectId":"PROJECT_ID","aspectRatio":"1:1","backgroundColor":"#111111"}'
+npx -y carouselbot@latest call add_slide --json '{"editSessionId":"SESSION_ID","projectId":"PROJECT_ID","aspectRatio":"18:5","backgroundColor":"#FFFFFF"}'
+```
+
+Create a flat slide directly with `add_slide({ backgroundColor: "#F4EFE6" })`, or replace a slide background with `update_slide`. A color is stored as project data and rendered natively, so no white or colored placeholder file is needed. `backgroundColor` and `backgroundPath` are mutually exclusive.
+
 Always use `list_editors` to check the browser connection. Do not open CarouselBot or click **Connect AI** through a sandboxed, remote, or agent-controlled browser: that is a different browser session and may not reach the local companion.
 
-Browser reconnection is automatic. Retry transient disconnects; use `restart` only for an explicit protocol mismatch or failed daemon health check. Hermes can refresh native tools with `/reload-mcp` and `/reload-skills`. Claude may need a new session to register a newly added server, but the CLI fallback works immediately.
+Browser and MCP-process reconnection are automatic, including after a compatible daemon upgrade. The MCP checks the daemon's advertised internal actions rather than trusting the browser protocol number alone. Retry transient disconnects; use `restart` only when automatic recovery or `doctor` reports a failed daemon health check. An already-running host may still need to refresh its native tool catalog when a release adds entirely new tool names; the CLI fallback works immediately without waiting for that refresh.
 
 The companion binds only to `127.0.0.1`. There is no hosted relay: projects remain in browser IndexedDB and local images remain on the user's computer.
+
+## Installed fonts
+
+CarouselBot can use fonts installed on the same Mac as the companion. Open a text layer's font control once and choose **Allow local fonts**. The permission is stored in that browser; until it is granted, agent calls return `FONT_PERMISSION_REQUIRED`.
+
+Agents use project-scoped IDs rather than CSS family guesses:
+
+```text
+list_local_fonts({ query: "Didot" })
+import_font({ editSessionId, projectId, localFontId })
+add_text({ editSessionId, projectId, slideId, text, fontId })
+```
+
+`list_project_fonts` reports faces already embedded in a project. `add_text` and `update_text` accept the returned `fontId`, plus optional `fontWeight` and `fontStyle`. The `wght` variable-font axis has editor/export parity; other axes are preserved for compatibility but should not be newly applied until the canvas renderer supports them exactly. The companion returns opaque local font IDs and never exposes font paths. A selected face is transferred over the authenticated loopback connection, persisted only in the browser's local IndexedDB project, and loaded before fitting or rendering. If the exact bytes are missing or invalid, rendering reports `FONT_UNAVAILABLE` instead of silently using a fallback. Ordinary typography remains an editable text layer; agents must not substitute a text-only image to imitate a font.
 
 Any MCP client can launch it with:
 
@@ -58,8 +93,36 @@ The new companion accepts both `https://carousel.bot` and the legacy `https://sl
 
 ## Parallel agents and browser tabs
 
-Call `begin_edit_session` before editing and pass its `editSessionId` to all operations. A session atomically reserves one browser tab and one project, follows that tab instead of global focus, and expires after inactivity. Always call `end_edit_session` when finished.
+Call `begin_edit_session` before editing and pass its `editSessionId` to all operations. A session tracks one browser tab and one project, follows that target instead of global focus, and expires after inactivity. It does not lock either resource. Always call `end_edit_session` when finished.
 
-For parallel editing, reserve a different connected editor for each worker. The daemon rejects conflicting claims with `EDITOR_BUSY` or `PROJECT_BUSY` and records a sanitized local audit through `list_recent_operations`; it never records slide text, prompts, file paths, or image bytes.
+Any number of agents can share one connected browser tab, including editing the same project. Commands execute sequentially in that tab while notifications and project updates remain live. Use explicit project and slide IDs or a project-bound session to keep targets stable. The daemon records a sanitized local audit through `list_recent_operations`; it never records slide text, prompts, file paths, or image bytes.
 
 Browser writes use revision-checked IndexedDB transactions and cross-tab synchronization. A stale tab cannot replace a newer project snapshot; it reloads the canonical copy and returns `STALE_PROJECT` so the agent can inspect and retry.
+
+Paths support exactly two folder levels: `/Client/Account` appears as Home → Client → Account. Use this when the user asks to organize multiple accounts for a client; do not reorganize projects without being asked. Create or move projects with `folderPath: "/Client/Account"`; the parent and subfolder appear automatically. `/Client/Account/Campaign` is rejected. `inspect_editor` includes parent folders and `parentPath`; folder project counts include descendants. Renaming a parent in the UI preserves its subfolders.
+
+`duplicate_project` copies a complete carousel into an optional destination `folderPath` in one local operation. Images, fonts, slides and editable layers are preserved with independent IDs. It returns `createdProjectId`; the source `projectId` and edit session remain unchanged. Batch two variants together with `apply_operations`, then start sessions on their new IDs to restyle them.
+
+### Copy all slide text
+
+Call `copy_all_texts` with an optional `projectId` (defaults to the active project).
+The result contains `{ projectId, text }`: one row per text layer in slide and
+text-layer order, with one blank row between slides. Line breaks inside a layer
+become spaces; empty layers and slides are skipped. This read-only tool returns
+the text without changing the system clipboard or requiring design guidance.
+The browser agent exposes the same result through
+`window.carouselBotAgent.execute({ type: "project.copyAllTexts", projectId })`.
+The floating **Copy all texts** button writes this text to the clipboard.
+
+
+## Video workflow
+
+Videos are supported end to end by the companion; do not fall back to browser clicks or say only images are supported. Use `inspect_editor` with `includeAllProjects: false` and the assigned project/slide IDs. `capabilities` reports video support; slides expose `mode`, `duration`, and `loop`, and assets and placed `images` expose `type: "video"`. The `images` field and image tool names remain compatible and include placed videos.
+
+1. `import_asset({ path: "/absolute/path/demo.mp4", projectId, editSessionId })` imports MP4/MOV/WebM (browser-decodable codecs, H.264 MP4 recommended), up to 100 MB. Keep the returned `assetId`.
+2. `add_image({ assetId, projectId, slideId, x: 0.52, y: 0.15, width: 0.42, editSessionId })` places the video. `update_image` controls the same move, resize, crop, rotation, and stacking fields as images. Keep all accompanying copy in editable text layers. `add_slide`/`update_slide` also accept a video `backgroundPath`.
+3. Video mode is automatic. The longest placed/background clip defines duration; shorter clips loop. `render_slide({ projectId, slideId, time: 3, editSessionId })` returns real composited pixels at three seconds without moving the user's playback or navigating. Inspect multiple times for motion and layout.
+4. For a video slide already visible, `set_video_playback({ projectId, slideId, playing: false, time: 3, editSessionId })` pauses/seeks; `playing: true` resumes. Omit both to read playback. This never navigates; only use `open_project` when asked to show a project.
+5. `export_slide({ projectId, slideId, outputPath: "/absolute/path/slide.mp4", editSessionId })` automatically produces MP4 with source audio for video slides. Image slides remain PNG. `format: "png", time: 3` explicitly exports a still frame to a `.png` path. `export_project` chooses MP4/PNG for each slide in mixed projects. Existing files are protected unless `overwrite: true` is authorized.
+
+MP4 export uses the browser's encoder and runs in real time. Agent exports support up to 120 seconds per slide and need a browser with native MP4 recording (current Chrome recommended). Allow enough tool time for encoding; the CLI fallback supports long export calls. Media stays on this computer. For an older editor without video capabilities, reload its existing real-browser tab and retry after automatic reconnection. For an older installed companion use `npx -y carouselbot@latest call ...`; newly added tool names are available immediately through this fallback without restarting an agent session.

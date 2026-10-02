@@ -1,10 +1,32 @@
 # CarouselBot design guidance
 
+## Image proportions: crop only
+
+Never stretch, squash, squeeze, or shrink one axis of an image to fit a frame. Preserve the source image and its natural proportions. Fit a different frame shape by cropping; never bake a distorted resize into an asset. Uniform display scaling is allowed to place an image on the canvas, but horizontal and vertical scale must be identical.
+
+For every `add_image` or `update_image`, read the asset's pixel dimensions and the slide's actual canvas dimensions. Explicit `width` and `height` define a destination rectangle; they do NOT automatically perform a cover crop. A full-source crop (`cropW: 1, cropH: 1`) in a differently shaped rectangle distorts the image.
+
+Before sending geometry, enforce:
+`(width * canvasWidth) / (height * canvasHeight) = (assetWidth * cropW) / (assetHeight * cropH)`.
+
+To fill a frame without distortion, let `R = (width * canvasWidth) / (height * canvasHeight)` and `S = assetWidth / assetHeight`:
+- If `R < S`, set `cropW = R / S`, `cropH = 1`.
+- Otherwise set `cropW = 1`, `cropH = S / R`.
+- Center initially with `cropX = (1 - cropW) / 2`, `cropY = (1 - cropH) / 2`; adjust within the source bounds to keep the subject visible. Send frame geometry and all crop fields together.
+- For an uncropped image, derive the other dimension from its natural aspect ratio instead of choosing width and height independently.
+- If the calculated crop is outside tool limits, change the frame; never clamp the crop in a way that breaks the ratio.
+
+Example: a 1086 × 1448 asset in a 1080 × 1440 slide frame of `width: 0.298, height: 0.365` requires `cropW: 0.8164383562, cropH: 1, cropX: 0.0917808219, cropY: 0`, not a full-source crop.
+
+Verify the ratio numerically and inspect `render_slide` after placement. Check faces, bottles, circles, and logos against the original image. A successful tool call does not prove undistorted rendering.
+
 Read this before creating or editing slides. Use it as a compact quality bar, then inspect the rendered slide instead of assuming code values look good.
 
 ## Defaults that usually look good
 
-- Build for a 9:16 phone canvas and keep one clear idea per slide.
+- Choose a project aspect ratio as the default for new slides. `9:16` is the default; presets also include `2:3`, `3:4`, `4:5`, `1:1`, `4:3`, and `16:9`. Pass `aspectRatio` to `add_slide` or `update_slide` when an individual slide should differ, and use another validated positive `W:H` ratio when the reference demands it. Deliberate format changes can add rhythm and uniqueness; accidental inconsistency cannot. Keep one clear idea per slide.
+- When `add_slide` uses `backgroundPath` without an explicit `aspectRatio`, the slide adopts the image's exact reduced ratio. Use this for source-faithful image slides: the image scales to the fixed 1080-pixel canvas width, workspace space above or below stays outside the slide, and export contains only the visible slide canvas. Pass `aspectRatio` only when deliberate crop-to-format behavior is wanted.
+- For a flat background, call `add_slide` with `backgroundColor` (or `update_slide` with `backgroundColor`). Do not create, upload, or import a bitmap merely to get a solid color.
 - Prefer `boxed` text with `backgroundShape: "lines"` for highlighted copy. Treat per-line boxes as the default; use `full` only for a deliberate card or label.
 - `add_text` and `update_text` automatically preserve width and fit height around all wrapped lines with safety padding. Do not render just to discover clipping or call `fit_text_boxes` after ordinary copy edits.
 - Use `fit_text_boxes` with `mode: "both"` only when you intentionally want width to shrink as well. If automatic fitting rejects copy that cannot fit on one slide, shorten it or split it across slides.
@@ -20,6 +42,9 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Align related text layers consistently. Center is a safe default; use left alignment for editorial layouts.
 - Use rotation sparingly. Small intentional angles can add energy; arbitrary angles make carousels feel inconsistent.
 - Reuse a small palette and consistent type scale across the project.
+- For an installed Mac font, select an exact face with `list_local_fonts`, import its opaque ID with `import_font`, and apply only the returned project `fontId`. Reuse project faces through `list_project_fonts`; never guess family strings.
+- Use numeric `fontWeight`, including 550 or 725, for variable weight. Built-in TikTok Sans supports 100–900; imported variable faces use their wght range. Static fonts select an exact matching imported family face or report FONT_FACE_MISMATCH; they cannot interpolate arbitrary weights. `inspect_editor` reports effectiveFontWeight and supportedWeights for each text layer. Check every title and body layer separately. Do not newly apply `wdth`, `opsz`, `slnt`, or custom axes until exported-canvas parity is available.
+- Keep ordinary typography as editable text layers, including typography that uses an imported font. Never generate or import a text-only PNG/SVG and place it with `add_image` just to imitate a font. If the requested face cannot be imported, keep the copy editable in an available face and report the substitution instead of baking the words into pixels.
 
 ## Working method
 
@@ -46,4 +71,18 @@ Read this before creating or editing slides. Use it as a compact quality bar, th
 - Keep tool responses and progress messages concise.
 - Prefer IDs returned by tools over guessed names or array positions.
 - Do not claim a slide looks good until you have inspected a rendered image.
+- Use `add_text` or `update_text` for all ordinary words. Reserve image assets for photographs, illustrations, logos, screenshots, and deliberate artwork that cannot be represented by editable CarouselBot layers.
 - Do not call `open_project` merely to edit or render another project. It intentionally changes the user's browser view; use it only when the user asks to see that project.
+
+
+## Video workflow
+
+Videos are supported end to end by the companion; do not fall back to browser clicks or say only images are supported. Use `inspect_editor` with `includeAllProjects: false` and the assigned project/slide IDs. `capabilities` reports video support; slides expose `mode`, `duration`, and `loop`, and assets and placed `images` expose `type: "video"`. The `images` field and image tool names remain compatible and include placed videos.
+
+1. `import_asset({ path: "/absolute/path/demo.mp4", projectId, editSessionId })` imports MP4/MOV/WebM (browser-decodable codecs, H.264 MP4 recommended), up to 100 MB. Keep the returned `assetId`.
+2. `add_image({ assetId, projectId, slideId, x: 0.52, y: 0.15, width: 0.42, editSessionId })` places the video. `update_image` controls the same move, resize, crop, rotation, and stacking fields as images. Keep all accompanying copy in editable text layers. `add_slide`/`update_slide` also accept a video `backgroundPath`.
+3. Video mode is automatic. The longest placed/background clip defines duration; shorter clips loop. `render_slide({ projectId, slideId, time: 3, editSessionId })` returns real composited pixels at three seconds without moving the user's playback or navigating. Inspect multiple times for motion and layout.
+4. For a video slide already visible, `set_video_playback({ projectId, slideId, playing: false, time: 3, editSessionId })` pauses/seeks; `playing: true` resumes. Omit both to read playback. This never navigates; only use `open_project` when asked to show a project.
+5. `export_slide({ projectId, slideId, outputPath: "/absolute/path/slide.mp4", editSessionId })` automatically produces MP4 with source audio for video slides. Image slides remain PNG. `format: "png", time: 3` explicitly exports a still frame to a `.png` path. `export_project` chooses MP4/PNG for each slide in mixed projects. Existing files are protected unless `overwrite: true` is authorized.
+
+MP4 export uses the browser's encoder and runs in real time. Agent exports support up to 120 seconds per slide and need a browser with native MP4 recording (current Chrome recommended). Allow enough tool time for encoding; the CLI fallback supports long export calls. Media stays on this computer. For an older editor without video capabilities, reload its existing real-browser tab and retry after automatic reconnection. For an older installed companion use `npx -y carouselbot@latest call ...`; newly added tool names are available immediately through this fallback without restarting an agent session.

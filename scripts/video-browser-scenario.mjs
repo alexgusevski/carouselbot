@@ -19,6 +19,32 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
       label: document.querySelector('[data-action="export"]').textContent };
   })()`);
   if (sample.duration < 9.8 || sample.duration > 10.5 || sample.texts !== 5 || !sample.videos || !sample.label.includes('MP4')) throw new Error(`Invalid video sample: ${JSON.stringify(sample)}`);
+  // A new media element in a hidden Chrome tab stalls before loadedmetadata.
+  // Agent imports and frame renders must work without focusing the editor.
+  const foreground = await cdp.send("Target.createTarget", { url: "about:blank" });
+  try {
+    await cdp.send("Target.activateTarget", { targetId: foreground.targetId });
+    const background = await evaluate(cdp, `(async () => {
+      if (document.visibilityState !== 'hidden') throw new Error('Regression requires a hidden editor');
+      const { readVideoAsset } = await import('/src/video-media.mjs');
+      const { renderVideoFrame } = await import('/src/video-frame.mjs');
+      const asset = await readVideoAsset(window.__sampleVideoAsset.videoData);
+      const first = await renderVideoFrame(window.__sampleVideoSlide, window.__sampleVideoProject, 270, 480, 0);
+      const later = await renderVideoFrame(window.__sampleVideoSlide, window.__sampleVideoProject, 270, 480, 7);
+      const changed = first.toDataURL() !== later.toDataURL();
+      first.width = later.width = 0;
+      let rejected = false;
+      try { await readVideoAsset('data:video/mp4;base64,aW52YWxpZA=='); } catch { rejected = true; }
+      return { duration: asset.duration, width: asset.width, height: asset.height, changed, rejected, hidden: document.hidden };
+    })()`);
+    if (!background.hidden || !background.changed || !background.rejected || background.duration < 9.8 || background.width !== 460 || background.height !== 920) {
+      throw new Error(`Background video import/render failed: ${JSON.stringify(background)}`);
+    }
+    process.stdout.write(`Background video import and frame rendering passed: ${JSON.stringify(background)}\n`);
+  } finally {
+    await cdp.send("Page.bringToFront");
+    await cdp.send("Target.closeTarget", { targetId: foreground.targetId });
+  }
   await evaluate(cdp, `document.querySelector('[data-video-play]').click()`);
   await evaluate(cdp, `(() => {
     const range = document.querySelector('[data-video-time]'); range.value = 6;
@@ -28,23 +54,75 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
   await evaluate(cdp, `document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }))`);
   await waitFor(() => evaluate(cdp, `Number(document.querySelector('[data-video-time]').value) > 6.2`), "Space did not resume playback");
   await evaluate(cdp, `document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }))`);
-  const bytes = await evaluate(cdp, `(async () => {
-    const { renderSlideMp4 } = await import('/src/video-export.mjs');
-    const blob = await renderSlideMp4(window.__sampleVideoSlide, window.__sampleVideoProject);
-    window.__sampleExport = blob;
-    return new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(blob); });
+  // Space must win over the last-clicked asset and native button activation.
+  const pressSpace = async () => {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+  };
+  await evaluate(cdp, `document.querySelector('.asset-item').focus()`);
+  await pressSpace();
+  const assetSpace = await evaluate(cdp, `({ playing: document.querySelector('[data-video-play]').getAttribute('aria-pressed'), modal: Boolean(document.querySelector('.asset-preview-modal')), badge: Boolean(document.querySelector('.asset-video-badge')), cursor: getComputedStyle(document.querySelector('[data-video-time]'), '::-webkit-slider-thumb').cursor })`);
+  if (assetSpace.playing !== 'true' || assetSpace.modal || !assetSpace.badge || assetSpace.cursor !== 'pointer') throw new Error(`Asset Space or video styling regression: ${JSON.stringify(assetSpace)}`);
+  await evaluate(cdp, `document.querySelector('[data-action="export"]').focus()`);
+  await pressSpace();
+  if (!await evaluate(cdp, `document.querySelector('[data-video-play]').getAttribute('aria-pressed') === 'false' && !document.querySelector('[data-action="export"]').disabled`)) throw new Error('Space activated the focused download button');
+  const typing = await evaluate(cdp, `(() => {
+    const input = document.querySelector('.project-title-input');
+    const key = new KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true, cancelable: true });
+    input.dispatchEvent(key);
+    return !key.defaultPrevented && document.querySelector('[data-video-play]').getAttribute('aria-pressed') === 'false';
+  })()`);
+  if (!typing) throw new Error('Space was intercepted in a text field');
+  await evaluate(cdp, `document.querySelector('.asset-item').click()`, { userGesture: true });
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.asset-preview-modal video')?.currentTime > 0.1)`), 'Clicking the video asset did not play its preview');
+  await pressSpace();
+  if (!await evaluate(cdp, `document.querySelector('.asset-preview-modal video').paused && document.querySelector('[data-video-play]').getAttribute('aria-pressed') === 'false'`)) throw new Error('Space in the video preview changed the slide playback');
+  await evaluate(cdp, `(() => {
+    window.__closedPreviewVideo = document.querySelector('.asset-preview-modal video');
+    document.querySelector('.asset-preview-close').click();
+  })()`);
+  await waitFor(() => evaluate(cdp, `!document.querySelector('.asset-preview-modal') && !window.__closedPreviewVideo.hasAttribute('src')`), 'Video preview did not release its decoder on close');
+  await evaluate(cdp, `(() => {
+    window.__videoOriginalAnchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      window.__sampleExportName = this.download;
+      void fetch(this.href).then(response => response.blob()).then(blob => { window.__sampleExport = blob; });
+    };
+    document.querySelector('[data-action="export"]').click();
   })()`, { userGesture: true });
+  await waitFor(() => evaluate(cdp, `Boolean(window.__sampleExport)`), "Native MP4 download did not finish", 25000);
+  const bytes = await evaluate(cdp, `(async () => {
+    HTMLAnchorElement.prototype.click = window.__videoOriginalAnchorClick;
+    if (!window.__sampleExportName.endsWith('.mp4')) throw new Error('Video download filename is not MP4');
+    return new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(window.__sampleExport); });
+  })()`);
   if (!bytes?.startsWith('data:video/mp4;base64,')) throw new Error('Export did not produce MP4');
+  const mp4Bytes = Buffer.from(bytes.split(',')[1], 'base64');
+  if (!mp4Bytes.includes(Buffer.from('avc1')) || mp4Bytes.includes(Buffer.from('avc3'))) {
+    throw new Error('MP4 export must use Apple-compatible avc1, not avc3');
+  }
+  process.stdout.write("MP4 encoded; checking metadata and seeking\n");
   const metadata = await evaluate(cdp, `(async () => {
     const { loadVideo, releaseVideo } = await import('/src/video-media.mjs');
     const url = URL.createObjectURL(window.__sampleExport);
     const video = await loadVideo(url);
     const result = { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
-    video.currentTime = 5;
-    await new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
+    // Decode from beginning to end, not only metadata/the first frame.
+    await new Promise((resolve, reject) => {
+      video.loop = false;
+      video.addEventListener('ended', resolve, { once: true });
+      video.addEventListener('error', () => reject(new Error('Export failed during playback')), { once: true });
+      video.play().catch(reject);
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Exported MP4 seek timed out')), 10000);
+      video.addEventListener('seeked', () => { clearTimeout(timer); resolve(); }, { once: true });
+      video.currentTime = 5;
+    });
     releaseVideo(video); URL.revokeObjectURL(url);
     return result;
   })()`);
+  process.stdout.write("MP4 metadata and seek passed\n");
   if (metadata.width !== 1080 || metadata.height !== 1920 || metadata.duration < 9.8 || metadata.duration > 11) throw new Error(`MP4 metadata invalid: ${JSON.stringify(metadata)}`);
   if (outputDirectory) {
     await mkdir(outputDirectory, { recursive: true });
@@ -77,5 +155,16 @@ export async function verifyVideoSlides({ cdp, evaluate, waitFor, outputDirector
       get.onsuccess = () => { resolve(get.result?.slides.length === 2 && get.result.assets.some(a => a.videoData)); db.close(); };
     };
   })`), "Video data did not persist locally");
+  await evaluate(cdp, `(async () => {
+    const { activeSlide, selectOnlyLayer } = await import('/src/editor-state.mjs');
+    const { renderEditor } = await import('/src/editor.mjs');
+    for (const overlay of [...activeSlide().overlays]) {
+      selectOnlyLayer('overlay', overlay.id); renderEditor();
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+    }
+    if (document.querySelector('[data-video-time]') || !document.querySelector('[data-action="export"]').textContent.includes('PNG')) {
+      throw new Error('Deleting the last video did not restore PNG mode');
+    }
+  })()`);
   process.stdout.write(`Video import, playback, scrub, sample, MP4 decode, and persistence passed: ${JSON.stringify(metadata)}\n`);
 }

@@ -1,9 +1,15 @@
+import { verifySelectedLayerPriority } from "./selection-browser-scenario.mjs";
+import { verifyEditorMemory } from "./performance-browser-scenario.mjs";
+import { verifyInlineTextRows } from "./inline-text-browser-scenario.mjs";
+import { verifyHostedAgentPreview } from "./hosted-agent-browser-scenario.mjs";
+import { verifyCloudProjectCreation, verifyProductChat } from "./product-browser-scenario.mjs";
 import { verifyVideoSlides } from "./video-browser-scenario.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
+import { DEFAULT_OUTLINE_WIDTH, OUTLINE_RATIO } from "../src/editor-model.mjs";
 
 const root = new URL("..", import.meta.url);
 const rootPath = decodeURIComponent(root.pathname);
@@ -27,10 +33,41 @@ const contentTypes = new Map([
 
 let web;
 let pageUrl = remoteUrl;
+let pauseShareResponse = false;
+let resumeShareResponse;
 if (!pageUrl) {
+  const shares = new Map();
+  let shareCounter = 0;
   web = createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    const relativePath = url.pathname === "/" || /^\/projects\/[^/]+\/?$/.test(url.pathname)
+    if (url.pathname === "/api/shares/config") {
+      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ siteKey: "test-site-key" }));
+      return;
+    }
+    if (url.pathname === "/api/shares" && request.method === "POST") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const id = `${Date.now().toString(36)}-${(++shareCounter).toString(16).padStart(32, "0")}.${"a".repeat(64)}`;
+      const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+      shares.set(id, { payload: Buffer.concat(chunks), format: request.headers["x-carouselbot-share-format"], expiresAt });
+      response.writeHead(201, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ id, expiresAt }));
+      return;
+    }
+    const shareId = url.pathname.match(/^\/api\/shares\/([^/]+)$/)?.[1];
+    if (shareId && request.method === "GET") {
+      const share = shares.get(shareId);
+      if (!share || share.expiresAt <= Date.now()) {
+        response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "This share link has expired." }));
+        return;
+      }
+      if (pauseShareResponse) await new Promise((resolve) => { resumeShareResponse = resolve; });
+      response.writeHead(200, { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": share.format,
+        "Content-Length": share.payload.byteLength, "Cache-Control": "no-store" });
+      response.end(share.payload);
+      return;
+    }
+    const relativePath = ["/", "/dashboard"].includes(url.pathname) || /^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname)
       ? "index.html"
       : url.pathname.slice(1);
     if (!/^(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+$/.test(relativePath)) {
@@ -153,6 +190,19 @@ async function evaluate(cdp, expression, { userGesture = false } = {}) {
   return result.result?.value;
 }
 
+async function callPageFunction(cdp, functionDeclaration, args = []) {
+  const globalObject = await cdp.send("Runtime.evaluate", { expression: "globalThis" });
+  const result = await cdp.send("Runtime.callFunctionOn", {
+    objectId: globalObject.result.objectId,
+    functionDeclaration,
+    arguments: args.map((value) => ({ value })),
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || "Browser function call failed");
+  return result.result?.value;
+}
+
 let cdp;
 const runtimeErrors = [];
 try {
@@ -169,28 +219,146 @@ try {
   await cdp.send("Runtime.enable");
   await cdp.send("Log.enable");
   await cdp.send("Page.enable");
+  // Simulate a pre-update tab retaining the v1 database connection.
+  const legacySetup = await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+    const legacyRequest = indexedDB.open('carouselbot-db', 1);
+    // Queue another upgrade first, as happens when the user already has a blank tab.
+    const queuedUpgrade = indexedDB.open('carouselbot-db', 2);
+    queuedUpgrade.onupgradeneeded = () => queuedUpgrade.result.createObjectStore('folders', { keyPath: 'path' });
+    queuedUpgrade.onsuccess = () => queuedUpgrade.result.close();
+    legacyRequest.onupgradeneeded = () => legacyRequest.result.createObjectStore('projects', { keyPath: 'id' });
+    legacyRequest.onsuccess = () => {
+      window.__legacyDatabase = legacyRequest.result;
+      const transaction = legacyRequest.result.transaction('projects', 'readwrite');
+      transaction.objectStore('projects').put({ id: 'upgrade-preserved', name: 'Upgrade preserved project', slides: [], assets: [], revision: 1 });
+    };
+  ` });
   await cdp.send("Page.navigate", { url: pageUrl });
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('[data-storage-blocked]'))`),
+    'An older tab blocking the database upgrade left the app blank.');
+  await evaluate(cdp, `window.__legacyDatabase.close()`);
+  await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: legacySetup.identifier });
+
 
   await waitFor(
     () => evaluate(cdp, "document.readyState === 'complete' && Boolean(window.carouselBotAgent) && Boolean(window.carouselBotReady)"),
     "The modular editor did not finish loading.",
   );
   await evaluate(cdp, "window.carouselBotReady");
+  const landing = await evaluate(cdp, `({ visible: Boolean(document.querySelector('.product-landing')), headline: document.querySelector('.landing-intro h1')?.textContent, destination: document.querySelector('.landing-actions a')?.getAttribute('href'), plan: document.querySelector('.landing-plan')?.textContent, readyAlias: window.carouselBotReady === window.slideStudioReady })`);
+  if (!landing.visible || landing.headline !== 'Make a carousel.Just describe it.' || landing.destination !== '/dashboard' || !landing.plan?.includes('$19 / month') || !landing.plan?.includes('500 AI credits') || !landing.readyAlias) throw new Error(`Landing page regression: ${JSON.stringify(landing)}`);
+  await cdp.send('Page.navigate', { url: `${pageUrl}/dashboard` });
+  await waitFor(() => evaluate(cdp, `Boolean(window.carouselBotAgent) && Boolean(document.querySelector('.dashboard'))`), 'Dashboard deep route did not load');
+  await evaluate(cdp, 'window.carouselBotReady');
+  await verifyCloudProjectCreation({ cdp, evaluate, waitFor });
+
+  const preserved = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.some((project) => project.id === 'upgrade-preserved' && project.name === 'Upgrade preserved project')`);
+  if (!preserved) throw new Error('Database upgrade lost the existing project');
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: 'upgrade-preserved' })`);
+  if (await evaluate(cdp, `Boolean(document.querySelector('[data-storage-blocked]'))`)) throw new Error('Startup did not recover after closing the older connection');
+
+
+  const connectedPill = await evaluate(cdp, `(() => {
+    const button = document.querySelector('.home-agent-connect .agent-connect-button');
+    const previousStatus = button.getAttribute('data-mcp-status');
+    const idle = getComputedStyle(button);
+    const idleBackground = idle.backgroundColor;
+    button.dataset.mcpStatus = 'connected';
+    // Disable transitions so the final connected-state colors can be checked immediately.
+    button.style.transition = 'none';
+    const style = getComputedStyle(button);
+    const result = {
+      border: style.borderTopColor,
+      width: parseFloat(style.borderTopWidth),
+      backgroundChanged: style.backgroundColor !== idleBackground,
+      cloudsHidden: getComputedStyle(button.querySelector('.agent-color-clouds')).display === 'none',
+      calloutHidden: getComputedStyle(document.querySelector('.agent-callout')).display === 'none',
+    };
+    if (previousStatus === null) button.removeAttribute('data-mcp-status');
+    else button.setAttribute('data-mcp-status', previousStatus);
+    button.style.removeProperty('transition');
+    return result;
+  })()`);
+  if (connectedPill.border === 'rgba(0, 0, 0, 0)' || connectedPill.border === 'transparent' || connectedPill.width < 1 || !connectedPill.backgroundChanged || !connectedPill.cloudsHidden || !connectedPill.calloutHidden) {
+    throw new Error(`Connected home button lost its visible pill styling: ${JSON.stringify(connectedPill)}`);
+  }
 
   const initial = await evaluate(cdp, `({
     title: document.title,
     dashboard: Boolean(document.querySelector('.dashboard')),
+    agentInvitation: document.querySelector(".agent-callout")?.textContent.trim() === "Connect your agent" && document.querySelectorAll(".agent-color-clouds i").length === 3,
     protocolVersion: window.carouselBotAgent.protocolVersion,
     sameAgentAlias: window.carouselBotAgent === window.slideStudioAgent,
     sameReadyAlias: window.carouselBotReady === window.slideStudioReady,
     sourceModules: performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/')).map((entry) => new URL(entry.name).pathname),
   })`);
-  if (initial.title !== "CarouselBot" || !initial.dashboard || initial.protocolVersion !== 3 || !initial.sameAgentAlias || !initial.sameReadyAlias) {
+  if (initial.title !== "CarouselBot" || !initial.dashboard || !initial.agentInvitation || initial.protocolVersion !== 3 || !initial.sameAgentAlias || !initial.sameReadyAlias) {
     throw new Error(`Unexpected initial editor state: ${JSON.stringify(initial)}`);
   }
   if (!initial.sourceModules.includes("/src/main.mjs") || !initial.sourceModules.includes("/src/editor.mjs")) {
     throw new Error(`The browser did not load the expected module graph: ${JSON.stringify(initial.sourceModules)}`);
   }
+
+  await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const { drawTextLayer } = await import('/src/slide-renderer.mjs');
+    const project = await agent.execute({ type: 'project.create', name: 'Text fitting regression', aspectRatio: '4:5' });
+    const slide = await agent.execute({ type: 'slide.add', projectId: project.projectId, aspectRatio: '4:5' });
+    const target = { projectId: project.projectId, slideId: slide.createdSlideId };
+    await agent.execute({ type: 'project.open', ...target });
+    const added = await agent.execute({ type: 'text.add', ...target,
+      text: 'Use Claude to turn your notes into one user, one problem and one useful outcome.',
+      size: 58, fontWeight: 600, width: .79, x: .1, y: .51, style: 'boxed', background: 'white' });
+    const verify = async (id, lineCount) => {
+      let expected;
+      for (const canvasZoom of [.2, .55, 1, 2]) {
+        await agent.execute({ type: 'view.update', ...target, canvasZoom });
+        const box = document.querySelector('[data-text-id="' + id + '"]');
+        const content = box.querySelector('.text-visual--inside .text-content');
+        const lines = [...content.querySelectorAll('.text-line')];
+        const bounds = box.getBoundingClientRect();
+        for (const node of [...lines, ...content.querySelectorAll('.text-background')]) {
+          const rect = node.getBoundingClientRect();
+          if (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1 || rect.left < bounds.left - 1 || rect.right > bounds.right + 1) {
+            throw new Error('Auto-fitted text exceeds its box at zoom ' + canvasZoom + ': ' + node.textContent + JSON.stringify({rect:rect.toJSON(),bounds:bounds.toJSON()}));
+          }
+        }
+        const actual = lines.map(node => node.textContent);
+        expected ||= actual;
+        if (actual.length !== lineCount || JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Preview wrapping differs from fitting: ' + JSON.stringify({canvasZoom, actual, expected, lineCount, html:box.outerHTML, stage:document.querySelector(".stage").getBoundingClientRect().toJSON()}));
+      }
+      const layer = agent.inspect().slide.texts.find(text => text.id === id);
+      for (const width of [180, 540, 1080]) {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        const drawn = [];
+        context.fillText = value => drawn.push(value);
+        drawTextLayer(context, layer, width, width * 1350 / 1080, { fonts: [] });
+        if (JSON.stringify(drawn) !== JSON.stringify(expected)) throw new Error('Export drops or rewraps text at width ' + width);
+      }
+    };
+    await verify(added.createdTextId, added.fittedTextBox.lineCount);
+    const updated = await agent.execute({ type: 'text.update', ...target, updates: [{ id: added.createdTextId,
+      text: 'Use Claude to turn your notes into one user, one problem and one useful outcome. Then test it.', width: .6, fontWeight: 800 }] });
+    await verify(added.createdTextId, updated.fittedTextBoxes[0].lineCount);
+    const fitted = await agent.execute({ type: 'text.fit', ...target, textIds: [added.createdTextId], mode: 'both' });
+    await verify(added.createdTextId, fitted.fittedTextBoxes[0].lineCount);
+    const longText = await agent.execute({ type: 'text.add', ...target, text: 'All of this text must remain visible. '.repeat(30), size: 180, width: .79, style: 'boxed' });
+    if (longText.fittedTextBox.size >= 180) throw new Error('Oversized text was not reduced');
+    await verify(longText.createdTextId, longText.fittedTextBox.lineCount);
+    const before = JSON.stringify(agent.inspect().slide.texts);
+    let rejected = false;
+    try {
+      await agent.execute({ type: 'text.update', ...target, updates: [
+        { id: added.createdTextId, text: 'Must not be partially applied' },
+        { id: longText.createdTextId, text: 'x\\n'.repeat(1000), width: .1 },
+      ] });
+    } catch { rejected = true; }
+    if (!rejected || JSON.stringify(agent.inspect().slide.texts) !== before) throw new Error('Unfittable batch partially mutated the slide');
+    await agent.execute({ type: 'view.update', ...target, canvasZoom: 1 });
+    await agent.execute({ type: 'project.delete', projectId: project.projectId });
+    return true;
+  })()`);
 
   await evaluate(cdp, `(() => {
     document.querySelector('[data-action="new-project"]').click();
@@ -200,6 +368,33 @@ try {
     () => evaluate(cdp, `location.pathname.startsWith('/projects/') && window.carouselBotAgent.inspect({ includeAllProjects: false }).project?.id`),
     "Creating a project through the dashboard did not open it.",
   );
+
+  const formatSelection = await evaluate(cdp, `(() => {
+    const selector = document.querySelector('#project-aspect-ratio');
+    const options = [...(selector?.options || [])].map((option) => option.value);
+    if (selector) {
+      selector.value = '3:4';
+      selector.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
+    const currentSelector = document.querySelector('#project-aspect-ratio');
+    return {
+      options,
+      selected: currentSelector?.value,
+      aspectRatio: inspected.project?.aspectRatio,
+      canvasWidth: inspected.project?.canvasWidth,
+      canvasHeight: inspected.project?.canvasHeight,
+    };
+  })()`);
+  if (
+    !["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "16:9"].every((ratio) => formatSelection.options.includes(ratio))
+    || formatSelection.selected !== "3:4"
+    || formatSelection.aspectRatio !== "3:4"
+    || formatSelection.canvasWidth !== 1080
+    || formatSelection.canvasHeight !== 1440
+  ) {
+    throw new Error(`The empty-project format selector did not apply a 3:4 canvas: ${JSON.stringify(formatSelection)}`);
+  }
 
   await evaluate(cdp, `(() => {
     const title = document.querySelector('.project-title-input');
@@ -214,7 +409,7 @@ try {
       request.onsuccess = () => {
         const item = request.result.transaction('projects', 'readonly').objectStore('projects').get(${JSON.stringify(projectId)});
         item.onerror = () => resolve(false);
-        item.onsuccess = () => resolve(item.result?.name === 'Browser regression project' && item.result?.revision >= 1);
+        item.onsuccess = () => resolve(item.result?.name === 'Browser regression project' && item.result?.aspectRatio === '3:4' && item.result?.revision >= 1);
       };
     })`),
     "The renamed project was not persisted to IndexedDB.",
@@ -273,6 +468,117 @@ try {
     backgroundColor: '#E7E2D8'
   })`);
   if (!slide?.createdSlideId) throw new Error(`The compatibility agent could not add a slide: ${JSON.stringify(slide)}`);
+
+  const formatUi = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const stage = document.querySelector('.stage');
+      const screen = document.querySelector('.tiktok-screen-preview');
+      const thumbnail = document.querySelector('.thumb-image');
+      const stageRect = stage?.getBoundingClientRect();
+      const screenRect = screen?.getBoundingClientRect();
+      const thumbnailRect = thumbnail?.getBoundingClientRect();
+      const thumbnailRendered = thumbnail?.querySelector('img');
+      if (!stageRect?.width || !screenRect?.width || !thumbnailRect?.width || !thumbnailRendered) return null;
+      return {
+        stageRatio: stageRect.width / stageRect.height,
+        screenRatio: screenRect.width / screenRect.height,
+        blackBarTop: stageRect.top - screenRect.top,
+        blackBarBottom: screenRect.bottom - stageRect.bottom,
+        screenBackground: getComputedStyle(screen).backgroundColor,
+        screenLabel: document.querySelector('.tiktok-screen-note')?.textContent?.trim(),
+        thumbnailRatio: thumbnailRect.width / thumbnailRect.height,
+        thumbnailBackground: getComputedStyle(thumbnail).backgroundColor,
+        thumbnailFit: getComputedStyle(thumbnailRendered).objectFit,
+        dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
+        overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
+        overlayPresent: Boolean(document.querySelector('.tiktok-overlay')),
+      };
+    })()`),
+    "The 3:4 project canvas did not render in the native editor.",
+  );
+  if (
+    Math.abs(formatUi.stageRatio - (3 / 4)) > 0.01
+    || Math.abs(formatUi.screenRatio - (9 / 16)) > 0.01
+    || formatUi.blackBarTop < 8
+    || Math.abs(formatUi.blackBarTop - formatUi.blackBarBottom) > 1
+    || formatUi.screenBackground !== "rgb(5, 5, 5)"
+    || formatUi.screenLabel !== "9:16 preview · black not exported"
+    || Math.abs(formatUi.thumbnailRatio - (9 / 16)) > 0.01
+    || formatUi.thumbnailBackground !== "rgb(5, 5, 5)"
+    || formatUi.thumbnailFit !== "contain"
+    || formatUi.dimensions !== "1080 × 1440 · 3:4"
+    || !formatUi.overlayDisabled
+    || formatUi.overlayPresent
+  ) {
+    throw new Error(`The native editor did not preserve the chosen 3:4 format: ${JSON.stringify(formatUi)}`);
+  }
+
+  const backgroundReconciliation = await evaluate(cdp, `(async () => {
+    const { renderSlideCanvas } = await import('/src/slide-renderer.mjs');
+    const { solidBackgroundDataUrl } = await import('/src/slide-background.mjs');
+    const project = { id: 'background-render-regression', aspectRatio: '1:1', assets: [], fonts: [] };
+    const replacementSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="#0000FF"/></svg>';
+    const replacementImage = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(replacementSvg);
+    const baseSlide = {
+      width: 12,
+      height: 12,
+      imageScale: 1,
+      imageX: 0,
+      imageY: 0,
+      texts: [],
+      overlays: [],
+    };
+    const staleCanvas = await renderSlideCanvas({
+      ...baseSlide,
+      imageData: replacementImage,
+      backgroundColor: '#FF0000',
+    }, 12, 12, project);
+    const canonicalCanvas = await renderSlideCanvas({
+      ...baseSlide,
+      imageData: solidBackgroundDataUrl('#00FF00', project),
+      backgroundColor: '#00FF00',
+    }, 12, 12, project);
+    return {
+      replacementPixel: [...staleCanvas.getContext('2d').getImageData(6, 6, 1, 1).data],
+      solidPixel: [...canonicalCanvas.getContext('2d').getImageData(6, 6, 1, 1).data],
+    };
+  })()`);
+  if (
+    backgroundReconciliation.replacementPixel.join(",") !== "0,0,255,255"
+    || backgroundReconciliation.solidPixel.join(",") !== "0,255,0,255"
+  ) {
+    throw new Error(`A stale solid color overrode its replacement image: ${JSON.stringify(backgroundReconciliation)}`);
+  }
+
+  const copyAllTexts = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const project = await agent.execute({ type: 'project.create', name: 'Copy text regression' });
+    const first = await agent.execute({ type: 'slide.add', projectId: project.projectId });
+    await agent.execute({ type: 'text.add', projectId: project.projectId, slideId: first.createdSlideId, text: 'First\\nline' });
+    await agent.execute({ type: 'text.add', projectId: project.projectId, slideId: first.createdSlideId, text: 'Second' });
+    const second = await agent.execute({ type: 'slide.add', projectId: project.projectId });
+    await agent.execute({ type: 'text.add', projectId: project.projectId, slideId: second.createdSlideId, text: 'Third' });
+    await agent.execute({ type: 'project.open', projectId: project.projectId });
+    const before = agent.inspect({ includeAllProjects: false }).project.revision;
+    const result = await agent.execute({ type: 'project.copyAllTexts', projectId: project.projectId });
+    const original = navigator.clipboard.writeText;
+    let copied = null;
+    navigator.clipboard.writeText = async (value) => { copied = value; };
+    try {
+      const button = document.querySelector('[data-action="copy-all-texts"]');
+      if (button?.textContent.trim() !== 'Copy all texts' || !button.querySelector('svg')) throw new Error('Copy toolbar button missing');
+      button.click();
+      await Promise.resolve();
+      return { text: result.text, copied, unchanged: before === agent.inspect({ includeAllProjects: false }).project.revision };
+    } finally {
+      navigator.clipboard.writeText = original;
+      await agent.execute({ type: 'project.delete', projectId: project.projectId });
+      await agent.execute({ type: 'project.open', projectId: ${JSON.stringify(projectId)} });
+    }
+  })()`);
+  if (copyAllTexts.text !== "First line\nSecond\n\nThird" || copyAllTexts.copied !== copyAllTexts.text || !copyAllTexts.unchanged) {
+    throw new Error(`Copy all texts regression: ${JSON.stringify(copyAllTexts)}`);
+  }
 
   const agentMatrix = await evaluate(cdp, `(async () => {
     const agent = window.carouselBotAgent;
@@ -443,6 +749,167 @@ try {
     "Redo did not restore the edited text layer.",
   );
 
+  const outlineWidthRegression = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const before = agent.inspect({ includeAllProjects: false });
+    const text = before.slide?.texts?.[0];
+    if (!text) throw new Error('The editable text layer was unavailable for the outline-width regression.');
+    const original = { style: text.style, size: text.size, outlineWidth: text.outlineWidth };
+    const readDomOutline = () => {
+      const box = [...document.querySelectorAll('.text-box')].find((item) => item.dataset.textId === text.id);
+      return {
+        stageWidth: document.querySelector('.stage')?.getBoundingClientRect().width || 0,
+        outlines: [...(box?.querySelectorAll('.outline-line text') || [])]
+          .map((node) => ({
+            stroke: node.getAttribute('stroke'),
+            strokeWidth: Number(node.getAttribute('stroke-width')),
+            fontSize: Number.parseFloat(node.getAttribute('font-size')),
+          })),
+      };
+    };
+    let result;
+    try {
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'plain' }],
+      });
+      const plainRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'outline', outlineWidth: 0 }],
+      });
+      const zeroText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const zeroDom = readDomOutline();
+      const zeroRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'outline', size: 40, outlineWidth: ${DEFAULT_OUTLINE_WIDTH} }],
+      });
+      const smallText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const smallDom = readDomOutline();
+      const smallRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, style: 'outline', size: 80, outlineWidth: ${DEFAULT_OUTLINE_WIDTH} }],
+      });
+      const largeText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const largeDom = readDomOutline();
+      const largeRender = await agent.execute({
+        type: 'slide.render',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        width: 270,
+      });
+
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, outlineWidth: 24 }],
+      });
+      const customText = agent.inspect({ includeAllProjects: false }).slide.texts.find((item) => item.id === text.id);
+      const customDom = readDomOutline();
+      result = {
+        zeroModelWidth: zeroText?.outlineWidth,
+        smallModel: { size: smallText?.size, outlineWidth: smallText?.outlineWidth },
+        largeModel: { size: largeText?.size, outlineWidth: largeText?.outlineWidth },
+        customModel: { size: customText?.size, outlineWidth: customText?.outlineWidth },
+        zeroDom,
+        smallDom,
+        largeDom,
+        customDom,
+        render: {
+          plain: { mimeType: plainRender?.mimeType, width: plainRender?.width, height: plainRender?.height, dataLength: plainRender?.data?.length || 0 },
+          zero: { mimeType: zeroRender?.mimeType, width: zeroRender?.width, height: zeroRender?.height, dataLength: zeroRender?.data?.length || 0 },
+          small: { mimeType: smallRender?.mimeType, width: smallRender?.width, height: smallRender?.height, dataLength: smallRender?.data?.length || 0 },
+          large: { mimeType: largeRender?.mimeType, width: largeRender?.width, height: largeRender?.height, dataLength: largeRender?.data?.length || 0 },
+          zeroMatchesPlain: zeroRender?.data === plainRender?.data,
+          smallChanged: zeroRender?.data !== smallRender?.data,
+          sizeChanged: smallRender?.data !== largeRender?.data,
+        },
+      };
+    } finally {
+      await agent.execute({
+        type: 'text.update',
+        projectId: before.project.id,
+        slideId: before.slide.id,
+        updates: [{ id: text.id, ...original }],
+      });
+    }
+    return result;
+  })()`);
+  const hasExpectedOutlineRatio = (entry, size, outlineWidth = DEFAULT_OUTLINE_WIDTH) => (
+    entry.stageWidth > 0
+    && entry.outlines.length >= 1
+    && entry.outlines.every(({ stroke, strokeWidth, fontSize }) => (
+      stroke === '#000000'
+      && Math.abs(fontSize - size * entry.stageWidth / 1080) <= 0.01
+      && Math.abs(strokeWidth / fontSize - OUTLINE_RATIO * outlineWidth / DEFAULT_OUTLINE_WIDTH) <= 0.0001
+    ))
+  );
+  if (
+    outlineWidthRegression.zeroModelWidth !== 0
+    || outlineWidthRegression.smallModel.size !== 40
+    || outlineWidthRegression.smallModel.outlineWidth !== DEFAULT_OUTLINE_WIDTH
+    || outlineWidthRegression.largeModel.size !== 80
+    || outlineWidthRegression.largeModel.outlineWidth !== DEFAULT_OUTLINE_WIDTH
+    || outlineWidthRegression.customModel.size !== 80
+    || outlineWidthRegression.customModel.outlineWidth !== 24
+    || outlineWidthRegression.zeroDom.outlines.length < 1
+    || outlineWidthRegression.zeroDom.outlines.some(({ strokeWidth }) => strokeWidth !== 0)
+    || !hasExpectedOutlineRatio(outlineWidthRegression.smallDom, 40)
+    || !hasExpectedOutlineRatio(outlineWidthRegression.largeDom, 80)
+    || !hasExpectedOutlineRatio(outlineWidthRegression.customDom, 80, 24)
+    || outlineWidthRegression.render.plain.mimeType !== "image/png"
+    || outlineWidthRegression.render.zero.mimeType !== "image/png"
+    || outlineWidthRegression.render.small.mimeType !== "image/png"
+    || outlineWidthRegression.render.large.mimeType !== "image/png"
+    || outlineWidthRegression.render.plain.width !== 270
+    || outlineWidthRegression.render.zero.width !== 270
+    || outlineWidthRegression.render.small.width !== 270
+    || outlineWidthRegression.render.large.width !== 270
+    || outlineWidthRegression.render.plain.height !== outlineWidthRegression.render.zero.height
+    || outlineWidthRegression.render.zero.height !== outlineWidthRegression.render.small.height
+    || outlineWidthRegression.render.small.height !== outlineWidthRegression.render.large.height
+    || outlineWidthRegression.render.plain.dataLength < 100
+    || outlineWidthRegression.render.zero.dataLength < 100
+    || outlineWidthRegression.render.small.dataLength < 100
+    || outlineWidthRegression.render.large.dataLength < 100
+    || !outlineWidthRegression.render.zeroMatchesPlain
+    || !outlineWidthRegression.render.smallChanged
+    || !outlineWidthRegression.render.sizeChanged
+  ) {
+    throw new Error(`Outline width did not stay proportional in editable SVG text and canvas rendering: ${JSON.stringify(outlineWidthRegression)}`);
+  }
+
+  await verifyInlineTextRows(cdp, evaluate);
+
   const pointerInteraction = await evaluate(cdp, `(() => {
     const inspectText = () => structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }).slide.texts[0]);
     const before = inspectText();
@@ -499,6 +966,114 @@ try {
     "Pointer interaction changes were not persisted.",
   );
 
+  await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const original = agent.inspect({ includeAllProjects: false });
+    const scope = { projectId: original.project.id, slideId: original.slide.id };
+    const run = (operation) => agent.execute({ ...scope, ...operation });
+    const assert = (condition, message) => { if (!condition) throw new Error(message); };
+    const a = (await run({ type: 'text.add', text: 'First', size: 50, width: 0.3, height: 0.15 })).createdTextId;
+    const b = (await run({ type: 'text.add', text: 'Second', size: 60, color: '#000000', width: 0.5, height: 0.2 })).createdTextId;
+    const box = (id) => document.querySelector('[data-text-id="' + id + '"]');
+    const selectBoth = () => {
+      if (box(a).classList.contains("is-selected") && box(b).classList.contains("is-selected")) return;
+      box(a).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 301 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 301 }));
+      box(b).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 302, ctrlKey: true }));
+    };
+    const selected = () => agent.inspect({ includeAllProjects: false }).slide.texts.filter((text) => [a, b].includes(text.id));
+    const input = (selector, value) => {
+      const element = document.querySelector(selector);
+      element.focus(); element.value = value;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.blur();
+    };
+    try {
+      selectBoth();
+      assert(document.querySelector('#font-size-number').value === '', 'Mixed font sizes must be blank');
+      assert(document.querySelector('#font-size').dataset.mixed === 'true', 'Mixed size slider must have no representative thumb');
+      assert(!document.querySelector('[data-text-color].is-active'), 'Mixed colors must not activate a preset');
+      assert(!document.querySelector('#text-value'), 'Bulk formatting must preserve individual words');
+      input('#font-size-number', '56');
+      assert(selected().every((text) => text.size === 56), 'Number input must set both text sizes');
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      assert(selected().map((text) => text.size).join(',') === '50,60', 'Bulk size must undo in one step');
+      selectBoth();
+      input('#font-size-number', '56');
+      selectBoth();
+      assert(document.querySelector('#font-size-number').value === '56', 'Equal sizes must show the shared number');
+      input('#font-size', '50');
+      assert(selected()[0].size === selected()[1].size, 'Slider must apply to all texts');
+      document.querySelector('[data-text-color="#FFFFFF"]').click();
+      assert(selected().every((text) => text.color === '#FFFFFF'), 'Preset color must apply to all texts');
+      document.querySelector('[data-text-align="left"]').click();
+      assert(selected().every((text) => text.align === 'left'), 'Alignment must apply to all texts');
+      document.querySelector('[data-text-style="boxed"]').click();
+      document.querySelector('[data-background-shape="full"]').click();
+      document.querySelector('[data-background-tone="white"]').click();
+      assert(selected().every((text) => text.style === 'boxed' && text.backgroundShape === 'full' && text.background === 'white'), 'Box formatting must apply to all texts');
+      const font = document.querySelector('#text-font');
+      font.value = ''; font.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert(selected().every((text) => !text.fontId), 'Shared default font must apply to all texts');
+      for (const weight of [550, 725]) {
+        const control = document.querySelector('#font-weight-number');
+        assert(control && control.min === '100' && control.max === '900', 'Variable weight control must expose the supported range');
+        control.value = String(weight);
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        assert(selected().every((text) => text.fontWeight === weight), 'Intermediate weight must apply to all selected text layers');
+        for (const id of [a, b]) assert(box(id).style.getPropertyValue('--text-font-weight') === String(weight), 'DOM must paint the selected numeric weight');
+      }
+      const before = selected();
+      for (const id of [a, b]) assert(getComputedStyle(box(id).querySelector('[data-corner="se"]')).display !== 'none', 'Each selected layer needs resize handles');
+      box(a).querySelector('[data-corner="se"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 303, clientX: 100, clientY: 100 }));
+      window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 303, clientX: 130, clientY: 120 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 303, clientX: 130, clientY: 120 }));
+      const after = selected();
+      assert(after.every((text, i) => text.width > before[i].width && text.height > before[i].height), 'Resizing one selected text must resize both');
+      assert(Math.abs(after[0].width / before[0].width - after[1].width / before[1].width) < 0.00001, 'Selection must share proportional resizing');
+      input('#shared-rotation', '25');
+      assert(selected().every((text) => text.rotation === 25), 'Shared rotation must apply to all texts');
+      const untouched = agent.inspect({ includeAllProjects: false }).slide.texts.find((text) => text.id === original.slide.texts[0].id);
+      assert(JSON.stringify(untouched) === JSON.stringify(original.slide.texts[0]), 'Unselected text must stay unchanged');
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await run({ type: 'layer.delete', layerIds: [a, b] });
+    }
+  })()`);
+  const assetMenu = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const projectId = agent.inspect({ includeAllProjects: false }).project.id;
+    const bridge = window.carouselBotLocalMcpBridge;
+    const originalFetchMedia = bridge.fetchMedia;
+    bridge.fetchMedia = async () => ({ file: new File(['<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#123456"/></svg>'], 'context-menu.svg', { type: 'image/svg+xml' }), name: 'context-menu.svg' });
+    let asset;
+    try {
+      asset = await agent.execute({ type: 'asset.import', projectId, mediaId: 'context-menu', name: 'Context menu asset' });
+    } finally {
+      bridge.fetchMedia = originalFetchMedia;
+    }
+    const item = [...document.querySelectorAll('.asset-item')].find(item => item.dataset.assetId === asset.assetId);
+    const noRemoveButton = !document.querySelector('.asset-remove');
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 100, clientY: 200 });
+    item.dispatchEvent(event);
+    const menu = document.querySelector('.layer-menu');
+    const button = menu?.querySelector('[role="menuitem"]');
+    const opened = event.defaultPrevented && button?.textContent.trim() === 'Remove';
+    const noPreview = !document.querySelector('.asset-preview-modal');
+    button.click();
+    const removed = ![...document.querySelectorAll('.asset-item')].some(item => item.dataset.assetId === asset.assetId);
+    return { noRemoveButton, opened, noPreview, removed, closed: !document.querySelector('.layer-menu') };
+  })()`);
+  if (Object.values(assetMenu).some(value => !value)) {
+    throw new Error(`Asset context menu regression: ${JSON.stringify(assetMenu)}`);
+  }
+
+  await evaluate(cdp, "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+
   const imagePasteBefore = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="#FE2C55"/></svg>';
@@ -525,6 +1100,79 @@ try {
     throw new Error(`Clipboard image metadata changed: ${JSON.stringify(imagePaste.asset)}`);
   }
 
+  const assetPreview = await evaluate(cdp, `(async () => {
+    const item = document.querySelector('.asset-item');
+    item.focus();
+    item.click();
+    let modal = document.querySelector('.asset-preview-modal');
+    const opened = modal?.open && modal.matches(':modal')
+      && modal.querySelector('img').src === (await import('/src/editor-state.mjs')).activeProject().assets.find(asset => asset.id === item.dataset.assetId).imageData;
+    modal.querySelector('img').click();
+    const imageStaysOpen = modal.open;
+    modal.click();
+    const backdropCloses = !modal.open;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const removed = !document.querySelector('.asset-preview-modal');
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    modal = document.querySelector('.asset-preview-modal');
+    const keyboardOpens = modal?.open;
+    modal.querySelector('button').click();
+    const buttonCloses = !modal.open;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    return { opened, imageStaysOpen, backdropCloses, removed, keyboardOpens, buttonCloses };
+  })()`);
+  if (Object.values(assetPreview).some(value => !value)) {
+    throw new Error(`Asset preview regression: ${JSON.stringify(assetPreview)}`);
+  }
+
+  await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const original = agent.inspect({ includeAllProjects: false });
+    const scope = { projectId: original.project.id, slideId: original.slide.id };
+    const run = (operation) => agent.execute({ ...scope, ...operation });
+    const assert = (condition, message) => { if (!condition) throw new Error(message); };
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const textId = (await run({ type: 'text.add', text: 'Mixed resize', width: 0.4, height: 0.2, rotation: 15 })).createdTextId;
+    const imageId = (await run({ type: 'image.add', assetId: ${JSON.stringify(imagePaste.asset.id)}, width: 0.3, height: 0.15, rotation: 30 })).createdImageId;
+    const secondId = (await run({ type: 'image.add', assetId: ${JSON.stringify(imagePaste.asset.id)}, width: 0.6, height: 0.3, rotation: 30 })).createdImageId;
+    const box = (id) => document.querySelector('[data-text-id="' + id + '"], [data-overlay-id="' + id + '"]');
+    const click = (id, ctrlKey = false) => {
+      box(id).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 310, ctrlKey }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 310 }));
+    };
+    const inspect = (ids) => { const slide = agent.inspect({ includeAllProjects: false }).slide; return [...slide.texts, ...slide.images].filter((item) => ids.includes(item.id)); };
+    const resize = (id, handle) => {
+      box(id).querySelector(handle).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 311, clientX: 100, clientY: 100 }));
+      window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 311, clientX: 135, clientY: 135 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 311, clientX: 135, clientY: 135 }));
+    };
+    try {
+      click(imageId, true);
+      assert(!document.querySelector('#text-font') && !document.querySelector('#text-value'), 'Image selection must show only shared image controls');
+      assert(document.querySelector('#shared-rotation').value === '30', 'Equal image rotations must show their value');
+      const beforeImages = inspect([imageId, secondId]);
+      resize(secondId, '[data-corner="se"]');
+      const afterImages = inspect([imageId, secondId]);
+      assert(afterImages.every((item, i) => item.width > beforeImages[i].width && Math.abs(item.width / item.height - beforeImages[i].width / beforeImages[i].height) < 0.00001), 'Bulk image corner resize must preserve each aspect ratio');
+      click(textId);
+      click(imageId, true);
+      assert(!document.querySelector('#text-font') && !document.querySelector('[data-text-color]'), 'Mixed text and image selection must hide text-only controls');
+      assert(document.querySelector('#shared-rotation').value === '', 'Mixed rotations must be blank');
+      const beforeMixed = inspect([textId, imageId]);
+      resize(textId, '[data-edge="e"]');
+      const afterMixed = inspect([textId, imageId]);
+      assert(afterMixed.every((item, i) => item.width > beforeMixed[i].width && Math.abs(item.height - beforeMixed[i].height) < 0.00001), 'Mixed edge resize must change widths only');
+      assert(Math.abs(afterMixed[0].width / beforeMixed[0].width - afterMixed[1].width / beforeMixed[1].width) < 0.00001, 'Mixed resize must share the same scale');
+      const width = document.querySelector('#shared-width');
+      width.focus(); width.value = '45'; width.dispatchEvent(new Event('input', { bubbles: true })); width.blur();
+      assert(inspect([textId, imageId]).every((item) => item.width === 0.45), 'Shared width must set both text and image dimensions');
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await run({ type: 'layer.delete', layerIds: [textId, imageId, secondId] });
+      click(original.slide.images[0].id);
+    }
+  })()`);
+
   const layerCopy = await evaluate(cdp, `(() => {
     const before = structuredClone(window.carouselBotAgent.inspect({ includeAllProjects: false }));
     const textBox = document.querySelector('.text-box');
@@ -547,6 +1195,12 @@ try {
     const canonical = transfer.getData('application/x-carouselbot-layer');
     const legacy = transfer.getData('application/x-slide-studio-layer');
     const plain = transfer.getData('text/plain');
+    const crossFormatCopy = JSON.parse(canonical);
+    crossFormatCopy.token += '-cross-format';
+    crossFormatCopy.sourceCanvas = { aspectRatio: '9:16', width: 1080, height: 1920 };
+    transfer.setData('application/x-carouselbot-layer', JSON.stringify(crossFormatCopy));
+    transfer.setData('application/x-slide-studio-layer', JSON.stringify(crossFormatCopy));
+    transfer.setData('text/plain', 'carouselbot-layer:' + crossFormatCopy.token);
     document.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
     return {
       before,
@@ -555,6 +1209,7 @@ try {
       canonical,
       legacy,
       plain,
+      pasteSourceCanvas: crossFormatCopy.sourceCanvas,
       storedCanonical: localStorage.getItem('carouselbot-layer-clipboard'),
       storedLegacy: localStorage.getItem('slide-studio-layer-clipboard'),
     };
@@ -566,6 +1221,9 @@ try {
     || layerCopy.selectedBeforeCopy !== 2
     || canonicalCopy.layers.length !== 2
     || legacyCopy.token !== canonicalCopy.token
+    || canonicalCopy.sourceCanvas?.aspectRatio !== "3:4"
+    || canonicalCopy.sourceCanvas?.width !== 1080
+    || canonicalCopy.sourceCanvas?.height !== 1440
     || !layerCopy.plain.startsWith("carouselbot-layer:")
     || JSON.parse(layerCopy.storedCanonical).token !== canonicalCopy.token
     || JSON.parse(layerCopy.storedLegacy).token !== canonicalCopy.token
@@ -589,11 +1247,25 @@ try {
   const pastedText = layerPaste.inspected.slide.texts.at(-1);
   const originalImage = layerCopy.before.slide.images[0];
   const pastedImage = layerPaste.inspected.slide.images.at(-1);
+  const sourceToTargetHeightScale = layerCopy.pasteSourceCanvas.height / 1440;
+  const expectedTextHeight = Math.min(originalText.height * sourceToTargetHeightScale, 1);
+  const expectedTextY = Math.min(
+    Math.max(originalText.y + originalText.height / 2 - expectedTextHeight / 2 + 0.03, 0),
+    1 - expectedTextHeight,
+  );
+  const expectedImageHeight = Math.min(originalImage.height * sourceToTargetHeightScale, 2.4);
+  const expectedImageY = Math.min(
+    Math.max(originalImage.y + originalImage.height / 2 - expectedImageHeight / 2 + 0.03, Math.min(0, 1 - expectedImageHeight)),
+    Math.max(0, 1 - expectedImageHeight),
+  );
   if (
     layerPaste.inspected.project.assetCount !== layerCopy.before.project.assetCount
     || Math.abs(pastedText.x - Math.min(originalText.x + 0.03, 1 - originalText.width)) > 0.0001
-    || Math.abs(pastedText.y - Math.min(originalText.y + 0.03, 1 - originalText.height)) > 0.0001
+    || Math.abs(pastedText.height - expectedTextHeight) > 0.0001
+    || Math.abs(pastedText.y - expectedTextY) > 0.0001
     || Math.abs(pastedImage.x - Math.min(originalImage.x + 0.03, 1 - originalImage.width)) > 0.0001
+    || Math.abs(pastedImage.height - expectedImageHeight) > 0.0001
+    || Math.abs(pastedImage.y - expectedImageY) > 0.0001
     || pastedText.z <= originalText.z
     || pastedImage.z <= originalImage.z
     || !layerPaste.selected.includes(pastedText.id)
@@ -620,8 +1292,97 @@ try {
     })()`),
     "Uploading an SVG through the native file input did not add a slide.",
   );
-  if (uploadedSlide.name !== "browser-upload" || uploadedSlide.width !== 600 || uploadedSlide.height !== 900) {
+  if (uploadedSlide.name !== "browser-upload" || uploadedSlide.aspectRatio !== "2:3" || uploadedSlide.canvasWidth !== 1080 || uploadedSlide.canvasHeight !== 1620 || uploadedSlide.width !== 600 || uploadedSlide.height !== 900) {
     throw new Error(`The uploaded slide metadata changed: ${JSON.stringify(uploadedSlide)}`);
+  }
+
+  const mixedSlideFormatModel = await evaluate(cdp, `(async () => {
+    const agent = window.carouselBotAgent;
+    const before = agent.inspect({ projectId: ${JSON.stringify(projectId)}, slideId: ${JSON.stringify(slide.createdSlideId)}, includeAllProjects: false });
+    const beforeText = before.slide.texts[0];
+    const beforeImage = before.slide.images[0];
+    const selector = document.querySelector('#slide-aspect-ratio');
+    const options = [...(selector?.options || [])].map((option) => option.value);
+    selector.value = '1:1';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    const after = agent.inspect({ projectId: ${JSON.stringify(projectId)}, slideId: ${JSON.stringify(slide.createdSlideId)}, includeAllProjects: false });
+    const afterText = after.slide.texts.find((item) => item.id === beforeText.id);
+    const afterImage = after.slide.images.find((item) => item.id === beforeImage.id);
+    const editorState = await import('/src/editor-state.mjs');
+    const backgrounds = await import('/src/slide-background.mjs');
+    const storedProject = editorState.activeProject();
+    const storedSlide = storedProject.slides.find((item) => item.id === ${JSON.stringify(slide.createdSlideId)});
+    const storedUpload = storedProject.slides.find((item) => item.id === ${JSON.stringify(uploadedSlide.id)});
+    return {
+      options,
+      projectAspectRatio: after.project.aspectRatio,
+      slideAspectRatios: after.project.slides.map((item) => item.aspectRatio),
+      selected: document.querySelector('#slide-aspect-ratio')?.value,
+      storedAspectRatio: storedSlide.aspectRatio,
+      storedUploadAspectRatio: storedUpload.aspectRatio,
+      solidBackgroundCanonical: storedSlide.imageData === backgrounds.solidBackgroundDataUrl(storedSlide.backgroundColor, storedProject, storedSlide),
+      solidBackgroundDimensions: [storedSlide.width, storedSlide.height],
+      beforeText,
+      afterText,
+      beforeImage,
+      afterImage,
+    };
+  })()`);
+  const layerCenter = (item) => ({ x: item.x + item.width / 2, y: item.y + item.height / 2 });
+  const beforeTextCenter = layerCenter(mixedSlideFormatModel.beforeText);
+  const afterTextCenter = layerCenter(mixedSlideFormatModel.afterText);
+  const beforeImageCenter = layerCenter(mixedSlideFormatModel.beforeImage);
+  const afterImageCenter = layerCenter(mixedSlideFormatModel.afterImage);
+  if (
+    !["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "16:9"].every((ratio) => mixedSlideFormatModel.options.includes(ratio))
+    || mixedSlideFormatModel.projectAspectRatio !== "3:4"
+    || JSON.stringify(mixedSlideFormatModel.slideAspectRatios) !== JSON.stringify(["1:1", "2:3"])
+    || mixedSlideFormatModel.selected !== "1:1"
+    || mixedSlideFormatModel.storedAspectRatio !== "1:1"
+    || mixedSlideFormatModel.storedUploadAspectRatio !== "2:3"
+    || !mixedSlideFormatModel.solidBackgroundCanonical
+    || mixedSlideFormatModel.solidBackgroundDimensions.join(",") !== "1080,1080"
+    || Math.abs(mixedSlideFormatModel.afterText.width - mixedSlideFormatModel.beforeText.width) > 0.0001
+    || Math.abs(mixedSlideFormatModel.afterImage.width - mixedSlideFormatModel.beforeImage.width) > 0.0001
+    || Math.abs(afterTextCenter.x - beforeTextCenter.x) > 0.0001
+    || Math.abs(afterTextCenter.y - beforeTextCenter.y) > 0.0001
+    || Math.abs(afterImageCenter.x - beforeImageCenter.x) > 0.0001
+    || Math.abs(afterImageCenter.y - beforeImageCenter.y) > 0.0001
+    || Math.abs(mixedSlideFormatModel.afterText.height * 1080 - mixedSlideFormatModel.beforeText.height * 1440) > 0.01
+    || Math.abs(mixedSlideFormatModel.afterImage.height * 1080 - mixedSlideFormatModel.beforeImage.height * 1440) > 0.01
+  ) {
+    throw new Error(`Changing one slide format distorted its layers or project defaults: ${JSON.stringify(mixedSlideFormatModel)}`);
+  }
+
+  const mixedSlideFormatUi = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const stage = document.querySelector('.stage')?.getBoundingClientRect();
+      const thumbnailElements = [...document.querySelectorAll('.thumb-image')];
+      const thumbs = thumbnailElements.map((item) => item.getBoundingClientRect());
+      const thumbnailRendered = thumbnailElements.map((item) => item.querySelector('.thumb-rendered'));
+      if (!stage?.width || thumbs.some((item) => !item.width) || thumbnailRendered.some((item) => !item)) return null;
+      return {
+        stageRatio: stage.width / stage.height,
+        thumbnailRatios: thumbs.map((item) => item.width / item.height),
+        thumbnailFits: thumbnailRendered.map((item) => getComputedStyle(item).objectFit),
+        thumbnailBackgrounds: thumbnailElements.map((item) => getComputedStyle(item).backgroundColor),
+        dimensions: document.querySelector('.stage-size-label')?.textContent?.trim(),
+        overlayDisabled: document.querySelector('[data-action="toggle-tiktok-overlay"]')?.disabled,
+        overlayPresent: Boolean(document.querySelector('.tiktok-overlay')),
+      };
+    })()`),
+    "The active slide did not adopt its independent square format.",
+  );
+  if (
+    Math.abs(mixedSlideFormatUi.stageRatio - 1) > 0.01
+    || mixedSlideFormatUi.thumbnailRatios.some((ratio) => Math.abs(ratio - (9 / 16)) > 0.01)
+    || mixedSlideFormatUi.thumbnailFits.some((fit) => fit !== "contain")
+    || mixedSlideFormatUi.thumbnailBackgrounds.some((background) => background !== "rgb(5, 5, 5)")
+    || mixedSlideFormatUi.dimensions !== "1080 × 1080 · 1:1"
+    || !mixedSlideFormatUi.overlayDisabled
+    || mixedSlideFormatUi.overlayPresent
+  ) {
+    throw new Error(`Mixed slide formats did not reach the stage and rail: ${JSON.stringify(mixedSlideFormatUi)}`);
   }
 
   const slideReordering = await evaluate(cdp, `(() => {
@@ -648,6 +1409,56 @@ try {
   ) {
     throw new Error(`Native slide drag ordering changed: ${JSON.stringify(slideReordering)}`);
   }
+
+  const slideDuplication = await evaluate(cdp, `(async () => {
+    const { state } = await import('/src/editor-state.mjs');
+    const project = state.projects.find((item) => item.id === state.activeProjectId);
+    const source = project.slides[0];
+    const before = structuredClone(source);
+    // Duplicate a non-active slide to verify that the menu targets the clicked thumbnail.
+    document.querySelector('.slide-thumb[data-slide-id="' + project.slides[1].id + '"]').click();
+    const button = document.querySelector('.slide-thumb[data-slide-id="' + source.id + '"]');
+    button.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }));
+    const duplicateButton = [...document.querySelectorAll('.layer-menu-item')]
+      .find((item) => item.textContent.trim() === 'Duplicate');
+    if (!duplicateButton) throw new Error('Missing Duplicate slide menu action.');
+    duplicateButton.click();
+    const copy = project.slides[1];
+    const normalized = structuredClone(copy);
+    normalized.id = before.id;
+    normalized.name = before.name;
+    normalized.texts.forEach((item, index) => { item.id = before.texts[index].id; });
+    normalized.overlays.forEach((item, index) => { item.id = before.overlays[index].id; });
+    const sourceIds = new Set([before.id, ...before.texts.map((item) => item.id), ...before.overlays.map((item) => item.id)]);
+    const newIds = [copy.id, ...copy.texts.map((item) => item.id), ...copy.overlays.map((item) => item.id)];
+    return {
+      id: copy.id,
+      correct: project.slides.length === 3 && state.activeSlideId === copy.id
+        && JSON.stringify(normalized) === JSON.stringify(before)
+        && new Set(newIds).size === newIds.length && newIds.every((id) => !sourceIds.has(id))
+        && copy.texts.every((item, index) => item !== source.texts[index])
+        && copy.overlays.every((item, index) => item !== source.overlays[index])
+        && !document.querySelector('.layer-menu'),
+    };
+  })()`);
+  if (!slideDuplication.correct) throw new Error('Slide duplication did not preserve content, ordering, or independent layer IDs.');
+  await waitFor(
+    () => evaluate(cdp, `(async () => {
+      const { getProjectFromDb } = await import('/src/project-store.mjs');
+      const project = await getProjectFromDb(${JSON.stringify(projectId)});
+      return project?.slides[1]?.id === ${JSON.stringify(slideDuplication.id)};
+    })()`),
+    'Duplicated slide was not persisted immediately beneath its source.',
+  );
+  await evaluate(cdp, `(async () => {
+    const { undo, redo } = await import('/src/editor.mjs');
+    const ids = () => window.carouselBotAgent.inspect({ includeAllProjects: false }).project.slides.map((item) => item.id);
+    await undo();
+    if (ids().length !== 2 || ids().includes(${JSON.stringify(slideDuplication.id)})) throw new Error('Undo did not remove the duplicated slide.');
+    await redo();
+    if (ids()[1] !== ${JSON.stringify(slideDuplication.id)}) throw new Error('Redo did not restore the duplicate beneath its source.');
+    await undo();
+  })()`);
 
   const keyboardSlideNavigation = await evaluate(cdp, `(() => {
     const activeSlideId = () => window.carouselBotAgent.inspect({ includeAllProjects: false }).activeSlideId;
@@ -773,19 +1584,31 @@ try {
     const output = window.__browserOutput;
     window.__browserOriginalAnchorClick = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () {
-      output.downloads.push({ download: this.download, href: this.href });
+      const entry = { download: this.download, href: this.href };
+      output.downloads.push(entry);
+      output.downloadReady = (async () => {
+        const bitmap = await createImageBitmap(await (await fetch(entry.href)).blob());
+        Object.assign(entry, { width: bitmap.width, height: bitmap.height });
+        bitmap.close();
+      })();
     };
     Object.defineProperty(navigator, 'canShare', { configurable: true, value: ({ files } = {}) => Boolean(files?.length) });
     Object.defineProperty(navigator, 'share', {
       configurable: true,
       value: async ({ files = [], title = null } = {}) => {
-        output.shares.push({ title, files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })) });
+        const inspectedFiles = [];
+        for (const file of files) {
+          const bitmap = await createImageBitmap(file);
+          inspectedFiles.push({ name: file.name, type: file.type, size: file.size, width: bitmap.width, height: bitmap.height });
+          bitmap.close();
+        }
+        output.shares.push({ title, files: inspectedFiles });
       },
     });
     const activation = {};
     Object.defineProperty(activation, 'isActive', { get: () => output.activation });
     Object.defineProperty(navigator, 'userActivation', { configurable: true, value: activation });
-    const labels = Object.fromEntries(['export', 'share', 'share-all'].map((action) => {
+    const labels = Object.fromEntries(['export', 'export-all', 'share', 'share-all'].map((action) => {
       const button = document.querySelector('[data-action="' + action + '"]');
       return [action, button.innerHTML];
     }));
@@ -793,8 +1616,22 @@ try {
     return labels;
   })()`);
   await waitFor(
-    () => evaluate(cdp, `window.__browserOutput.downloads.length === 1 && !document.querySelector('[data-action="export"]').disabled`),
+    () => evaluate(cdp, `window.__browserOutput.downloads[0]?.width === 1080 && !document.querySelector('[data-action="export"]').disabled`),
     "Downloading from the native toolbar did not finish.",
+  );
+  const allDownloadButton = await evaluate(cdp, `(() => {
+    const button = document.querySelector('[data-action="export-all"]');
+    const result = { label: button.textContent.trim(), icon: Boolean(button.querySelector('svg')), previous: button.previousElementSibling?.dataset.action };
+    button.click();
+    button.click();
+    return result;
+  })()`);
+  if (allDownloadButton.label !== 'All' || !allDownloadButton.icon || allDownloadButton.previous !== 'export') {
+    throw new Error('The All download button must follow PNG and include the download icon.');
+  }
+  await waitFor(
+    () => evaluate(cdp, `window.__browserOutput.downloads.length === 3 && window.__browserOutput.downloads.every((item) => item.width) && !document.querySelector('[data-action="export-all"]').disabled`),
+    "Downloading all slides did not finish exactly once.",
   );
   await evaluate(cdp, `document.querySelector('[data-action="share"]').click()`);
   await waitFor(
@@ -815,7 +1652,7 @@ try {
   const nativeOutput = await waitFor(
     () => evaluate(cdp, `window.__browserOutput.shares.length === 2 ? ({
       ...window.__browserOutput,
-      buttons: Object.fromEntries(['export', 'share', 'share-all'].map((action) => {
+      buttons: Object.fromEntries(['export', 'export-all', 'share', 'share-all'].map((action) => {
         const button = document.querySelector('[data-action="' + action + '"]');
         return [action, { disabled: button.disabled, html: button.innerHTML }];
       })),
@@ -832,23 +1669,56 @@ try {
     shareCountBeforeActivation !== 1
     || nativeOutput.downloads[0].download !== expectedSingleName
     || !nativeOutput.downloads[0].href.startsWith("blob:")
+    || nativeOutput.downloads[0].width !== 1080
+    || nativeOutput.downloads[0].height !== 1080
+    || JSON.stringify(nativeOutput.downloads.slice(1).map((item) => item.download)) !== JSON.stringify(['browser-regression-project-slide-01.png', 'browser-regression-project-slide-02.png'])
+    || JSON.stringify(nativeOutput.downloads.slice(1).map((item) => [item.width, item.height])) !== JSON.stringify([[1080, 1080], [1080, 1620]])
     || nativeOutput.shares[0].title !== "Browser regression project"
     || nativeOutput.shares[0].files.length !== 1
     || nativeOutput.shares[0].files[0].name !== expectedSingleName
     || nativeOutput.shares[0].files[0].type !== "image/png"
     || nativeOutput.shares[0].files[0].size < 1000
+    || nativeOutput.shares[0].files[0].width !== 1080
+    || nativeOutput.shares[0].files[0].height !== 1080
     || JSON.stringify(nativeOutput.shares[1].files.map((file) => file.name)) !== JSON.stringify(expectedAllNames)
     || nativeOutput.shares[1].files.some((file) => file.type !== "image/png" || file.size < 1000)
+    || JSON.stringify(nativeOutput.shares[1].files.map((file) => [file.width, file.height])) !== JSON.stringify([[1080, 1080], [1080, 1620]])
     || Object.entries(nativeOutput.buttons).some(([action, button]) => button.disabled || button.html !== outputLabels[action])
   ) {
     throw new Error(`Native download/share behavior changed: ${JSON.stringify({ outputLabels, nativeOutput, shareCountBeforeActivation })}`);
   }
 
+  for (const width of [1137, 360]) {
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    const toolbar = await evaluate(cdp, `(() => {
+      const title = document.querySelector('.project-identity');
+      const actions = document.querySelector('.header-actions');
+      const allShare = document.querySelector('[data-action="share-all"]');
+      return {
+        width: innerWidth,
+        titleVisible: getComputedStyle(title).display !== 'none',
+        titleRight: title.getBoundingClientRect().right,
+        actionsLeft: actions.getBoundingClientRect().left,
+        actionsRight: actions.getBoundingClientRect().right,
+        allShareLabel: allShare.textContent.trim(),
+        allShareAccessibleName: allShare.getAttribute('aria-label'),
+        sharePadding: getComputedStyle(document.querySelector('[data-action="share"]')).paddingLeft,
+      };
+    })()`);
+    if (toolbar.width !== width || toolbar.actionsRight > width + 1
+      || (toolbar.titleVisible && toolbar.titleRight > toolbar.actionsLeft - 8)
+      || toolbar.allShareLabel !== "All" || toolbar.allShareAccessibleName !== "AirDrop all slides"
+      || (width === 1137 && parseFloat(toolbar.sharePadding) > 12)) {
+      throw new Error(`Editor header buttons or project title overflowed: ${JSON.stringify(toolbar)}`);
+    }
+  }
+  await cdp.send("Emulation.clearDeviceMetricsOverride");
+
   const rendered = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
     return window.carouselBotAgent.execute({ type: 'slide.render', projectId: inspected.project.id, slideId: inspected.slide.id, width: 270 });
   })()`);
-  if (rendered?.mimeType !== "image/png" || rendered.width !== 270 || rendered.height !== 480 || rendered.data?.length < 100) {
+  if (rendered?.mimeType !== "image/png" || rendered.width !== 270 || rendered.height !== 270 || rendered.data?.length < 100) {
     throw new Error(`Rendering through the compatibility agent returned an invalid image: ${JSON.stringify(rendered)}`);
   }
   const renderedPixel = await evaluate(cdp, `(async () => {
@@ -876,7 +1746,12 @@ try {
         item.onerror = () => resolve(false);
         item.onsuccess = () => {
           const uploaded = item.result?.slides?.find((slide) => slide.name === 'browser-upload');
-          resolve(item.result?.slides?.length === 2 && uploaded?.width === 600 && uploaded?.height === 900);
+          const square = item.result?.slides?.find((slide) => slide.id === ${JSON.stringify(slide.createdSlideId)});
+          resolve(item.result?.slides?.length === 2
+            && square?.aspectRatio === '1:1'
+            && uploaded?.aspectRatio === '2:3'
+            && uploaded?.width === 600
+            && uploaded?.height === 900);
         };
       };
     })`),
@@ -890,9 +1765,19 @@ try {
   );
   const persisted = await evaluate(cdp, `(() => {
     const inspected = window.carouselBotAgent.inspect({ includeAllProjects: false });
-    return { name: inspected.project.name, textValues: (inspected.slide?.texts || []).map((text) => text.text) };
+    return {
+      name: inspected.project.name,
+      textValues: (inspected.slide?.texts || []).map((text) => text.text),
+      aspectRatios: inspected.project.slides.map((slide) => slide.aspectRatio),
+      selectedFormat: document.querySelector('#slide-aspect-ratio')?.value,
+    };
   })()`);
-  if (persisted.name !== "Browser regression project" || !persisted.textValues.includes("Module refactor smoke test")) {
+  if (
+    persisted.name !== "Browser regression project"
+    || !persisted.textValues.includes("Module refactor smoke test")
+    || JSON.stringify(persisted.aspectRatios) !== JSON.stringify(["1:1", "2:3"])
+    || persisted.selectedFormat !== "1:1"
+  ) {
     throw new Error(`Reloaded project data changed: ${JSON.stringify(persisted)}`);
   }
 
@@ -920,9 +1805,408 @@ try {
 
   await cdp.send("Page.navigate", { url: `${pageUrl}/projects/missing-project` });
   await waitFor(
-    () => evaluate(cdp, `document.readyState === 'complete' && location.pathname === '/' && document.querySelector('.toast')?.textContent.includes('isn’t available')`),
+    () => evaluate(cdp, `document.readyState === 'complete' && location.pathname === '/dashboard' && document.querySelector('.toast')?.textContent.includes('isn’t available')`),
     "A missing deep route did not return to the dashboard with feedback.",
   );
+
+  const filmstripProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Filmstrip preview project with an intentionally long title' })`);
+  const filmstripAspectRatios = ["9:16", "1:1", "4:5", "3:4", "16:9", "2:3", "4:3", "9:16"];
+  const filmstripSlideIds = await callPageFunction(cdp, `async function(projectId) {
+    const colors = ['#FE2C55', '#25F4EE', '#25282E', '#F4C95D', '#8A5CF5', '#3DBE78', '#F28C45', '#496DDB'];
+    const aspectRatios = ['9:16', '1:1', '4:5', '3:4', '16:9', '2:3', '4:3', '9:16'];
+    const ids = [];
+    for (const [index, backgroundColor] of colors.entries()) {
+      const result = await this.carouselBotAgent.execute({
+        type: 'slide.add',
+        projectId,
+        name: 'Preview ' + (index + 1),
+        backgroundColor,
+        aspectRatio: aspectRatios[index],
+      });
+      ids.push(result.createdSlideId);
+    }
+    return ids;
+  }`, [filmstripProject.projectId]);
+  const filmstrip = await waitFor(() => evaluate(cdp, `(() => {
+    const card = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]');
+    const shell = card?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    const slides = [...(strip?.querySelectorAll('[data-project-preview-slide-id]') || [])];
+    const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
+    const next = shell?.querySelector('[data-project-preview-direction="next"]');
+    const meta = card?.querySelector('.project-meta');
+    const title = meta?.querySelector('.project-meta-name > span');
+    const details = meta?.lastElementChild;
+    if (!card || !shell || !strip || slides.length !== 8 || !slides.some((slide) => slide.querySelector('img.thumb-rendered'))) return false;
+    const stripRect = strip.getBoundingClientRect();
+    const titleRect = title?.getBoundingClientRect();
+    const detailsRect = details?.getBoundingClientRect();
+    const stripStyle = getComputedStyle(strip);
+    const slideStyles = slides.map((slide) => getComputedStyle(slide));
+    return {
+      slideIds: slides.map((slide) => slide.dataset.projectPreviewSlideId),
+      ratios: slides.map((slide) => {
+        const rect = slide.getBoundingClientRect();
+        return rect.width / rect.height;
+      }),
+      scrollLeft: strip.scrollLeft,
+      maxScrollLeft: strip.scrollWidth - strip.clientWidth,
+      overflow: strip.scrollWidth > strip.clientWidth + 2,
+      renderedCount: slides.filter((slide) => slide.querySelector('img.thumb-rendered')).length,
+      previousHidden: previous?.hidden,
+      nextHidden: next?.hidden,
+      controlsOutsideLink: !card.contains(previous) && !card.contains(next),
+      cardLabel: card.getAttribute('aria-label'),
+      buttonTypes: [previous?.type, next?.type],
+      labels: [previous?.getAttribute('aria-label'), next?.getAttribute('aria-label')],
+      touchTargets: [previous, next].map((button) => Number.parseFloat(getComputedStyle(button).width)),
+      footerGap: titleRect?.top - stripRect.bottom,
+      footerSameRow: Math.abs((titleRect?.bottom || 0) - (detailsRect?.bottom || 0)) < 2,
+      titleTruncated: title && title.scrollWidth > title.clientWidth,
+      detailsWhiteSpace: details && getComputedStyle(details).whiteSpace,
+      detailsWrapped: details && details.scrollHeight > details.clientHeight + 1,
+      metaOverflows: meta && meta.scrollWidth > meta.clientWidth + 1,
+      stripGap: Number.parseFloat(stripStyle.gap),
+      stripPadding: Number.parseFloat(stripStyle.paddingTop),
+      slideRadii: slideStyles.map((style) => Number.parseFloat(style.borderTopLeftRadius)),
+      dividerWidths: slideStyles.map((style) => Number.parseFloat(style.borderRightWidth)),
+      dividerColors: slideStyles.map((style) => style.borderRightColor),
+    };
+  })()`), "The dashboard project filmstrip did not render its visible slide thumbnails.");
+  if (
+    JSON.stringify(filmstrip.slideIds) !== JSON.stringify(filmstripSlideIds)
+    || filmstrip.ratios.some((ratio, index) => {
+      const [width, height] = filmstripAspectRatios[index].split(":").map(Number);
+      return Math.abs(ratio - (width / height)) > 0.02;
+    })
+    || !filmstrip.overflow
+    || filmstrip.renderedCount < 1
+    || filmstrip.previousHidden !== true
+    || filmstrip.nextHidden !== false
+    || !filmstrip.controlsOutsideLink
+    || !filmstrip.cardLabel?.includes("8 slides")
+    || filmstrip.buttonTypes.some((type) => type !== "button")
+    || filmstrip.labels.some((label) => !label?.includes("Filmstrip preview project") || !label.includes("slide previews"))
+    || filmstrip.touchTargets.some((size) => size < 44)
+    || filmstrip.footerGap < 8
+    || filmstrip.footerGap > 24
+    || !filmstrip.footerSameRow
+    || !filmstrip.titleTruncated
+    || filmstrip.detailsWhiteSpace !== "nowrap"
+    || filmstrip.detailsWrapped
+    || filmstrip.metaOverflows
+    || filmstrip.stripGap !== 0
+    || filmstrip.stripPadding !== 0
+    || filmstrip.slideRadii.some((radius) => radius !== 0)
+    || filmstrip.dividerWidths.slice(0, -1).some((width) => width !== 1)
+    || filmstrip.dividerWidths.at(-1) !== 0
+    || filmstrip.dividerColors.slice(0, -1).some((color) => color !== "rgb(255, 255, 255)")
+  ) {
+    throw new Error(`Dashboard project filmstrip markup was incorrect: ${JSON.stringify(filmstrip)}`);
+  }
+
+  await callPageFunction(cdp, `function(projectId, slideId) {
+    return this.carouselBotAgent.execute({ type: 'slide.update', projectId, slideId, backgroundColor: '#0A0A0A' });
+  }`, [filmstripProject.projectId, filmstripSlideIds[3]]);
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell').querySelector('[data-project-preview-direction="next"]').click()`);
+  const filmstripAfterNext = await waitFor(() => evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    const previous = shell?.querySelector('[data-project-preview-direction="previous"]');
+    const revealedSlide = strip?.querySelector('[data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[3])}] img.thumb-rendered');
+    return strip?.scrollLeft > 2 && previous && !previous.hidden && revealedSlide
+      ? { pathname: location.pathname, scrollLeft: strip.scrollLeft }
+      : false;
+  })()`), "The project filmstrip did not scroll right or reveal its previous control.");
+  if (filmstripAfterNext.pathname !== "/dashboard") throw new Error(`The filmstrip control opened the project: ${JSON.stringify(filmstripAfterNext)}`);
+  const revealedPixel = await evaluate(cdp, `(async () => {
+    const image = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds[3])}] img.thumb-rendered');
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0, 1, 1);
+    return [...context.getImageData(0, 0, 1, 1).data];
+  })()`);
+  if (revealedPixel.some((channel, index) => Math.abs(channel - [10, 10, 10, 255][index]) > 3)) {
+    throw new Error(`A stale off-screen render replaced the updated filmstrip slide: ${JSON.stringify(revealedPixel)}`);
+  }
+
+  const filmstripAtEnd = await evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell');
+    const strip = shell.querySelector('[data-project-preview-strip]');
+    const next = shell.querySelector('[data-project-preview-direction="next"]');
+    next.focus();
+    strip.scrollLeft = strip.scrollWidth;
+    strip.dispatchEvent(new Event('scroll'));
+    const previous = shell.querySelector('[data-project-preview-direction="previous"]');
+    return { scrollLeft: strip.scrollLeft, maxScrollLeft: strip.scrollWidth - strip.clientWidth, previousHidden: previous.hidden, nextHidden: next.hidden, focusDirection: document.activeElement?.dataset.projectPreviewDirection };
+  })()`);
+  if (Math.abs(filmstripAtEnd.scrollLeft - filmstripAtEnd.maxScrollLeft) > 2 || filmstripAtEnd.previousHidden || !filmstripAtEnd.nextHidden || filmstripAtEnd.focusDirection !== "previous") {
+    throw new Error(`The project filmstrip controls did not reflect its final edge: ${JSON.stringify(filmstripAtEnd)}`);
+  }
+  await waitFor(
+    () => evaluate(cdp, `Boolean(document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"] [data-project-preview-slide-id=${JSON.stringify(filmstripSlideIds.at(-1))}] img.thumb-rendered'))`),
+    "The project filmstrip did not render the newly revealed final slide.",
+  );
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]').closest('.project-card-shell').querySelector('[data-project-preview-direction="previous"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `(() => {
+      const strip = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell')?.querySelector('[data-project-preview-strip]');
+      return strip && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 2;
+    })()`),
+    "The project filmstrip did not scroll back to the left.",
+  );
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 375, height: 900, deviceScaleFactor: 1, mobile: false });
+  const narrowFilmstrip = await waitFor(() => evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id="${filmstripProject.projectId}"]')?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    if (!strip) return false;
+    strip.scrollLeft = 0;
+    strip.dispatchEvent(new Event('scroll'));
+    const next = shell.querySelector('[data-project-preview-direction="next"]');
+    const meta = shell.querySelector('.project-meta');
+    const title = meta?.querySelector('.project-meta-name > span');
+    const details = meta?.lastElementChild;
+    return !next.hidden ? {
+      viewportWidth: innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      cardWidth: shell.getBoundingClientRect().width,
+      overflow: strip.scrollWidth > strip.clientWidth + 2,
+      titleTruncated: title && title.scrollWidth > title.clientWidth,
+      detailsWhiteSpace: details && getComputedStyle(details).whiteSpace,
+      detailsWrapped: details && details.scrollHeight > details.clientHeight + 1,
+      metaOverflows: meta && meta.scrollWidth > meta.clientWidth + 1,
+    } : false;
+  })()`), "The project filmstrip controls did not adapt to the narrow dashboard layout.");
+  if (
+    narrowFilmstrip.documentWidth > narrowFilmstrip.viewportWidth + 1
+    || !narrowFilmstrip.overflow
+    || narrowFilmstrip.cardWidth > narrowFilmstrip.viewportWidth
+    || !narrowFilmstrip.titleTruncated
+    || narrowFilmstrip.detailsWhiteSpace !== "nowrap"
+    || narrowFilmstrip.detailsWrapped
+    || narrowFilmstrip.metaOverflows
+  ) {
+    throw new Error(`The narrow project filmstrip caused page-level overflow: ${JSON.stringify(narrowFilmstrip)}`);
+  }
+  await cdp.send("Emulation.clearDeviceMetricsOverride");
+  await waitFor(() => evaluate(cdp, "innerWidth > 1000"), "The browser viewport did not return to its desktop size.");
+  const nonOverflowingPreview = await waitFor(() => evaluate(cdp, `(() => {
+    const shell = document.querySelector('.project-card[data-project-id=${JSON.stringify(projectId)}]')?.closest('.project-card-shell');
+    const strip = shell?.querySelector('[data-project-preview-strip]');
+    if (!strip) return false;
+    const value = {
+      overflow: strip.scrollWidth > strip.clientWidth + 2,
+      visibleControls: [...shell.querySelectorAll('[data-project-preview-direction]')].filter((button) => !button.hidden).length,
+    };
+    return !value.overflow && value.visibleControls === 0 ? value : false;
+  })()`), "A non-overflowing project preview did not hide its scroll controls after resizing.");
+  if (!nonOverflowingPreview || nonOverflowingPreview.overflow || nonOverflowingPreview.visibleControls !== 0) {
+    throw new Error(`A non-overflowing project preview showed scroll controls: ${JSON.stringify(nonOverflowingPreview)}`);
+  }
+  await callPageFunction(cdp, `function(projectId) {
+    return this.carouselBotAgent.execute({ type: 'project.delete', projectId });
+  }`, [filmstripProject.projectId]);
+
+  const folderCreation = await evaluate(cdp, `(() => {
+    const trigger = document.querySelector('[data-action="new-folder"]');
+    const projectButton = document.querySelector('.new-project-action');
+    const ratio = projectButton.offsetHeight / trigger.offsetHeight;
+    for (const method of ['cancel', 'close', 'outside', 'escape']) {
+      trigger.click();
+      const dialog = document.querySelector('.folder-dialog');
+      if (document.activeElement !== dialog.querySelector('input')) throw new Error('Folder name must receive focus');
+      if (method === 'cancel') dialog.querySelector('[data-cancel]').click();
+      if (method === 'close') dialog.querySelector('[aria-label="Close"]').click();
+      if (method === 'outside') dialog.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      if (method === 'escape') dialog.querySelector('input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      if (document.querySelector('.folder-dialog') || document.activeElement !== trigger) throw new Error('Folder dismissal failed: ' + method);
+    }
+    trigger.click();
+    const form = document.querySelector('[data-folder-create-form]');
+    form.elements.folderName.value = 'Created empty folder';
+    form.requestSubmit();
+    return ratio;
+  })()`);
+  if (Math.abs(folderCreation - 2) > 0.05) throw new Error('New project tile must use a two-thirds split');
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Created empty folder"]')) && !document.querySelector('[data-folder-create-form]')`), 'Empty folder was not created');
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Created empty folder"]').click()`);
+  await evaluate(cdp, `window.__emptyFolderReloadSentinel = true`);
+  await cdp.send('Page.reload');
+  await waitFor(() => evaluate(cdp, `document.readyState === "complete" && !window.__emptyFolderReloadSentinel && window.carouselBotAgent && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'Created empty folder'`), 'Empty folder did not survive reload');
+  await evaluate(cdp, `(() => {
+    document.querySelector('[data-action="new-folder"]').click();
+    const form = document.querySelector('[data-folder-create-form]');
+    form.elements.folderName.value = 'Empty child';
+    form.requestSubmit();
+  })()`);
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/Created empty folder/Empty child"]'))`), 'Empty subfolder was not created');
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/Created empty folder/Empty child"]').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Created%20empty%20folder%2FEmpty%20child' && document.querySelectorAll('.folder-breadcrumb').length === 1 && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Created empty folder' && document.querySelector('.folder-breadcrumb')?.getAttribute('href') === '/folders/Created%20empty%20folder'`), 'Nested folder must show one back link named for its parent');
+  await evaluate(cdp, `document.querySelector('.folder-breadcrumb').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/folders/Created%20empty%20folder' && document.querySelectorAll('.folder-breadcrumb').length === 1 && document.querySelector('.folder-breadcrumb')?.textContent.trim() === 'Home'`), 'Back from a nested folder must open its parent and show Home');
+  await evaluate(cdp, `document.querySelector('.folder-breadcrumb').click()`);
+  await waitFor(() => evaluate(cdp, `location.pathname === '/dashboard' && !document.querySelector('.folder-dashboard-title')`), 'Second back click must open Home');
+  await waitFor(() => evaluate(cdp, `(() => {
+    const tile = document.querySelector('.folder-card[data-folder-path="/Created empty folder"] .folder-preview-subfolder');
+    return tile?.title === 'Empty child' && tile.querySelectorAll('.folder-preview-mini').length === 4 && Boolean(tile.querySelector('.folder-preview-folder-mark svg'));
+  })()`), 'Empty subfolder did not appear in its parent preview');
+
+  const folderUiProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Folder UI project' })`);
+  const folderUiSlide = await callPageFunction(cdp, `function(projectId) {
+    return this.carouselBotAgent.execute({
+      type: 'slide.add',
+      projectId,
+      name: 'Folder cover',
+      backgroundColor: '#25F4EE'
+    });
+  }`, [folderUiProject.projectId]);
+  if (!folderUiSlide?.createdSlideId) throw new Error(`Could not create the folder UI cover slide: ${JSON.stringify(folderUiSlide)}`);
+  await waitFor(
+    () => evaluate(cdp, `[...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
+    "The dashboard did not render the project used for folder UI coverage.",
+  );
+  await evaluate(cdp, `(() => {
+    const card = [...document.querySelectorAll('.project-card')].find((item) => item.querySelector('.project-meta strong')?.textContent === 'Folder UI project');
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.includes('Move to folder')).click();
+    const input = document.querySelector('[data-folder-move-form] input[name="folderPath"]');
+    input.value = '/native-folder';
+    document.querySelector('[data-folder-move-form]').requestSubmit();
+    return true;
+  })()`);
+  const nativeFolderCard = await waitFor(() => evaluate(cdp, `(() => {
+    const card = document.querySelector('.folder-card[data-folder-path="/native-folder"]');
+    if (!card || card.querySelectorAll('.folder-preview-slot').length !== 8 || !card.querySelector('.folder-meta-name svg')) return false;
+    if ([...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')) return false;
+    const preview = card.querySelector('.folder-preview');
+    const slots = [...card.querySelectorAll('.folder-preview-slot')];
+    const previewStyle = getComputedStyle(preview);
+    return {
+      href: card.getAttribute('href'),
+      name: card.querySelector('.folder-meta-name')?.textContent.trim(),
+      gap: Number.parseFloat(previewStyle.gap),
+      padding: Number.parseFloat(previewStyle.paddingTop),
+      slotRadii: slots.map((slot) => Number.parseFloat(getComputedStyle(slot).borderTopLeftRadius)),
+    };
+  })()`), "Moving a project into a new folder did not render its eight-slot folder card.");
+  if (
+    nativeFolderCard.name !== "native-folder"
+    || nativeFolderCard.href !== "/folders/native-folder"
+    || nativeFolderCard.gap !== 6
+    || nativeFolderCard.padding !== 8
+    || nativeFolderCard.slotRadii.some((radius) => radius !== 7)
+  ) throw new Error(`Folder card metadata or preview styling was incorrect: ${JSON.stringify(nativeFolderCard)}`);
+  await waitFor(
+    () => evaluate(cdp, `Boolean(document.querySelector('.folder-card[data-folder-path="/native-folder"] [data-project-cover-id="${folderUiProject.projectId}"] img[data-composite-cover="true"]'))`),
+    "The folder card did not compose the first slide into its mosaic.",
+  );
+  await evaluate(cdp, `document.querySelector('.folder-card[data-folder-path="/native-folder"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'native-folder'`),
+    "Opening the folder card did not show its dashboard route.",
+  );
+  const projectCardIcon = await evaluate(cdp, `Boolean(document.querySelector('.project-card .project-meta-name svg rect[x="14"][y="14"]'))`);
+  if (!projectCardIcon) throw new Error('Project cards must show the square-stack icon.');
+  const folderHeader = await evaluate(cdp, `({
+    home: document.querySelector('.folder-breadcrumb')?.textContent.trim(),
+    fontSize: parseFloat(getComputedStyle(document.querySelector('.folder-breadcrumb')).fontSize),
+    heading: document.querySelector('.section-heading h2')?.textContent.trim(),
+    rightCount: Boolean(document.querySelector('.section-heading > span')),
+  })`);
+  if (folderHeader.home !== 'Home' || folderHeader.fontSize < 16 || folderHeader.heading !== '1 project' || folderHeader.rightCount) {
+    throw new Error('The folder header should show a larger Home link and a single project count: ' + JSON.stringify(folderHeader));
+  }
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${folderUiProject.projectId}"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.slide-rail > .slide-rail-back')?.textContent.trim() === 'native-folder' && document.querySelector('.slide-rail-back')?.getAttribute('href') === '/folders/native-folder'`),
+    "The slide sidebar did not show the project's folder link.",
+  );
+  const parentLinkSize = await evaluate(cdp, `(() => {
+    const link = document.querySelector('.slide-rail-back');
+    return { fontSize: parseFloat(getComputedStyle(link).fontSize), height: link.getBoundingClientRect().height, iconWidth: link.querySelector('svg').getBoundingClientRect().width };
+  })()`);
+  if (parentLinkSize.fontSize < 18 || parentLinkSize.height < 48 || parentLinkSize.iconWidth < 24) {
+    throw new Error('The folder link must remain large and easy to click: ' + JSON.stringify(parentLinkSize));
+  }
+  const wrappedFolderNames = await evaluate(cdp, `(() => {
+    const link = document.querySelector('.slide-rail-back');
+    const label = link.querySelector('span');
+    const original = label.textContent;
+    const singleLineHeight = label.getBoundingClientRect().height;
+    const results = ['Newly/AI Slide Projects with a long folder name', 'A'.repeat(100)].map((name) => {
+      label.textContent = name;
+      const bounds = label.getBoundingClientRect();
+      const linkBounds = link.getBoundingClientRect();
+      return bounds.height > singleLineHeight && label.scrollWidth <= label.clientWidth + 1
+        && bounds.right <= linkBounds.right && bounds.bottom <= linkBounds.bottom;
+    });
+    label.textContent = original;
+    return results;
+  })()`);
+  if (!wrappedFolderNames.every(Boolean)) {
+    throw new Error('Long folder names must wrap fully inside the slide sidebar link.');
+  }
+  await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/folders/native-folder' && Boolean(document.querySelector('.folder-dashboard-title'))`),
+    "The slide sidebar link did not return to the folder.",
+  );
+  // Creation order must not win over edits, including after a persisted reload.
+  const newerFolderProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Newer folder project', folderPath: '/native-folder' })`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-card')?.dataset.projectId === '${newerFolderProject.projectId}'`),
+    "A newly created folder project should appear first.",
+  );
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.update', projectId: '${folderUiProject.projectId}', name: 'Folder UI project' })`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-card')?.dataset.projectId === '${folderUiProject.projectId}'`),
+    "Editing an older folder project must move it ahead of a newer project.",
+  );
+  await evaluate(cdp, "window.__carouselBotFolderReloadSentinel = true");
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(
+    () => evaluate(cdp, `document.readyState === 'complete' && !window.__carouselBotFolderReloadSentinel && window.carouselBotAgent && location.pathname === '/folders/native-folder' && document.querySelector('.folder-dashboard-title')?.textContent.trim() === 'native-folder' && [...document.querySelectorAll('.project-card .project-meta strong')].some((item) => item.textContent === 'Folder UI project')`),
+    "The folder deep route did not survive a reload.",
+  );
+  if (!await evaluate(cdp, `document.querySelector('.project-card')?.dataset.projectId === '${folderUiProject.projectId}'`)) {
+    throw new Error("Folder projects must retain last-changed order after reload.");
+  }
+  await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.delete', projectId: '${newerFolderProject.projectId}' })`);
+  await evaluate(cdp, `(() => {
+    const card = [...document.querySelectorAll('.project-card')].find((item) => item.querySelector('.project-meta strong')?.textContent === 'Folder UI project');
+    const rect = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+    [...document.querySelectorAll('.layer-menu-item')].find((item) => item.textContent.includes('Move to folder')).click();
+    const input = document.querySelector('[data-folder-move-form] input[name="folderPath"]');
+    input.value = '';
+    document.querySelector('[data-folder-move-form]').requestSubmit();
+    return true;
+  })()`);
+  await waitFor(
+    () => callPageFunction(cdp, `function(projectId) {
+      return location.pathname === '/dashboard'
+        && !document.querySelector('.folder-card[data-folder-path="/native-folder"]')
+        && this.carouselBotAgent.inspect().projects.find((item) => item.id === projectId)?.folderPath === null;
+    }`, [folderUiProject.projectId]),
+    "Moving the final project out did not remove the implicit folder and return to the dashboard.",
+  );
+  await evaluate(cdp, `document.querySelector('.project-card[data-project-id="${folderUiProject.projectId}"]').click()`);
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.slide-rail > .slide-rail-back')?.textContent.trim() === 'Home' && document.querySelector('.slide-rail-back')?.getAttribute('href') === '/' && Boolean(document.querySelector('.slide-rail-back svg'))`),
+    "The slide sidebar did not show Home for an unfiled project.",
+  );
+  await evaluate(cdp, `document.querySelector('.slide-rail-back').click()`);
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/dashboard' && Boolean(document.querySelector('.dashboard'))`),
+    "The slide sidebar Home link did not return home.",
+  );
+  await callPageFunction(cdp, `function(projectId) {
+    return this.carouselBotAgent.execute({ type: 'project.delete', projectId });
+  }`, [folderUiProject.projectId]);
 
   const deletionProject = await evaluate(cdp, `window.carouselBotAgent.execute({ type: 'project.create', name: 'Dashboard deletion check' })`);
   await waitFor(
@@ -967,19 +2251,177 @@ try {
     "Confirming native project deletion did not remove it from IndexedDB and the dashboard.",
   );
 
+  const beforeVideoExportErrors = runtimeErrors.length;
+  await verifySelectedLayerPriority({ cdp, evaluate });
+
   await verifyVideoSlides({ cdp, evaluate, waitFor, outputDirectory: process.env.CAROUSELBOT_VIDEO_OUTPUT });
+  // Chromium logs a codec-description warning for avc1 canvas recordings even
+  // when the fixed-size export succeeds. The scenario checks the actual codec,
+  // full playback and seeking; Apple AVFoundation is also checked at release.
+  const avc1DescriptionWarning = 'When using "avc1" for mp4 encoding, the codec description is not supposed to change during the entire recording. Normally, a change in the encoding resolution may lead to this situation. Consider switching to "avc3" instead to resolve this problem';
+  for (let index = runtimeErrors.length - 1; index >= beforeVideoExportErrors; index--) {
+    if (runtimeErrors[index] === avc1DescriptionWarning) runtimeErrors.splice(index, 1);
+  }
+
+  await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
+    "The project for share-link coverage did not reopen.",
+  );
+  const projectCountBeforeShare = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.length`);
+  if (!remoteUrl) await evaluate(cdp, `window.turnstile = { render(element, options) { setTimeout(() => options.callback('test-token'), 0); return 'test-widget'; }, remove() {} }`);
+  await evaluate(cdp, `document.querySelector('[data-action="share-project-link"]').click()`);
+  const firstShareUrl = await waitFor(
+    () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
+    "Creating an editable project share link did not show the copy dialog.",
+  );
+  if (!firstShareUrl.startsWith(`${pageUrl}/share/`)) throw new Error(`Invalid share URL: ${firstShareUrl}`);
+  if (!remoteUrl) pauseShareResponse = true;
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  if (!remoteUrl) {
+    try {
+      await waitFor(
+        () => evaluate(cdp, `document.querySelector('.share-import-card[data-state="loading"] .share-import-spinner') !== null`),
+        "Opening a share link did not show a loading spinner.",
+      );
+      for (const width of [1137, 375]) {
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false });
+        const layout = await evaluate(cdp, `(() => {
+          const card = document.querySelector('.share-import-card');
+          const bounds = card.getBoundingClientRect();
+          const headerBottom = document.querySelector('.app-header').getBoundingClientRect().bottom;
+          return {
+            width: innerWidth,
+            scrollWidth: document.documentElement.scrollWidth,
+            cardWidth: bounds.width,
+            horizontalOffset: Math.abs(bounds.left + bounds.width / 2 - innerWidth / 2),
+            verticalOffset: Math.abs(bounds.top + bounds.height / 2 - (headerBottom + innerHeight) / 2),
+            headingSize: parseFloat(getComputedStyle(card.querySelector('h1')).fontSize),
+            spinnerAnimation: getComputedStyle(card.querySelector('.share-import-spinner')).animationName,
+          };
+        })()`);
+        if (layout.width !== width || layout.scrollWidth > width || layout.cardWidth > width - 24
+          || layout.horizontalOffset > 2 || layout.verticalOffset > 2
+          || layout.headingSize > 40 || layout.spinnerAnimation !== "share-import-spin") {
+          throw new Error(`Shared project loading card is not centered and compact: ${JSON.stringify(layout)}`);
+        }
+      }
+    } finally {
+      await cdp.send("Emulation.clearDeviceMetricsOverride");
+      pauseShareResponse = false;
+      resumeShareResponse?.();
+      resumeShareResponse = undefined;
+    }
+  }
+  const firstImported = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;
+      return project?.folderPath === '/Shared' && project.name === 'Browser regression project'
+        && location.pathname === '/projects/' + project.id ? project : null;
+    })()`),
+    "Opening a share link did not import an editable project into Shared.",
+  );
+  if (firstImported.id === projectId || firstImported.slideCount !== 2) {
+    throw new Error(`The imported project was not an independent full copy: ${JSON.stringify(firstImported)}`);
+  }
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && window.carouselBotAgent.inspect().projects.length === ${projectCountBeforeShare + 1}`),
+    "Opening the same share link again created a duplicate instead of reopening its local copy.",
+  );
+
+  await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
+  await waitFor(
+    () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
+    "The original project was changed by importing its share.",
+  );
+  if (!remoteUrl) await evaluate(cdp, `window.turnstile = { render(element, options) { setTimeout(() => options.callback('test-token'), 0); return 'test-widget'; }, remove() {} };`);
+  await evaluate(cdp, `(() => {
+    const title = document.querySelector('.project-title-input');
+    title.value = 'Updated browser regression project';
+    title.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-action="share-project-link"]').click();
+    return true;
+  })()`);
+  const secondShareUrl = await waitFor(
+    () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
+    "Creating a second snapshot link failed.",
+  );
+  if (secondShareUrl === firstShareUrl) throw new Error("A new share must create a unique snapshot link.");
+  await cdp.send("Page.navigate", { url: secondShareUrl });
+  const secondImported = await waitFor(
+    () => evaluate(cdp, `(() => {
+      const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;
+      return project?.folderPath === '/Shared' && project.name === 'Updated browser regression project'
+        && location.pathname === '/projects/' + project.id ? project : null;
+    })()`),
+    "The new share link did not import the updated snapshot.",
+  );
+  if (secondImported.id === firstImported.id) throw new Error("Two snapshot links imported into one project.");
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
+    "Creating an updated snapshot altered the earlier imported project.",
+  );
+
+  if (!remoteUrl) {
+    const memory = await verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl });
+    process.stdout.write('Memory regression: ' + JSON.stringify(memory) + '\n');
+    await cdp.send("Page.navigate", { url: firstShareUrl });
+    await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.project-title-input'))`), "Memory fixture did not restore the test project");
+  }
+
+  await verifyHostedAgentPreview({ cdp, evaluate });
+  await verifyProductChat({ cdp, evaluate, waitFor });
+  await cdp.send("Page.navigate", { url: firstShareUrl });
+  await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.project-title-input'))`), "Hosted chat fixture did not restore the test project");
+
+  const errorsBeforeSecurityFixture = runtimeErrors.length;
+  // Existing IndexedDB documents must remain safe even if they predate the
+  // stricter share decoder. Exercise the browser's HTML parser after reload.
+  if (!remoteUrl) {
+    await evaluate(cdp, `(async () => {
+      const db = await new Promise((resolve, reject) => { const r = indexedDB.open('carouselbot-db'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('projects', 'readwrite');
+        const store = tx.objectStore('projects');
+        const request = store.get(${JSON.stringify(firstImported.id)});
+        request.onsuccess = () => {
+          const project = request.result;
+          const attack = '"/><a id="security-injected" href="#forged">Forged UI</a><img src="';
+          project.assets.push({ id: 'security-asset', name: 'Security regression', imageData: 'data:image/png;base64,AA==' + attack, width: 1, height: 1 });
+          const text = project.slides[0].texts[0];
+          if (text) { text.style = attack; text.background = attack; text.rotation = attack; }
+          store.put(project);
+        };
+        tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    })()`);
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await waitFor(() => evaluate(cdp, `document.querySelector('[data-asset-id="security-asset"]') !== null`), "Stored security fixture did not reload.");
+    if (await evaluate(cdp, `Boolean(document.querySelector('#security-injected'))`)) throw new Error("Stored project injected HTML after reload.");
+  }
 
   const failedResources = await evaluate(cdp, `performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/src/') && entry.responseStatus >= 400).map((entry) => ({ name: entry.name, status: entry.responseStatus }))`);
   if (failedResources.length) throw new Error(`Some source modules failed to load: ${JSON.stringify(failedResources)}`);
-  if (runtimeErrors.length) throw new Error(`Browser runtime errors:\n${runtimeErrors.join("\n")}`);
+  const unexpectedRuntimeErrors = runtimeErrors.filter((message, index) => index < errorsBeforeSecurityFixture || remoteUrl || message !== "Failed to load resource: net::ERR_INVALID_URL");
+  if (unexpectedRuntimeErrors.length) throw new Error(`Browser runtime errors:\n${unexpectedRuntimeErrors.join("\n")}`);
 
   process.stdout.write(`${JSON.stringify({
     loadedModules: initial.sourceModules.length,
     projectCreated: true,
     indexedDbPersistence: true,
     indexedDbConflictProtection: true,
+    projectCanvasFormats: true,
+    perSlideCanvasFormats: true,
     directUiTextEditing: true,
+    outlineWidthRendering: true,
     pointerDragResize: true,
+    coveredSelectedLayerControls: true,
+    liveFontWeightDrag: true,
+    sharedSelectionFormatting: true,
+    sharedSelectionResizing: true,
     undoRedo: true,
     nativeClipboard: true,
     imageUpload: true,
@@ -987,6 +2429,10 @@ try {
     nativeSlideLifecycle: true,
     nativeOutputActions: true,
     nativeProjectDeletion: true,
+    dashboardProjectFilmstrip: true,
+    nativeFolderOrganization: true,
+    shareLinkSnapshots: true,
+    storedProjectInjectionBlocked: !remoteUrl,
     deepRouteReload: true,
     missingRouteFallback: true,
     agentCompatibility: true,
