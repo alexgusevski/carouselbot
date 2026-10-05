@@ -27,9 +27,9 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.2.0",
     "fontkit": "^2.0.4",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "publishConfig": {
     "access": "public",
