@@ -1100,16 +1100,18 @@ try {
       && modal.querySelector('img').src === (await import('/src/editor-state.mjs')).activeProject().assets.find(asset => asset.id === item.dataset.assetId).imageData;
     modal.querySelector('img').click();
     const imageStaysOpen = modal.open;
+    const backdropClosed = new Promise(resolve => modal.addEventListener('close', resolve, { once: true }));
     modal.click();
     const backdropCloses = !modal.open;
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await backdropClosed;
     const removed = !document.querySelector('.asset-preview-modal');
     item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     modal = document.querySelector('.asset-preview-modal');
     const keyboardOpens = modal?.open;
+    const buttonClosed = new Promise(resolve => modal.addEventListener('close', resolve, { once: true }));
     modal.querySelector('button').click();
     const buttonCloses = !modal.open;
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await buttonClosed;
     return { opened, imageStaysOpen, backdropCloses, removed, keyboardOpens, buttonCloses };
   })()`);
   if (Object.values(assetPreview).some(value => !value)) {
