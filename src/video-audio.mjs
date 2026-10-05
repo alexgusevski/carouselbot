@@ -1,4 +1,4 @@
-import { loadVideo, releaseVideo } from "./video-media.mjs";
+import { loadVideo, releaseVideo, readVideoAudio } from "./video-media.mjs";
 
 // Offline mixing works even when an agent has no transient user gesture. Muted
 // media-element capture preserves source audio without playing it on speakers.
@@ -26,13 +26,8 @@ export async function prepareExportAudio(videos, duration) {
   const context = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate);
   let sources = 0;
   for (const video of videos) {
-    const probe = video.captureStream();
-    const hasAudio = probe.getAudioTracks().length > 0;
-    probe.getTracks().forEach((track) => track.stop());
-    if (!hasAudio) continue;
-    let buffer;
-    try { buffer = await context.decodeAudioData(await fetch(video.src).then((response) => response.arrayBuffer())); }
-    catch { throw new Error("The video audio could not be decoded for export. Convert the clip to H.264/AAC MP4 and retry."); }
+    const buffer = await readVideoAudio(video.src, context);
+    if (!buffer) continue;
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
