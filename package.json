@@ -37,7 +37,7 @@
     "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "wrangler": "^4.139.0"
   },
   "dependencies": {
