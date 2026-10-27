@@ -24,10 +24,7 @@ test("every local module import resolves to a committed source file", async () =
     "layer-interactions.mjs",
     "main.mjs",
     "project-fonts.mjs",
-    "project-share-codec.mjs",
-    "project-share-schema.mjs",
     "project-store.mjs",
-    "share-verification.mjs",
     "slide-background.mjs",
     "slide-renderer.mjs",
     "video-audio.mjs",
@@ -117,12 +114,59 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
 });
 
-test("Pages deployments bind the temporary share namespace", async () => {
+test("the Pages project is static: no Functions, bindings or cloud calls", async () => {
   const source = await readFile(join(root, "wrangler.jsonc"), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
-  assert.deepEqual(config.kv_namespaces, [{
-    binding: "SHARES",
-    id: "907668f59e2b401b96ac15bf2c09437e",
-  }]);
-  assert.deepEqual(config.env.preview.kv_namespaces, []);
+  assert.equal(config.name, "slides-editor", "the legacy-origin IndexedDB migration depends on this project name");
+  assert.equal(config.pages_build_output_dir, "./dist");
+  for (const key of ["kv_namespaces", "d1_databases", "r2_buckets", "vars", "services", "durable_objects", "env"]) {
+    assert.equal(config[key], undefined, `wrangler.jsonc must not declare ${key}`);
+  }
+  await assert.rejects(access(join(root, "functions")), "functions/ must not exist");
+
+  const clientFiles = ["app.js", "app-config.js", "domain-migration.js", "local-mcp-bridge.js",
+    ...(await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs")).map((name) => `src/${name}`)];
+  for (const file of clientFiles) {
+    const source = await readFile(join(root, file), "utf8");
+    assert.doesNotMatch(source, /["'`]\/api\//, `${file} must not call a server API`);
+    assert.doesNotMatch(source, /challenges\.cloudflare\.com|turnstile/i, `${file} must not load Turnstile`);
+  }
+
+  const headers = await readFile(join(root, "deploy", "_headers"), "utf8");
+  assert.doesNotMatch(headers, /challenges\.cloudflare\.com/);
+});
+
+test("the static build ships SEO files and a real 404 instead of SPA soft 404s", async () => {
+  execFileSync(process.execPath, ["scripts/build.mjs"], { cwd: root, stdio: "pipe" });
+  await assert.rejects(access(join(root, "dist", "_worker.js")));
+  await assert.rejects(access(join(root, "dist", "functions")));
+  const robots = await readFile(join(root, "dist", "robots.txt"), "utf8");
+  assert.match(robots, /^Sitemap: https:\/\/carousel\.bot\/sitemap\.xml$/m);
+  const sitemap = await readFile(join(root, "dist", "sitemap.xml"), "utf8");
+  assert.deepEqual([...sitemap.matchAll(/<loc>(.+?)<\/loc>/g)].map((match) => match[1]), ["https://carousel.bot/"]);
+  assert.match(await readFile(join(root, "dist", "404.html"), "utf8"), /Page not found/);
+  const redirects = (await readFile(join(root, "dist", "_redirects"), "utf8"))
+    .split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+  assert.deepEqual(redirects, ["/projects/* / 200", "/folders/* / 200", "/share/* / 302", "/share / 302"]);
+  assert.match(await readFile(join(root, "dist", "index.html"), "utf8"), /<link rel="canonical" href="https:\/\/carousel\.bot" \/>/);
+});
+
+test("the agent install prompt reads instructions from an immutable release tag", async () => {
+  const bridge = await readFile(join(root, "local-mcp-bridge.js"), "utf8");
+  const url = bridge.match(/const LOCAL_MCP_INSTRUCTIONS_URL = "([^"]+)"/)?.[1];
+  assert.match(url, /^https:\/\/raw\.githubusercontent\.com\/alexgusevski\/carouselbot\/v\d+\.\d+\.\d+\/packages\/mcp\/README\.md$/);
+  assert.doesNotMatch(bridge, /refs\/heads|\/main\/packages/);
+  const tag = url.match(/\/v(\d+\.\d+\.\d+)\//)[1];
+  const published = JSON.parse(await readFile(join(root, "packages/mcp/package.json"), "utf8")).version;
+  const [major, minor, patch] = tag.split(".").map(Number);
+  const [pMajor, pMinor, pPatch] = published.split(".").map(Number);
+  assert.ok(major < pMajor || (major === pMajor && (minor < pMinor || (minor === pMinor && patch <= pPatch))), "the pinned tag must be a released version");
+});
+
+test("the editor pairs with new companions and still connects to older ones", async () => {
+  const bridge = await readFile(join(root, "local-mcp-bridge.js"), "utf8");
+  assert.match(bridge, /pairingSupported: true/);
+  assert.match(bridge, /pairingKey: localMcpStoredPairingKey\(\)/);
+  assert.match(bridge, /response\.status === 202 && result\.pairingRequired/);
+  assert.match(bridge, /data-local-mcp-pairing-code/);
 });

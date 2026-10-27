@@ -18,11 +18,13 @@ export const DAEMON_INTERNAL_ACTIONS = Object.freeze([
   "begin_edit_session",
   "browser",
   "end_edit_session",
+  "forget_paired_browsers",
   "list_edit_sessions",
   "list_editors",
   "list_local_fonts",
   "list_recent_operations",
   "notify",
+  "pair_editor",
   "prepare_font",
   "prepare_media",
   "select_editor",
@@ -33,12 +35,17 @@ export const BRIDGE_PORT = Number(process.env.CAROUSELBOT_BRIDGE_PORT || process
 export const BRIDGE_URL = `http://${BRIDGE_HOST}:${BRIDGE_PORT}`;
 export const EDITOR_URL = "https://carousel.bot";
 export const LEGACY_EDITOR_URL = "https://slides-editor.pages.dev";
-export const ALLOWED_ORIGINS = new Set((process.env.CAROUSELBOT_ALLOWED_ORIGINS || process.env.SLIDE_STUDIO_ALLOWED_ORIGINS || [
-  EDITOR_URL,
-  LEGACY_EDITOR_URL,
-  "http://127.0.0.1:4173",
-  "http://localhost:4173",
-].join(",")).split(",").map((value) => value.trim()).filter(Boolean));
+// Local development servers are trusted only after an explicit opt-in. Any
+// unrelated project on Vite's default preview port must not reach the bridge.
+export const DEV_EDITOR_ORIGINS = Object.freeze(["http://127.0.0.1:4173", "http://localhost:4173"]);
+export function allowedOrigins(env = process.env) {
+  const configured = env.CAROUSELBOT_ALLOWED_ORIGINS || env.SLIDE_STUDIO_ALLOWED_ORIGINS;
+  const origins = configured
+    ? configured.split(",")
+    : [EDITOR_URL, LEGACY_EDITOR_URL, ...(env.CAROUSELBOT_DEV_ORIGINS === "1" ? DEV_EDITOR_ORIGINS : [])];
+  return new Set(origins.map((value) => value.trim()).filter(Boolean));
+}
+export const ALLOWED_ORIGINS = allowedOrigins();
 export const GUIDANCE_PATH = join(PACKAGE_ROOT, "guidance", "design.md");
 
 function defaultStateDirectory() {
@@ -58,3 +65,4 @@ export const STATE_DIRECTORY = defaultStateDirectory();
 export const DAEMON_STATE_PATH = join(STATE_DIRECTORY, `daemon-${BRIDGE_PORT}.json`);
 export const DAEMON_LOCK_PATH = join(STATE_DIRECTORY, `daemon-${BRIDGE_PORT}.lock`);
 export const AUDIT_LOG_PATH = join(STATE_DIRECTORY, `operations-${BRIDGE_PORT}.jsonl`);
+export const PAIRED_BROWSERS_PATH = join(STATE_DIRECTORY, "paired-browsers.json");

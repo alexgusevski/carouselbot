@@ -20,14 +20,23 @@ test("shares one daemon while preserving per-agent editor selection", async () =
   const origin = "https://carousel.bot";
   const base = `http://127.0.0.1:${port}`;
 
+  let pairingKey = null;
   async function connect(editorId) {
-    const response = await fetch(`${base}/connect`, {
+    const attempt = () => fetch(`${base}/connect`, {
       method: "POST",
       headers: { Origin: origin, "Content-Type": "application/json" },
-      body: JSON.stringify({ editorId, protocolVersion: 3, pageUrl: `${origin}/#${editorId}`, state: { activeProjectId: null } }),
+      body: JSON.stringify({ editorId, protocolVersion: 3, pageUrl: `${origin}/#${editorId}`, state: { activeProjectId: null }, pairingSupported: true, pairingKey }),
     });
+    let response = await attempt();
+    if (response.status === 202) {
+      const { pairingCode } = await response.json();
+      await first.call("pair_editor", { code: pairingCode });
+      response = await attempt();
+    }
     assert.equal(response.status, 200);
-    return response.json();
+    const connected = await response.json();
+    pairingKey = connected.pairingKey || pairingKey;
+    return connected;
   }
 
   const editorA = await connect("editor-a");

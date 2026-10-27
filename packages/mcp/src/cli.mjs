@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { companionDoctor, companionRestart } from "./companion.mjs";
+import { companionDoctor, companionRestart, createCompanion } from "./companion.mjs";
 import { EDITOR_URL, PACKAGE_NAME, PACKAGE_VERSION } from "./config.mjs";
 import { runSetup } from "./setup.mjs";
 import { serveMcp } from "./stdio-server.mjs";
@@ -21,6 +21,21 @@ async function main() {
     await runCall(arguments_);
     return;
   }
+  if (command === "pair") {
+    const forgetAll = arguments_.includes("--forget-all");
+    const code = arguments_.find((value) => !value.startsWith("--"));
+    if (!forgetAll && !code) throw new Error("Usage: carouselbot pair <code shown in CarouselBot>  |  carouselbot pair --forget-all");
+    const companion = await createCompanion("CarouselBot CLI", PACKAGE_VERSION);
+    try {
+      const result = forgetAll
+        ? await companion.call("forget_paired_browsers")
+        : await companion.call("pair_editor", { code });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    } finally {
+      await companion.close();
+    }
+    return;
+  }
   if (command === "doctor") {
     const health = await companionDoctor();
     process.stdout.write(`${JSON.stringify({ package: PACKAGE_NAME, packageVersion: PACKAGE_VERSION, editor: EDITOR_URL, daemon: health }, null, 2)}\n`);
@@ -36,7 +51,7 @@ async function main() {
     return;
   }
   if (command === "help" || command === "--help" || command === "-h") {
-    process.stdout.write(`CarouselBot MCP ${PACKAGE_VERSION}\n\nUsage:\n  carouselbot serve [--agent=claude|codex|hermes|opencode|openclaw]\n  carouselbot setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  carouselbot call <tool> [--json '{"key":"value"}'] [--stdin]\n  carouselbot doctor\n  carouselbot restart\n  carouselbot version\n`);
+    process.stdout.write(`CarouselBot MCP ${PACKAGE_VERSION}\n\nUsage:\n  carouselbot serve [--agent=claude|codex|hermes|opencode|openclaw]\n  carouselbot setup [--client=claude,codex,hermes,opencode,openclaw] [--yes] [--dry-run]\n  carouselbot call <tool> [--json '{"key":"value"}'] [--stdin]\n  carouselbot pair <code> | --forget-all\n  carouselbot doctor\n  carouselbot restart\n  carouselbot version\n`);
     return;
   }
   throw new Error(`Unknown command: ${command}`);

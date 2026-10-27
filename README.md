@@ -4,7 +4,7 @@ A focused, local-first editor for creating social carousel images.
 
 **Canonical site:** [carousel.bot](https://carousel.bot)
 
-Editing runs in the browser. Photos and projects stay in IndexedDB on the user's device unless the user explicitly creates a temporary project share link.
+Editing runs in the browser. Photos and projects stay in IndexedDB on the user's device. The site is fully static: no server stores or receives projects.
 
 ## AI agent control
 
@@ -14,7 +14,7 @@ The open-source local MCP companion lets Claude Code, Codex, Hermes, OpenCode, O
 npx carouselbot@latest setup
 ```
 
-Open [carousel.bot](https://carousel.bot) in a normal local browser and click **Connect AI** after the agent starts the companion. The MCP can create projects and slides, edit text and image properties, manage assets and history, render temporary previews for visual inspection, and export PNG files locally.
+Open [carousel.bot](https://carousel.bot) in a normal local browser and click **Connect AI** after the agent starts the companion. The first time, CarouselBot shows a one-time code: give it to your agent or run `npx carouselbot@latest pair <code>`, and that browser stays paired. The MCP can create projects and slides, edit text and image properties, manage assets and history, render temporary previews for visual inspection, and export PNG files locally.
 
 The npm package is only a distribution surface. Its source, skill, guidance, and tests live under `packages/mcp/` in this repository. Existing `slides-studio-mcp` installations are supported by the compatibility package under `packages/slides-studio-mcp/`.
 
@@ -29,7 +29,6 @@ The npm package is only a distribution surface. Its source, skill, guidance, and
 - Supports editable text with installed Mac fonts, text color, configurable outlines, per-line backgrounds, and full-box backgrounds
 - Provides a TikTok placement preview that is never exported
 - Shares or downloads full-resolution, 1080-pixel-wide PNGs at each slide's chosen aspect ratio
-- Creates 24-hour links to editable project snapshots that import into the recipient's local **Shared** folder
 - Allows local AI agents to create projects in folders and move them through a loopback-only MCP companion
 
 ## Run locally
@@ -39,7 +38,7 @@ npm install
 npm start
 ```
 
-Then open [http://localhost:4173](http://localhost:4173).
+Then open [http://localhost:4173](http://localhost:4173). To connect the local MCP companion to this dev server, start the agent with `CAROUSELBOT_DEV_ORIGINS=1`; the companion trusts only carousel.bot and slides-editor.pages.dev by default.
 
 ## Test
 
@@ -59,9 +58,9 @@ The browser editor is organized as a small ES-module graph under `src/`. Pure mo
 
 ## Deploy to Cloudflare
 
-This project uses Cloudflare Pages Direct Upload. The static editor lives in `dist/`; Pages Functions under `functions/api/shares/` use a Workers KV namespace for optional 24-hour links. The `SHARES` KV binding is declared in `wrangler.jsonc`, which is the source of truth for Pages deployments. Keep the account on the Workers Free plan if shares must stop when its free usage limits are reached. KV's Free plan limits include 1 GB of stored data, 1,000 writes/day, and 100,000 reads/day; a single compressed share is capped at 24 MiB by this app.
+This project uses Cloudflare Pages Direct Upload of a static build in `dist/`. There are no Pages Functions, bindings, or environment variables, and CI fails if a `functions/` directory or a client-side `/api/` call appears. `deploy/_redirects` serves the client routes (`/projects/*`, `/folders/*`) from `index.html` and sends retired `/share/*` links to the project list; every other unknown path, including the retired `/api/shares` endpoints, returns `404.html` with a 404 status. `deploy/robots.txt` and `deploy/sitemap.xml` list the single canonical page.
 
-For local share testing, use `npm run build` followed by `npx wrangler pages dev dist --kv=SHARES`. The ordinary `npm start` server serves the editor and share routes but does not emulate KV.
+To preview the exact Pages routing locally, run `npm run build` followed by `npx wrangler pages dev dist`.
 
 ```bash
 npm run deploy

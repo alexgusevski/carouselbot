@@ -49,7 +49,6 @@ import {
   projectCanvasDimensions,
   remapLayerGeometryBetweenCanvases,
   projectPath,
-  sharePath,
   rgbToHex,
   rotateDelta,
   perLineBackgroundSvgPath,
@@ -197,16 +196,10 @@ test("routes dashboard and encoded project URLs", () => {
   assert.deepEqual(routeFromPathname("/projects/%E0%A4%A"), { view: "not-found" });
   assert.deepEqual(routeFromPathname("/unknown"), { view: "not-found" });
   assert.equal(projectPath("a b/c"), "/projects/a%20b%2Fc");
-  const shareId = "mpt5n1hd-0123456789abcdef0123456789abcdef";
-  assert.equal(sharePath(shareId), `/share/${shareId}`);
-  assert.deepEqual(routeFromPathname(`/share/${shareId}`), { view: "share", shareId });
-  const signedShareId = `${shareId}.${"a".repeat(64)}`;
-  assert.deepEqual(routeFromPathname(sharePath(signedShareId)), { view: "share", shareId: signedShareId });
-  assert.deepEqual(routeFromPathname(`${sharePath(signedShareId)}/`), { view: "share", shareId: signedShareId });
-  for (const signature of ["a".repeat(63), "a".repeat(65), "g".repeat(64)]) {
-    assert.deepEqual(routeFromPathname(`/share/${shareId}.${signature}`), { view: "not-found" });
+  // Retired cloud share links land on the local project list.
+  for (const path of ["/share", "/share/mpt5n1hd-0123456789abcdef0123456789abcdef", "/share/not-a-share/"]) {
+    assert.deepEqual(routeFromPathname(path), { view: "dashboard" });
   }
-  assert.deepEqual(routeFromPathname("/share/not-a-share"), { view: "not-found" });
 });
 
 test("normalizes virtual folder paths with one leading slash and a bounded length", () => {
