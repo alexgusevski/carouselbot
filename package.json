@@ -37,10 +37,10 @@
     "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/client": "2.4.0",
     "wrangler": "^4.153.0"
   },
   "dependencies": {
-    "mediabunny": "1.60.0"
+    "mediabunny": "1.62.1"
   }
 }
