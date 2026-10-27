@@ -8,7 +8,7 @@ applied to the latest release line.
 | Component | Supported |
 | --- | --- |
 | Hosted editor at `carousel.bot` | Current deployment |
-| `carouselbot` and `slides-studio-mcp` 0.4.2+ | Yes |
+| `carouselbot` and `slides-studio-mcp` 0.4.3+ | Yes |
 | Earlier npm versions | No |
 
 ## Active security controls
@@ -26,20 +26,18 @@ applied to the latest release line.
   compatibility publish can be retried without republishing the canonical package.
 - **Installed MCP version:** setup writes an exact package version into the local
   MCP configuration. Users update deliberately by rerunning `npx carouselbot@latest setup`.
-- **Application:** user projects stay in browser storage unless the user clicks
-  **Share link**, which uploads a compressed project snapshot to a private
-  Cloudflare KV namespace for 24 hours. Possession of its signed link grants
-  access to all slides, source assets, and imported fonts in that snapshot.
-  Recipients save independent local copies. The optional MCP companion binds to loopback,
-  checks the browser origin, and uses random local bearer tokens.
+- **Application:** the editor is a static site. Projects, images and fonts stay
+  in the browser's IndexedDB and are never uploaded. The optional MCP companion
+  binds to loopback, accepts only `https://carousel.bot` and
+  `https://slides-editor.pages.dev` (local dev origins need
+  `CAROUSELBOT_DEV_ORIGINS=1`), requires the user to approve each new browser
+  once with a one-time code, keeps its state folder owner-only, and uses random
+  local bearer tokens.
 
 The release workflow has no npm-token fallback: if the npm Trusted Publisher
 configuration does not match this repository, `.github/workflows/publish.yml`,
 and the `npm-release` environment, publishing fails closed. Provenance is visible
 on npm for releases produced by that workflow; older releases may predate it.
-
-Share validation, Turnstile, atomic quotas, and operational limits are documented
-in [Sharing safeguards](docs/SHARING-OPERATIONS.md).
 
 ## Trust boundaries
 

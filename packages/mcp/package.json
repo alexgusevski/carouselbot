@@ -1,6 +1,6 @@
 {
   "name": "carouselbot",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Local-first MCP companion for the hosted CarouselBot editor",
   "type": "module",
   "license": "MIT",
@@ -21,15 +21,16 @@
     "src",
     "guidance",
     "skill",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "fontkit": "^2.0.4",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "publishConfig": {
     "access": "public",

@@ -152,7 +152,7 @@ export async function createCarouselBotMcpServer(companion) {
   let guidanceRead = false;
   let identifiedAs = null;
   const server = new McpServer({ name: PACKAGE_NAME, version: PACKAGE_VERSION }, {
-    instructions: `First call list_editors and use the registered local browser tab. Never open or connect CarouselBot through a sandboxed agent browser. If no editor is listed, retry briefly because browser reconnection is automatic, then ask the user to open ${EDITOR_URL} in their normal browser and click Connect AI. Companion compatibility and reconnects are automatic. Do not parallel-retry an action that reports an unsupported internal action; retry once after list_editors so automatic recovery can finish. Never restart a healthy companion for a transient editor disconnect. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel workers can share the same browser tab and project; sessions track targets without exclusive locks. Use render_slide to inspect actual pixels.`,
+    instructions: `First call list_editors and use the registered local browser tab. Never open or connect CarouselBot through a sandboxed agent browser. If no editor is listed, retry briefly because browser reconnection is automatic, then ask the user to open ${EDITOR_URL} in their normal browser and click Connect AI. A new browser shows a pairing code: ask the user to tell you that code, then call pair_browser with it. Never guess or reuse a code. Companion compatibility and reconnects are automatic. Do not parallel-retry an action that reports an unsupported internal action; retry once after list_editors so automatic recovery can finish. Never restart a healthy companion for a transient editor disconnect. Before edits call get_design_guidance, then begin_edit_session; pass editSessionId to every edit and end it in cleanup. Parallel workers can share the same browser tab and project; sessions track targets without exclusive locks. Use render_slide to inspect actual pixels.`,
     capabilities: { tools: {}, resources: {} },
   });
 
@@ -167,7 +167,7 @@ export async function createCarouselBotMcpServer(companion) {
 
   function register(name, description, inputSchema, handler, annotations = {}) {
     const normalizedAnnotations = { openWorldHint: false, ...annotations };
-    const guidanceExempt = new Set(["select_editor", "begin_edit_session", "end_edit_session", "open_project", "set_view", "show_notification"]);
+    const guidanceExempt = new Set(["pair_browser", "select_editor", "begin_edit_session", "end_edit_session", "open_project", "set_view", "show_notification"]);
     definitions.set(name, { inputSchema, handler, mutating: !normalizedAnnotations.readOnlyHint && !guidanceExempt.has(name) });
     server.registerTool(name, { title: name.split("_").map((part) => part[0].toUpperCase() + part.slice(1)).join(" "), description, inputSchema, annotations: normalizedAnnotations }, async (args, context) => {
       await identify(context);
@@ -198,6 +198,7 @@ export async function createCarouselBotMcpServer(companion) {
   }, { readOnlyHint: true, idempotentHint: true });
 
   register("list_editors", "Check the user's real local browser connection and show which registered CarouselBot tab this session targets. Call this instead of opening a sandboxed browser.", z.object({}).strict(), () => companion.call("list_editors"), { readOnlyHint: true });
+  register("pair_browser", "Approve a CarouselBot browser tab that is waiting for pairing. Use only the code the user read from their own CarouselBot tab; the approval lets that tab exchange edits and local media with this computer.", z.object({ code: z.string().min(8).max(16) }).strict(), ({ code }) => companion.call("pair_editor", { code }), { destructiveHint: false, idempotentHint: true });
   register("select_editor", "Select a connected browser tab for this MCP session.", z.object({ editorId: id }).strict(), ({ editorId }) => companion.call("select_editor", { editorId }), { destructiveHint: false, idempotentHint: true });
   register("begin_edit_session", "Track one browser tab and optionally one project for an editing agent without locking either. Any number of workers may share a tab or project. Pass editSessionId to every edit.", z.object({ editorId: optionalId, projectId: optionalId, purpose: z.string().min(1).max(160).optional() }).strict(), (args) => companion.call("begin_edit_session", args), { destructiveHint: false });
   register("end_edit_session", "End an editing session as soon as an editing task finishes or fails.", z.object({ editSessionId: id }).strict(), (args) => companion.call("end_edit_session", args), { destructiveHint: false, idempotentHint: true });

@@ -32,6 +32,7 @@ Before using any browser or making edits, call `list_editors`. A registered edit
 - If an editor is listed, use the MCP tools against it. Do not open CarouselBot or click **Connect AI** with browser automation.
 - Sandboxed, remote, and agent-controlled browser sessions are separate from the user's local browser and usually cannot reach the local companion. Never use one to test or establish the connection.
 - If no editor is listed, ask the user to open the editor in their normal browser on the same computer, click **Connect AI**, and accept the browser permission. Then retry `list_editors`.
+- If `list_editors` reports `pendingBrowserPairings`, ask the user for the code CarouselBot shows and call `pair_browser` with it (CLI fallback: `npx -y carouselbot@latest pair <code>`). Never guess a code.
 - A loaded MCP server and a connected browser editor are different states. Determine browser connectivity only from `list_editors`, not from a sandbox browser or the agent's tool catalog.
 
 Browser reconnection is automatic. After `EDITOR_DISCONNECTED`, `EDITOR_RELOADED`, a dropped browser request, or an empty `list_editors` result that follows a working connection, wait briefly and retry `list_editors` several times. Do not restart the companion for a transient browser disconnect: restarting invalidates every browser session and makes recovery slower. If the editor does not return, ask the user to keep or reload the real editor tab; preserve completed project work and begin a new edit session after it reconnects.

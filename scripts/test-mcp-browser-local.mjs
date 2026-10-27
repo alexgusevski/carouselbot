@@ -46,7 +46,10 @@ const web = localPagePort
     stdio: ["ignore", "pipe", "pipe"],
   })
   : null;
-const mcp = spawn(process.execPath, ["packages/mcp/src/cli.mjs", "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+// CAROUSELBOT_TEST_MCP_CLI runs the suite against another companion build,
+// for example the published package, to prove editor compatibility.
+const mcpCli = process.env.CAROUSELBOT_TEST_MCP_CLI || "packages/mcp/src/cli.mjs";
+const mcp = spawn(process.execPath, [mcpCli, "serve"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
 let diagnostics = "";
 let editSessionId = null;
 
@@ -97,7 +100,7 @@ function rpc(method, params = {}, timeout = 100_000) {
 }
 
 async function tool(name, args = {}) {
-  const sessionExempt = new Set(["get_design_guidance", "list_editors", "list_edit_sessions", "list_recent_operations", "begin_edit_session", "end_edit_session"]);
+  const sessionExempt = new Set(["get_design_guidance", "list_editors", "pair_browser", "list_edit_sessions", "list_recent_operations", "begin_edit_session", "end_edit_session"]);
   const arguments_ = editSessionId && !sessionExempt.has(name) ? { ...args, editSessionId } : args;
   const result = await rpc("tools/call", { name, arguments: arguments_ });
   if (result.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
@@ -105,7 +108,7 @@ async function tool(name, args = {}) {
 }
 
 async function restartCompanion() {
-  const child = spawn(process.execPath, ["packages/mcp/src/cli.mjs", "restart"], {
+  const child = spawn(process.execPath, [mcpCli, "restart"], {
     cwd: root,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -367,7 +370,21 @@ try {
   })()`);
   if (statusAlignment?.justifySelf !== "start" || statusAlignment.justifyContent !== "flex-start" || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
   await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
+  // Companions from 0.4.3 require a one-time approval of each new browser.
+  // Older companions (0.4.2 and earlier) connect without pairing.
+  const pairingRequired = !process.env.CAROUSELBOT_TEST_MCP_CLI;
+  if (pairingRequired) {
+    const pairingCode = await waitFor(() => evaluate(cdp, `(() => {
+      const panel = document.querySelector('[data-local-mcp-pairing]');
+      return panel && !panel.hidden ? panel.querySelector('[data-local-mcp-pairing-code]').textContent : null;
+    })()`), "The editor did not show a pairing code.");
+    if ((await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId)) {
+      throw new Error("The editor connected before the user approved it.");
+    }
+    await tool("pair_browser", { code: pairingCode });
+  }
   await waitFor(async () => (await tool("list_editors")).structuredContent.editors.some((editor) => editor.id === initialConnection.editorId), "Editor did not connect.");
+  if (pairingRequired && !await evaluate(cdp, `Boolean(localStorage.getItem("carouselbot:mcp-pairing-key"))`)) throw new Error("The pairing key was not stored.");
   const remembered = await waitFor(() => evaluate(cdp, `localStorage.getItem("carouselbot:mcp-connected")`), "Browser did not acknowledge its MCP connection.");
   if (remembered !== "1") throw new Error("Successful MCP connection was not remembered.");
   await cdp.send("Page.reload", { ignoreCache: true });

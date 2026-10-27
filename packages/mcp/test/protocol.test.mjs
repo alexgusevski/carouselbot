@@ -67,7 +67,7 @@ test("serves a complete legacy-compatible stdio MCP surface", async () => {
 
     const listed = await rpc.request("tools/list");
     const names = listed.result.tools.map((tool) => tool.name);
-    for (const name of ["get_design_guidance", "list_editors", "begin_edit_session", "end_edit_session", "list_edit_sessions", "list_recent_operations", "inspect_editor", "copy_all_texts", "list_local_fonts", "list_project_fonts", "create_project", "duplicate_project", "move_project", "add_slide", "add_text", "fit_text_boxes", "import_font", "import_asset", "add_image", "render_slide", "export_project", "apply_operations"]) assert.ok(names.includes(name), `missing ${name}`);
+    for (const name of ["get_design_guidance", "list_editors", "pair_browser", "begin_edit_session", "end_edit_session", "list_edit_sessions", "list_recent_operations", "inspect_editor", "copy_all_texts", "list_local_fonts", "list_project_fonts", "create_project", "duplicate_project", "move_project", "add_slide", "add_text", "fit_text_boxes", "import_font", "import_asset", "add_image", "render_slide", "export_project", "apply_operations"]) assert.ok(names.includes(name), `missing ${name}`);
     assert.ok(names.length >= 30, `expected complete surface, received ${names.length}`);
     assert.ok(listed.result.tools.every((tool) => tool.annotations.openWorldHint === false), "every tool should declare its closed local domain");
     const annotations = Object.fromEntries(listed.result.tools.map((tool) => [tool.name, tool.annotations]));
