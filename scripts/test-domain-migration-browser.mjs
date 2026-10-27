@@ -149,10 +149,14 @@ try {
   canonicalCdp = connectCdp(canonicalTarget.webSocketDebuggerUrl);
   await canonicalCdp.ready;
   await canonicalCdp.send("Runtime.enable");
-  const imported = await waitFor(() => evaluate(canonicalCdp, `new Promise((resolve) => {
+  const imported = await waitFor(() => evaluate(canonicalCdp, `new Promise(async (resolve) => {
+    // Opening the database before the app upgrades it would create version 1
+    // and block the app's version 3 upgrade, so wait for the app's schema.
+    if (!(await indexedDB.databases()).some((db) => db.name === "carouselbot-db" && db.version === 3)) return resolve(null);
     const request = indexedDB.open("carouselbot-db");
     request.onerror = () => resolve(null);
     request.onsuccess = () => {
+      setTimeout(() => request.result.close(), 0);
       const item = request.result.transaction("projects", "readonly").objectStore("projects").get("migration-browser-project");
       item.onerror = () => resolve(null);
       item.onsuccess = () => resolve(item.result || null);
