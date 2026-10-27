@@ -1,0 +1,7 @@
+# The editor is a static single-page app. Its client-side routes load index.html;
+# every other unknown path, including the retired /api/shares endpoints, gets 404.html with a 404 status.
+/projects/* / 200
+/folders/* / 200
+# Cloud share links were retired in October 2026. Old links open the local project list.
+/share/* / 302
+/share / 302

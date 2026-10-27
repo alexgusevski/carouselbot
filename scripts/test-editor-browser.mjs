@@ -31,38 +31,14 @@ const contentTypes = new Map([
 
 let web;
 let pageUrl = remoteUrl;
-let pauseShareResponse = false;
-let resumeShareResponse;
+const apiRequests = [];
 if (!pageUrl) {
-  const shares = new Map();
-  let shareCounter = 0;
   web = createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    if (url.pathname === "/api/shares/config") {
-      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ siteKey: "test-site-key" }));
-      return;
-    }
-    if (url.pathname === "/api/shares" && request.method === "POST") {
-      const chunks = [];
-      for await (const chunk of request) chunks.push(chunk);
-      const id = `${Date.now().toString(36)}-${(++shareCounter).toString(16).padStart(32, "0")}.${"a".repeat(64)}`;
-      const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
-      shares.set(id, { payload: Buffer.concat(chunks), format: request.headers["x-carouselbot-share-format"], expiresAt });
-      response.writeHead(201, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ id, expiresAt }));
-      return;
-    }
-    const shareId = url.pathname.match(/^\/api\/shares\/([^/]+)$/)?.[1];
-    if (shareId && request.method === "GET") {
-      const share = shares.get(shareId);
-      if (!share || share.expiresAt <= Date.now()) {
-        response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "This share link has expired." }));
-        return;
-      }
-      if (pauseShareResponse) await new Promise((resolve) => { resumeShareResponse = resolve; });
-      response.writeHead(200, { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": share.format,
-        "Content-Length": share.payload.byteLength, "Cache-Control": "no-store" });
-      response.end(share.payload);
+    if (url.pathname.startsWith("/api/")) {
+      // The editor is static and local-first: it must never call a cloud API.
+      apiRequests.push(`${request.method} ${url.pathname}`);
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
       return;
     }
     const relativePath = url.pathname === "/" || /^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname)
@@ -2256,124 +2232,43 @@ try {
     if (runtimeErrors[index] === avc1DescriptionWarning) runtimeErrors.splice(index, 1);
   }
 
-  await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
+  // Cloud share links were retired. Old links must land on the local project
+  // list, and the editor must not offer a link button or call a server API.
+  const projectCountBeforeRetiredShare = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.length`);
+  const retiredShareUrl = `${pageUrl}/share/mpt5n1hd-0123456789abcdef0123456789abcdef`;
+  await cdp.send("Page.navigate", { url: retiredShareUrl });
+  await waitFor(
+    () => evaluate(cdp, `location.pathname === '/' && Boolean(document.querySelector('.dashboard')) && window.carouselBotAgent?.inspect().projects.length === ${projectCountBeforeRetiredShare}`),
+    "A retired share link did not land on the local project list.",
+  );
+  const projectUrl = `${pageUrl}/projects/${encodeURIComponent(projectId)}`;
+  await cdp.send("Page.navigate", { url: projectUrl });
   await waitFor(
     () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
-    "The project for share-link coverage did not reopen.",
+    "The project did not reopen after the retired share route.",
   );
-  const projectCountBeforeShare = await evaluate(cdp, `window.carouselBotAgent.inspect().projects.length`);
-  if (!remoteUrl) await evaluate(cdp, `window.turnstile = { render(element, options) { setTimeout(() => options.callback('test-token'), 0); return 'test-widget'; }, remove() {} }`);
-  await evaluate(cdp, `document.querySelector('[data-action="share-project-link"]').click()`);
-  const firstShareUrl = await waitFor(
-    () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
-    "Creating an editable project share link did not show the copy dialog.",
-  );
-  if (!firstShareUrl.startsWith(`${pageUrl}/share/`)) throw new Error(`Invalid share URL: ${firstShareUrl}`);
-  if (!remoteUrl) pauseShareResponse = true;
-  await cdp.send("Page.navigate", { url: firstShareUrl });
-  if (!remoteUrl) {
-    try {
-      await waitFor(
-        () => evaluate(cdp, `document.querySelector('.share-import-card[data-state="loading"] .share-import-spinner') !== null`),
-        "Opening a share link did not show a loading spinner.",
-      );
-      for (const width of [1137, 375]) {
-        await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 800, deviceScaleFactor: 1, mobile: false });
-        const layout = await evaluate(cdp, `(() => {
-          const card = document.querySelector('.share-import-card');
-          const bounds = card.getBoundingClientRect();
-          const headerBottom = document.querySelector('.app-header').getBoundingClientRect().bottom;
-          return {
-            width: innerWidth,
-            scrollWidth: document.documentElement.scrollWidth,
-            cardWidth: bounds.width,
-            horizontalOffset: Math.abs(bounds.left + bounds.width / 2 - innerWidth / 2),
-            verticalOffset: Math.abs(bounds.top + bounds.height / 2 - (headerBottom + innerHeight) / 2),
-            headingSize: parseFloat(getComputedStyle(card.querySelector('h1')).fontSize),
-            spinnerAnimation: getComputedStyle(card.querySelector('.share-import-spinner')).animationName,
-          };
-        })()`);
-        if (layout.width !== width || layout.scrollWidth > width || layout.cardWidth > width - 24
-          || layout.horizontalOffset > 2 || layout.verticalOffset > 2
-          || layout.headingSize > 40 || layout.spinnerAnimation !== "share-import-spin") {
-          throw new Error(`Shared project loading card is not centered and compact: ${JSON.stringify(layout)}`);
-        }
-      }
-    } finally {
-      await cdp.send("Emulation.clearDeviceMetricsOverride");
-      pauseShareResponse = false;
-      resumeShareResponse?.();
-      resumeShareResponse = undefined;
-    }
+  if (await evaluate(cdp, `Boolean(document.querySelector('[data-action="share-project-link"]'))`)) {
+    throw new Error("The retired cloud share link button is still shown.");
   }
-  const firstImported = await waitFor(
-    () => evaluate(cdp, `(() => {
-      const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;
-      return project?.folderPath === '/Shared' && project.name === 'Browser regression project'
-        && location.pathname === '/projects/' + project.id ? project : null;
-    })()`),
-    "Opening a share link did not import an editable project into Shared.",
-  );
-  if (firstImported.id === projectId || firstImported.slideCount !== 2) {
-    throw new Error(`The imported project was not an independent full copy: ${JSON.stringify(firstImported)}`);
-  }
-  await cdp.send("Page.navigate", { url: firstShareUrl });
-  await waitFor(
-    () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && window.carouselBotAgent.inspect().projects.length === ${projectCountBeforeShare + 1}`),
-    "Opening the same share link again created a duplicate instead of reopening its local copy.",
-  );
-
-  await cdp.send("Page.navigate", { url: `${pageUrl}/projects/${encodeURIComponent(projectId)}` });
-  await waitFor(
-    () => evaluate(cdp, `document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
-    "The original project was changed by importing its share.",
-  );
-  if (!remoteUrl) await evaluate(cdp, `window.turnstile = { render(element, options) { setTimeout(() => options.callback('test-token'), 0); return 'test-widget'; }, remove() {} };`);
-  await evaluate(cdp, `(() => {
-    const title = document.querySelector('.project-title-input');
-    title.value = 'Updated browser regression project';
-    title.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector('[data-action="share-project-link"]').click();
-    return true;
-  })()`);
-  const secondShareUrl = await waitFor(
-    () => evaluate(cdp, `document.querySelector('.share-link-dialog input')?.value || null`),
-    "Creating a second snapshot link failed.",
-  );
-  if (secondShareUrl === firstShareUrl) throw new Error("A new share must create a unique snapshot link.");
-  await cdp.send("Page.navigate", { url: secondShareUrl });
-  const secondImported = await waitFor(
-    () => evaluate(cdp, `(() => {
-      const project = window.carouselBotAgent?.inspect({ includeAllProjects: false }).project;
-      return project?.folderPath === '/Shared' && project.name === 'Updated browser regression project'
-        && location.pathname === '/projects/' + project.id ? project : null;
-    })()`),
-    "The new share link did not import the updated snapshot.",
-  );
-  if (secondImported.id === firstImported.id) throw new Error("Two snapshot links imported into one project.");
-  await cdp.send("Page.navigate", { url: firstShareUrl });
-  await waitFor(
-    () => evaluate(cdp, `location.pathname === '/projects/${firstImported.id}' && document.querySelector('.project-title-input')?.value === 'Browser regression project'`),
-    "Creating an updated snapshot altered the earlier imported project.",
-  );
+  if (apiRequests.length) throw new Error(`The static editor called a server API: ${apiRequests.join(", ")}`);
 
   if (!remoteUrl) {
     const memory = await verifyEditorMemory({ cdp, evaluate, waitFor, pageUrl });
     process.stdout.write('Memory regression: ' + JSON.stringify(memory) + '\n');
-    await cdp.send("Page.navigate", { url: firstShareUrl });
+    await cdp.send("Page.navigate", { url: projectUrl });
     await waitFor(() => evaluate(cdp, `Boolean(document.querySelector('.project-title-input'))`), "Memory fixture did not restore the test project");
   }
 
   const errorsBeforeSecurityFixture = runtimeErrors.length;
   // Existing IndexedDB documents must remain safe even if they predate the
-  // stricter share decoder. Exercise the browser's HTML parser after reload.
+  // stricter validation. Exercise the browser's HTML parser after reload.
   if (!remoteUrl) {
     await evaluate(cdp, `(async () => {
       const db = await new Promise((resolve, reject) => { const r = indexedDB.open('carouselbot-db'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
       await new Promise((resolve, reject) => {
         const tx = db.transaction('projects', 'readwrite');
         const store = tx.objectStore('projects');
-        const request = store.get(${JSON.stringify(firstImported.id)});
+        const request = store.get(${JSON.stringify(projectId)});
         request.onsuccess = () => {
           const project = request.result;
           const attack = '"/><a id="security-injected" href="#forged">Forged UI</a><img src="';
@@ -2419,7 +2314,8 @@ try {
     nativeProjectDeletion: true,
     dashboardProjectFilmstrip: true,
     nativeFolderOrganization: true,
-    shareLinkSnapshots: true,
+    retiredShareRouteToDashboard: true,
+    noServerApiCalls: apiRequests.length === 0,
     storedProjectInjectionBlocked: !remoteUrl,
     deepRouteReload: true,
     missingRouteFallback: true,

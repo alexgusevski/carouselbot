@@ -34,6 +34,11 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 
+      - name: Keep the Pages site static
+        run: |
+          test ! -e functions
+          ! grep -rnE "[\"'\`]/api/|challenges\.cloudflare\.com" src app.js app-config.js domain-migration.js local-mcp-bridge.js
+
       - name: Run tests
         run: npm test
 
