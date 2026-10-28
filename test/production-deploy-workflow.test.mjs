@@ -20,5 +20,5 @@ test("production deploys only verified main with narrowly scoped Cloudflare cred
     /\.\/node_modules\/\.bin\/wrangler pages deploy dist --project-name slides-editor --branch main/,
   );
   assert.match(workflow, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
-  assert.match(workflow, /CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/);
+  assert.match(workflow, /CLOUDFLARE_ACCOUNT_ID: 0013d6c77fa95280762f403d53c52869/);
 });
