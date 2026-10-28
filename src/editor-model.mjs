@@ -143,10 +143,6 @@ export function projectPath(projectId) {
   return `/projects/${encodeURIComponent(projectId)}`;
 }
 
-export function sharePath(shareId) {
-  return `/share/${encodeURIComponent(shareId)}`;
-}
-
 export function folderDisplayName(value) {
   return String(value ?? "").replace(/^\/+/, "");
 }
@@ -312,17 +308,8 @@ export function folderRoutePath(value) {
 
 export function routeFromPathname(pathname = window.location.pathname) {
   if (pathname === "/" || pathname === "/index.html") return { view: "dashboard" };
-  const shareMatch = pathname.match(/^\/share\/([^/]+)\/?$/);
-  if (shareMatch) {
-    try {
-      const shareId = decodeURIComponent(shareMatch[1]);
-      return /^[0-9a-z]{8}-[0-9a-f]{32}(?:\.[0-9a-f]{64})?$/.test(shareId)
-        ? { view: "share", shareId }
-        : { view: "not-found" };
-    } catch {
-      return { view: "not-found" };
-    }
-  }
+  // Cloud share links were retired; old /share/* links land on the project list.
+  if (/^\/share(?:\/|$)/.test(pathname)) return { view: "dashboard" };
   const projectMatch = pathname.match(/^\/projects\/([^/]+)\/?$/);
   if (projectMatch) {
     try {

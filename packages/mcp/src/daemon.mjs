@@ -2,14 +2,16 @@
 import { readBoundedFile } from "./bounded-file.mjs";
 import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, delimiter, extname } from "node:path";
 import {
   ALLOWED_ORIGINS, AUDIT_LOG_PATH, BRIDGE_HOST, BRIDGE_PORT, BRIDGE_URL, DAEMON_LOCK_PATH,
   DAEMON_API_VERSION, DAEMON_INTERNAL_ACTIONS, DAEMON_STATE_PATH, PACKAGE_NAME, PACKAGE_VERSION,
-  PROTOCOL_VERSION, STATE_DIRECTORY,
+  PAIRED_BROWSERS_PATH, PROTOCOL_VERSION, STATE_DIRECTORY,
 } from "./config.mjs";
 import { createLocalFontService } from "./local-fonts.mjs";
+import { createPairingStore } from "./pairing.mjs";
+import { secureStateDirectory } from "./state-directory.mjs";
 
 const MAX_CONTROL_BYTES = 1024 * 1024;
 const MAX_JSON_BYTES = 144 * 1024 * 1024;
@@ -40,6 +42,7 @@ const media = new Map();
 const fontMedia = new Map();
 const editSessions = new Map();
 const auditEvents = [];
+const pairing = createPairingStore(PAIRED_BROWSERS_PATH);
 const configuredFontDirectories = String(process.env.CAROUSELBOT_FONT_DIRS || process.env.SLIDE_STUDIO_FONT_DIRS || "")
   .split(delimiter)
   .map((value) => value.trim())
@@ -539,6 +542,7 @@ async function handleInternalCall(body) {
         return { id: editor.id, selected: editor.id === selectedEditorId, focused: editor.id === focusedEditorId, pageUrl: editor.pageUrl, state: editor.state, editSession: assigned ? publicSession(assigned) : null, editSessions: activeEditSessions().filter((session) => session.editorId === editor.id).map(publicSession) };
       }),
       editSessions: activeEditSessions().map(publicSession),
+      pendingBrowserPairings: pairing.pendingCount(),
     };
   }
   if (body.action === "select_editor") {
@@ -555,6 +559,18 @@ async function handleInternalCall(body) {
     return { released: true, editSessionId: session.id, editorId: session.editorId, projectId: session.projectId || null };
   }
   if (body.action === "list_edit_sessions") return { editSessions: activeEditSessions().map(publicSession) };
+  if (body.action === "pair_editor") {
+    const approved = pairing.approve(body.code);
+    if (!approved) throw codedError("PAIRING_CODE_INVALID", "No browser is waiting for that pairing code. Check the code shown in CarouselBot; codes expire after 10 minutes.");
+    log(`Browser pairing approved for ${approved.origin}`);
+    recordAudit({ action: "browser.paired", client, editorId: approved.editorId, message: approved.origin });
+    return { approved: true, origin: approved.origin, editorId: approved.editorId };
+  }
+  if (body.action === "forget_paired_browsers") {
+    const removed = await pairing.forgetAll();
+    for (const editor of [...editors.values()]) disconnectEditor(editor.id, "Browser pairings were reset.");
+    return { forgotten: removed };
+  }
   if (body.action === "list_recent_operations") {
     const limit = Math.max(1, Math.min(200, Number(body.limit) || 50));
     const events = auditEvents.filter((event) => (!body.projectId || event.projectId === body.projectId) && (!body.status || event.status === body.status));
@@ -648,6 +664,23 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request);
       if (!body.editorId || typeof body.editorId !== "string") return sendJson(response, 400, { error: "editorId is required." }, cors);
       if (body.protocolVersion !== PROTOCOL_VERSION) return sendJson(response, 409, { error: `Protocol mismatch. Browser=${body.protocolVersion}; companion=${PROTOCOL_VERSION}.`, protocolVersion: PROTOCOL_VERSION }, cors);
+      let pairingKey = null;
+      if (!await pairing.isPaired(origin, body.pairingKey)) {
+        if (body.pairingSupported !== true) {
+          return sendJson(response, 426, { error: "This CarouselBot companion asks you to approve each browser. Reload CarouselBot to update the page, then connect again.", code: "PAIRING_REQUIRED", protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION }, cors);
+        }
+        pairingKey = await pairing.complete(body.editorId, origin);
+        if (!pairingKey) {
+          const pending = pairing.request(body.editorId, origin);
+          if (!pending) return sendJson(response, 429, { error: "Too many browsers are waiting for approval. Try again in a few minutes." }, cors);
+          if (pending.loggedAt == null) {
+            pending.loggedAt = Date.now();
+            log(`Browser at ${origin} is waiting for approval. Approve it with: npx carouselbot pair ${pending.code}`);
+          }
+          return sendJson(response, 202, { ok: false, pairingRequired: true, pairingCode: pending.code, expiresAt: pending.expiresAt, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION }, cors);
+        }
+        log(`Browser at ${origin} paired`);
+      }
       const previous = editors.get(body.editorId);
       if (previous) {
         endEditorPoll(previous);
@@ -667,7 +700,7 @@ const server = createServer(async (request, response) => {
       editors.set(editor.id, editor);
       if (body.hasFocus && body.visibilityState === "visible") focusedEditorId = editor.id;
       log(`Editor connected (${editor.id.slice(0, 8)})`);
-      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, localFontsEnabled: editor.localFontsEnabled, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
+      return sendJson(response, 200, { ok: true, editorId: editor.id, sessionToken: editor.sessionToken, ...(pairingKey ? { pairingKey } : {}), protocolVersion: PROTOCOL_VERSION, version: PACKAGE_VERSION, localFontsEnabled: editor.localFontsEnabled, agents: activeClients().map(publicClient), editSessions: activeEditSessions().map(publicSession) }, cors);
     }
     if (url.pathname === "/activate" && request.method === "POST") {
       const body = await readJson(request);
@@ -822,7 +855,7 @@ const server = createServer(async (request, response) => {
 });
 
 async function acquireDaemonLock() {
-  await mkdir(STATE_DIRECTORY, { recursive: true, mode: 0o700 });
+  await secureStateDirectory(STATE_DIRECTORY);
   try {
     lockHandle = await open(DAEMON_LOCK_PATH, "wx", 0o600);
     await lockHandle.writeFile(String(process.pid));

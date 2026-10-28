@@ -29,38 +29,14 @@ const contentTypes = new Map([
 
 let web;
 let pageUrl = remoteUrl;
-let pauseShareResponse = false;
-let resumeShareResponse;
+const apiRequests = [];
 if (!pageUrl) {
-  const shares = new Map();
-  let shareCounter = 0;
   web = createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    if (url.pathname === "/api/shares/config") {
-      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ siteKey: "test-site-key" }));
-      return;
-    }
-    if (url.pathname === "/api/shares" && request.method === "POST") {
-      const chunks = [];
-      for await (const chunk of request) chunks.push(chunk);
-      const id = `${Date.now().toString(36)}-${(++shareCounter).toString(16).padStart(32, "0")}.${"a".repeat(64)}`;
-      const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
-      shares.set(id, { payload: Buffer.concat(chunks), format: request.headers["x-carouselbot-share-format"], expiresAt });
-      response.writeHead(201, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ id, expiresAt }));
-      return;
-    }
-    const shareId = url.pathname.match(/^\/api\/shares\/([^/]+)$/)?.[1];
-    if (shareId && request.method === "GET") {
-      const share = shares.get(shareId);
-      if (!share || share.expiresAt <= Date.now()) {
-        response.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "This share link has expired." }));
-        return;
-      }
-      if (pauseShareResponse) await new Promise((resolve) => { resumeShareResponse = resolve; });
-      response.writeHead(200, { "Content-Type": "application/octet-stream", "X-CarouselBot-Share-Format": share.format,
-        "Content-Length": share.payload.byteLength, "Cache-Control": "no-store" });
-      response.end(share.payload);
+    if (url.pathname.startsWith("/api/")) {
+      // The editor is static and local-first: it must never call a cloud API.
+      apiRequests.push(`${request.method} ${url.pathname}`);
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
       return;
     }
     const relativePath = url.pathname === "/" || /^\/(?:projects|folders|share)\/[^/]+\/?$/.test(url.pathname)
@@ -257,6 +233,7 @@ try {
   })()`);
   if (!rejectsUnsupported) throw new Error("Unsupported audio was accepted at import");
   console.log("Unsupported audio is rejected before editing.");
+  if (apiRequests.length) throw new Error(`The static editor called a server API: ${apiRequests.join(", ")}`);
 } finally {
   cdp?.close();
   chrome.kill("SIGTERM");

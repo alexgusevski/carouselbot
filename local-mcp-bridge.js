@@ -14,7 +14,11 @@ const LOCAL_MCP_CONNECTION_KEYS = ["carouselbot:mcp-connected", "slide-studio:mc
 const LOCAL_MCP_EDITOR_KEYS = ["carouselbot:mcp-editor-id", "slide-studio:mcp-editor-id"];
 const LOCAL_MCP_FONT_PERMISSION_KEYS = ["carouselbot:local-fonts-enabled", "slide-studio:local-fonts-enabled"];
 const LOCAL_MCP_ACTIVITY_CHANNEL = "carouselbot:mcp-activity";
-const LOCAL_MCP_AGENT_PROMPT = "Read https://raw.githubusercontent.com/alexgusevski/carouselbot/refs/heads/main/packages/mcp/README.md and install and configure the CarouselBot MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate CarouselBot immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
+// Pinned to an immutable release tag: agents with shell access follow these
+// instructions, so they must never come from a mutable branch.
+const LOCAL_MCP_INSTRUCTIONS_URL = "https://raw.githubusercontent.com/alexgusevski/carouselbot/v0.4.2/packages/mcp/README.md";
+const LOCAL_MCP_PAIRING_KEY = "carouselbot:mcp-pairing-key";
+const LOCAL_MCP_AGENT_PROMPT = "Read " + LOCAL_MCP_INSTRUCTIONS_URL + " and install and configure the CarouselBot MCP and skill for this agent. Do not stop for a restart: if native MCP tools are not available in this session, use the documented CLI fallback so you can operate CarouselBot immediately. When you’re done, reply concisely with: “I’m done and ready to test the connection.”";
 
 function localMcpEscapeHtml(value = "") {
   return String(value)
@@ -43,6 +47,26 @@ function localMcpForgetConnection() {
   try {
     LOCAL_MCP_CONNECTION_KEYS.forEach((key) => localStorage.removeItem(key));
   } catch { /* The live connection can still be stopped. */ }
+}
+
+function localMcpStoredPairingKey() {
+  try {
+    return localStorage.getItem(LOCAL_MCP_PAIRING_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function localMcpRememberPairingKey(key) {
+  try {
+    localStorage.setItem(LOCAL_MCP_PAIRING_KEY, key);
+  } catch { /* This tab stays paired until it reloads. */ }
+}
+
+function localMcpPairingPendingError() {
+  const error = new Error("Waiting for browser approval.");
+  error.pairingPending = true;
+  return error;
 }
 
 function localMcpLocalFontsWereEnabled() {
@@ -84,6 +108,7 @@ const localMcpBridgeState = {
   stopped: false,
   editorId: localMcpEditorId(),
   sessionToken: null,
+  pairingCode: null,
   localFontsEnabled: localMcpLocalFontsWereEnabled(),
   agents: [],
   editSessions: [],
@@ -170,7 +195,7 @@ function localMcpSetStatus(status, message = localMcpBridgeState.statusMessage) 
   document.querySelectorAll('[data-action="connect-agent"]').forEach((button) => {
     button.dataset.mcpStatus = status;
     const label = button.querySelector(".agent-connect-label");
-    const labelText = status === "connected" ? "Connected" : status === "connecting" ? "Connecting" : "Connect AI";
+    const labelText = status === "connected" ? "Connected" : status === "connecting" ? "Connecting" : status === "pairing" ? "Approve" : "Connect AI";
     if (label && label.textContent !== labelText) label.textContent = labelText;
     button.setAttribute("aria-label", status === "connected" ? displayMessage : status === "connecting" ? "Connecting via MCP" : "Connect via MCP");
     button.title = status === "connected" ? displayMessage : status === "connecting" ? "Connecting via MCP" : "Connect via MCP";
@@ -184,7 +209,16 @@ function localMcpSetStatus(status, message = localMcpBridgeState.statusMessage) 
   if (connectButton) {
     connectButton.disabled = status === "connecting";
     connectButton.dataset.connected = status === "connected" ? "true" : "false";
-    connectButton.textContent = status === "connecting" ? "Connecting…" : status === "connected" ? "Disconnect this browser" : "Connect this browser";
+    connectButton.textContent = status === "connecting" ? "Connecting…" : status === "connected" ? "Disconnect this browser" : status === "pairing" ? "Cancel" : "Connect this browser";
+  }
+  const pairingPanel = document.querySelector("[data-local-mcp-pairing]");
+  if (pairingPanel) {
+    const code = status === "pairing" ? localMcpBridgeState.pairingCode : null;
+    pairingPanel.hidden = !code;
+    if (code) {
+      pairingPanel.querySelector("[data-local-mcp-pairing-code]").textContent = code;
+      pairingPanel.querySelector("[data-local-mcp-pairing-command]").textContent = `npx carouselbot@latest pair ${code}`;
+    }
   }
 }
 
@@ -278,12 +312,17 @@ function localMcpEnsureModal() {
                 <span class="agent-connection-status" data-local-mcp-status data-status="idle" role="status">Not connected</span>
                 <button class="button button--primary agent-modal-connect" type="button" data-local-mcp-connect>Connect this browser</button>
               </div>
+              <div class="agent-pairing" data-local-mcp-pairing hidden>
+                <p class="agent-pairing-title">Approve this browser once</p>
+                <p class="agent-pairing-code" data-local-mcp-pairing-code></p>
+                <p class="agent-step-description">Give your agent this code, or run <code data-local-mcp-pairing-command></code> in a terminal. CarouselBot connects the moment you approve.</p>
+              </div>
             </div>
           </li>
         </ol>
         <details class="agent-how-it-works">
           <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>How it works</summary>
-          <p>The setup installs the local MCP and skill, and your agent runs it. After you approve browser access, its edits appear here live. Projects and media stay on your computer.</p>
+          <p>The setup installs the local MCP and skill, and your agent runs it. You approve each new browser once with a one-time code, then your agent’s edits appear here live. Projects and media stay on your computer.</p>
         </details>
       </div>
     </section>`;
@@ -323,6 +362,7 @@ async function localMcpCopyAgentPrompt(event) {
 
 function localMcpOpenModal(trigger) {
   const backdrop = localMcpEnsureModal();
+  if (!backdrop.hidden) return;
   localMcpBridgeState.lastFocusedElement = trigger || document.activeElement;
   backdrop.hidden = false;
   document.body.style.overflow = "hidden";
@@ -368,6 +408,11 @@ async function localMcpConnectFromClick() {
     localMcpBridgeState.connectionRemembered = true;
     void localMcpPollWithReconnect();
   } catch (error) {
+    if (error?.pairingPending) {
+      // The companion is running and waits for the user to approve this tab.
+      void localMcpPollWithReconnect();
+      return;
+    }
     localMcpBridgeState.connected = false;
     localMcpBridgeState.shouldReconnect = false;
     const denied = await localMcpPermissionWasDenied();
@@ -381,7 +426,7 @@ async function localMcpConnectFromClick() {
 }
 
 async function localMcpDisconnectFromClick() {
-  if (!localMcpBridgeState.connected && !localMcpBridgeState.connecting) return;
+  if (!localMcpBridgeState.connected && !localMcpBridgeState.connecting && !localMcpBridgeState.pairingCode) return;
   localMcpBridgeState.shouldReconnect = false;
   localMcpBridgeState.connectionRemembered = false;
   localMcpForgetConnection();
@@ -392,6 +437,7 @@ async function localMcpDisconnectFromClick() {
   localMcpBridgeState.connected = false;
   localMcpBridgeState.connecting = false;
   localMcpBridgeState.sessionToken = null;
+  localMcpBridgeState.pairingCode = null;
   localMcpBridgeState.agents = [];
   localMcpBridgeState.editSessions = [];
   localMcpBridgeState.reconnectFailures = 0;
@@ -400,7 +446,7 @@ async function localMcpDisconnectFromClick() {
 }
 
 function localMcpToggleConnection() {
-  return localMcpBridgeState.connected ? localMcpDisconnectFromClick() : localMcpConnectFromClick();
+  return localMcpBridgeState.connected || localMcpBridgeState.pairingCode ? localMcpDisconnectFromClick() : localMcpConnectFromClick();
 }
 
 async function localMcpHandshake() {
@@ -413,11 +459,29 @@ async function localMcpHandshake() {
     visibilityState: document.visibilityState,
     hasFocus: document.hasFocus(),
     localFontsEnabled: localMcpBridgeState.localFontsEnabled,
+    // Companions from 0.4.3 ask the user to approve each new browser once.
+    // Older companions ignore these fields and connect directly.
+    pairingSupported: true,
+    pairingKey: localMcpStoredPairingKey(),
     state: window.carouselBotAgent.inspect({ includeAllProjects: false }),
   });
   const result = await response.json().catch(() => ({}));
+  if (response.status === 202 && result.pairingRequired && result.pairingCode) {
+    const firstPrompt = localMcpBridgeState.pairingCode !== result.pairingCode;
+    localMcpBridgeState.pairingCode = String(result.pairingCode);
+    localMcpSetStatus("pairing", `Approve this browser with code ${localMcpBridgeState.pairingCode}`);
+    if (firstPrompt) {
+      localMcpAddEvent("Waiting for browser approval");
+      localMcpOpenModal();
+    }
+    throw localMcpPairingPendingError();
+  }
   if (!response.ok) throw new Error(result.error || `Bridge returned ${response.status}`);
   if (result.protocolVersion !== window.carouselBotAgent.protocolVersion) throw new Error("The website and local companion versions are incompatible. Update the npm package and reload this page.");
+  if (typeof result.pairingKey === "string") localMcpRememberPairingKey(result.pairingKey);
+  localMcpBridgeState.pairingCode = null;
+  localMcpRememberConnection();
+  localMcpBridgeState.connectionRemembered = true;
   localMcpBridgeState.sessionToken = result.sessionToken;
   if (typeof result.localFontsEnabled === "boolean") localMcpBridgeState.localFontsEnabled = result.localFontsEnabled;
   localMcpBridgeState.agents = result.agents || [];
@@ -480,6 +544,11 @@ async function localMcpPollWithReconnect() {
         localMcpBridgeState.connecting = false;
         await localMcpPoll();
       } catch (error) {
+        if (error?.pairingPending) {
+          localMcpBridgeState.connecting = false;
+          await new Promise((resolve) => setTimeout(resolve, LOCAL_MCP_RETRY_MS));
+          continue;
+        }
         if (localMcpBridgeState.connected) localMcpAddEvent(`Disconnected: ${error.message}`);
         localMcpBridgeState.connected = false;
         localMcpBridgeState.connecting = false;

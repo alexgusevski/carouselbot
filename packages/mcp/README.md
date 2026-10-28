@@ -57,6 +57,18 @@ Browser and MCP-process reconnection are automatic, including after a compatible
 
 The companion binds only to `127.0.0.1`. There is no hosted relay: projects remain in browser IndexedDB and local images remain on the user's computer.
 
+## Pairing a browser
+
+The companion trusts a browser only after the user approves it once. When the user clicks **Connect this browser**, CarouselBot shows a one-time code such as `K7QM-3XPA`. Approve it with the code the user reads to you:
+
+```bash
+npx -y carouselbot@latest pair K7QM-3XPA
+```
+
+Agents with native MCP tools call `pair_browser({ "code": "K7QM-3XPA" })`. `list_editors` reports `pendingBrowserPairings` while a browser waits; it never reveals the code, so always ask the user for it. The browser then reconnects on reloads and new tabs without another code. `npx carouselbot@latest pair --forget-all` removes every paired browser.
+
+The companion accepts `https://carousel.bot` and `https://slides-editor.pages.dev`. To develop the editor locally on port 4173, start the companion with `CAROUSELBOT_DEV_ORIGINS=1`, or list exact origins in `CAROUSELBOT_ALLOWED_ORIGINS`. Its state folder is reset to owner-only access (`0700`) on every start.
+
 ## Installed fonts
 
 CarouselBot can use fonts installed on the same Mac as the companion. Open a text layer's font control once and choose **Allow local fonts**. The permission is stored in that browser; until it is granted, agent calls return `FONT_PERMISSION_REQUIRED`.
@@ -82,6 +94,7 @@ Useful commands:
 ```bash
 npx carouselbot@latest setup --dry-run
 npx carouselbot@latest doctor
+npx carouselbot@latest pair <code>
 npx carouselbot@latest restart
 ```
 
