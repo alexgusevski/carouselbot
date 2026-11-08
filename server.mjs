@@ -8,7 +8,7 @@ const host = "127.0.0.1";
 const port = Number(process.env.CAROUSELBOT_PORT || process.env.SLIDE_STUDIO_PORT) || 4173;
 
 const files = new Map([
-  ["/assets/mediabunny-1.60.0.min.mjs", ["node_modules/mediabunny/dist/bundles/mediabunny.min.mjs", "text/javascript; charset=utf-8"]],
+  ["/assets/mediabunny-1.65.0.min.mjs", ["node_modules/mediabunny/dist/bundles/mediabunny.min.mjs", "text/javascript; charset=utf-8"]],
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],

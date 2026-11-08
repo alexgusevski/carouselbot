@@ -8,7 +8,7 @@ applied to the latest release line.
 | Component | Supported |
 | --- | --- |
 | Hosted editor at `carousel.bot` | Current deployment |
-| `carouselbot` and `slides-studio-mcp` 0.4.3+ | Yes |
+| `carouselbot` and `slides-studio-mcp` 0.5.0+ | Yes |
 | Earlier npm versions | No |
 
 ## Active security controls
