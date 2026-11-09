@@ -17,7 +17,7 @@ export function localVideoBytes(src) {
 }
 
 export async function readVideoAudio(src, context) {
-  const { Input, BufferSource, MP4, QTFF, MATROSKA, AudioBufferSink } = await import("/assets/mediabunny-1.60.0.min.mjs");
+  const { Input, BufferSource, MP4, QTFF, MATROSKA, AudioBufferSink } = await import("/assets/mediabunny-1.65.0.min.mjs");
   const bytes = localVideoBytes(src);
   const input = new Input({ source: new BufferSource(bytes), formats: [MP4, QTFF, MATROSKA] });
   try {
@@ -82,7 +82,7 @@ export function loadVideo(src) {
 // Decode local frames directly instead; load this parser only for video work.
 export async function readVideoFrame(src, time = 0) {
   if (!globalThis.VideoDecoder) return readHtmlVideoFrame(src, time);
-  const { Input, BufferSource, MP4, QTFF, MATROSKA, CanvasSink } = await import("/assets/mediabunny-1.60.0.min.mjs");
+  const { Input, BufferSource, MP4, QTFF, MATROSKA, CanvasSink } = await import("/assets/mediabunny-1.65.0.min.mjs");
   const bytes = localVideoBytes(src);
   const input = new Input({ source: new BufferSource(bytes), formats: [MP4, QTFF, MATROSKA] });
   let timer;

@@ -5,13 +5,23 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const CLI_PATH = fileURLToPath(new URL("cli.mjs", import.meta.url));
+// Matches the daemon's limit for one tool call, so oversized input fails before it is buffered.
+export const MAX_STDIN_BYTES = 144 * 1024 * 1024;
 
-async function stdinText() {
-  if (process.stdin.isTTY) return "";
-  let value = "";
-  process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) value += chunk;
-  return value.trim();
+export async function readStdinText(stream = process.stdin, limit = MAX_STDIN_BYTES) {
+  if (stream.isTTY) return "";
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    size += buffer.length;
+    if (size > limit) {
+      stream.destroy?.();
+      throw new Error(`--stdin input exceeds ${limit} bytes.`);
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8").trim();
 }
 
 async function parseArguments(arguments_) {
@@ -21,7 +31,7 @@ async function parseArguments(arguments_) {
   const flagIndex = rest.indexOf("--json");
   const raw = inline?.slice("--json=".length)
     || (flagIndex >= 0 ? rest[flagIndex + 1] : rest.find((value) => !value.startsWith("--")))
-    || (rest.includes("--stdin") ? await stdinText() : "")
+    || (rest.includes("--stdin") ? await readStdinText() : "")
     || "{}";
   let args;
   try { args = JSON.parse(raw); }

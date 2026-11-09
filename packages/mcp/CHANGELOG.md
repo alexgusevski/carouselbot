@@ -1,6 +1,24 @@
 # Changelog
 
+## 0.5.0
+
+The first npm release since 0.4.2. It ships everything listed under 0.4.3 (browser pairing, production-only origins, the owner-only state folder) plus the changes below.
+
+### Security
+
+- **MCP SDK 2.4.0.** `@modelcontextprotocol/server` moves to 2.4.0, past the vulnerable 2.0.0–2.2.0 range ("Shared transport or server instances delivered one HTTP client's messages to another" and "One HTTP request within the default size limit could exhaust server memory"). The companion speaks MCP over stdio with one server per process and runs its own loopback bridge with per-request size limits, so neither issue was reachable. `npm audit` of a fresh install now reports nothing.
+- **Bounded `carouselbot call --stdin`.** Tool arguments read from stdin are capped at 144 MiB, the same limit the bridge applies to one tool call, and oversized input fails before it is buffered.
+- **Exact dependency pins.** `fontkit` 2.0.4 and `zod` 4.6.7 are pinned exactly, like the MCP SDK.
+
+### Compatibility
+
+- **Node.js 22 or newer.** Node 20 reached end of life in April 2026, so `engines.node` is now `>=22`. CI runs the companion tests on Node 22 and the full suite on Node 26.
+- The carousel.bot editor works with both 0.4.2 (connects directly) and 0.5.0 (asks for the pairing code once).
+- `slides-studio-mcp` 0.5.0 depends on `carouselbot` 0.5.0.
+
 ## 0.4.3
+
+Not published to npm. These changes ship in 0.5.0.
 
 ### Security
 

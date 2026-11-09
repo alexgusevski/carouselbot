@@ -220,7 +220,7 @@ try {
   }
   const rejectsUnsupported = await evaluate(cdp, `(async () => {
     const { readVideoAsset } = await import('/src/video-media.mjs');
-    const { InputAudioTrack } = await import('/assets/mediabunny-1.60.0.min.mjs');
+    const { InputAudioTrack } = await import('/assets/mediabunny-1.65.0.min.mjs');
     const decode = OfflineAudioContext.prototype.decodeAudioData;
     const canDecode = InputAudioTrack.prototype.canDecode;
     OfflineAudioContext.prototype.decodeAudioData = async () => { throw new Error('Unsupported test codec'); };
