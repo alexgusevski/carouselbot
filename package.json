@@ -38,10 +38,10 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
-    "wrangler": "4.156.0"
+    "wrangler": "4.161.0"
   },
   "dependencies": {
-    "mediabunny": "1.65.0"
+    "mediabunny": "1.65.2"
   },
   "engines": {
     "node": ">=26"
