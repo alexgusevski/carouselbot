@@ -21,6 +21,7 @@ test("every local module import resolves to a committed source file", async () =
     "editor-ui.mjs",
     "editor-view.mjs",
     "editor.mjs",
+    "home-copy.mjs",
     "layer-interactions.mjs",
     "main.mjs",
     "project-fonts.mjs",
@@ -112,6 +113,14 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   assert.match(contentSecurityPolicy, /connect-src 'self' http:\/\/127\.0\.0\.1:43117/);
   assert.ok(blocks.get("/src/*")?.includes("Cache-Control: no-cache"));
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
+  assert.deepEqual(blocks.get("/index.md"), [
+    "Content-Type: text/markdown; charset=utf-8",
+    'Link: <https://carousel.bot/>; rel="canonical"',
+    "X-Robots-Tag: noindex",
+    "Content-Signal: search=yes, ai-input=yes, ai-train=yes",
+  ]);
+  assert.ok(blocks.get("/")?.includes('Link: <https://carousel.bot/index.md>; rel="alternate"; type="text/markdown"'));
+  assert.ok(blocks.get("/")?.includes('Link: </llms.txt>; rel="describedby"; type="text/plain"'));
 });
 
 test("the Pages project is static: no Functions, bindings or cloud calls", async () => {
@@ -144,6 +153,24 @@ test("the static build ships SEO files and a real 404 instead of SPA soft 404s",
   assert.match(robots, /^Sitemap: https:\/\/carousel\.bot\/sitemap\.xml$/m);
   const sitemap = await readFile(join(root, "dist", "sitemap.xml"), "utf8");
   assert.deepEqual([...sitemap.matchAll(/<loc>(.+?)<\/loc>/g)].map((match) => match[1]), ["https://carousel.bot/"]);
+  assert.equal(sitemap, await readFile(join(root, "deploy", "sitemap.xml"), "utf8"));
+  const markdown = await readFile(join(root, "dist", "index.md"), "utf8");
+  assert.match(markdown, /^---\nagent:\n/);
+  assert.match(markdown, /^title: "CarouselBot"$/m);
+  assert.match(markdown, /^url: "https:\/\/carousel\.bot\/"$/m);
+  assert.match(markdown, /^# Turn photos into \*scroll-stoppers\.\*$/m);
+  assert.doesNotMatch(markdown, /<(?:script|nav|style|html)\b/i);
+  assert.equal(markdown.endsWith("\n"), true);
+  assert.doesNotMatch(markdown, /\r/);
+  const llms = await readFile(join(root, "dist", "llms.txt"), "utf8");
+  assert.match(llms, /- \[CarouselBot\]\(https:\/\/carousel\.bot\/\): /);
+  assert.equal(await readFile(join(root, "dist", "llms-full.txt"), "utf8"), markdown);
+  await assert.rejects(access(join(root, "dist", "_routes.json")));
+  assert.match(robots, /^Content-Signal: search=yes, ai-input=yes, ai-train=yes$/m);
+  assert.match(robots, /^User-agent: ClaudeBot$/m);
+  assert.match(robots, /^Disallow: \/projects\/$/m);
+  assert.match(robots, /^# Agents: start at https:\/\/carousel\.bot\/llms\.txt$/m);
+  assert.doesNotMatch(llms, /\.md\)/, "llms.txt links canonical HTML URLs");
   assert.match(await readFile(join(root, "dist", "404.html"), "utf8"), /Page not found/);
   const redirects = (await readFile(join(root, "dist", "_redirects"), "utf8"))
     .split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));

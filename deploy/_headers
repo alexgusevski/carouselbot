@@ -6,6 +6,14 @@
 
 /
   Cache-Control: no-cache
+  Link: <https://carousel.bot/index.md>; rel="alternate"; type="text/markdown"
+  Link: </llms.txt>; rel="describedby"; type="text/plain"
+
+/index.md
+  Content-Type: text/markdown; charset=utf-8
+  Link: <https://carousel.bot/>; rel="canonical"
+  X-Robots-Tag: noindex
+  Content-Signal: search=yes, ai-input=yes, ai-train=yes
 
 /index.html
   Cache-Control: no-cache

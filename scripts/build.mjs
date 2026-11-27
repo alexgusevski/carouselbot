@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildAgentMarkdown } from "./build-agent-markdown.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const output = join(root, "dist");
@@ -40,7 +41,6 @@ await Promise.all([
   copyFile(join(root, "styles.css"), join(output, "styles.css")),
   copyFile(join(root, "deploy", "_headers"), join(output, "_headers")),
   copyFile(join(root, "deploy", "_redirects"), join(output, "_redirects")),
-  copyFile(join(root, "deploy", "robots.txt"), join(output, "robots.txt")),
   copyFile(join(root, "deploy", "sitemap.xml"), join(output, "sitemap.xml")),
   copyFile(join(root, "404.html"), join(output, "404.html")),
   cp(join(root, "src"), join(output, "src"), { recursive: true }),
@@ -48,5 +48,7 @@ await Promise.all([
   copyFile(join(root, "node_modules/mediabunny/dist/bundles/mediabunny.min.mjs"), join(output, "assets/mediabunny-1.65.0.min.mjs")),
   copyFile(join(root, "node_modules/mediabunny/LICENSE"), join(output, "assets/mediabunny-LICENSE.txt")),
 ]);
+
+await buildAgentMarkdown(output);
 
 console.log("Built the static Cloudflare bundle in dist/");
