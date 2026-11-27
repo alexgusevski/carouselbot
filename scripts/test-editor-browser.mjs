@@ -253,6 +253,9 @@ try {
   const initial = await evaluate(cdp, `({
     title: document.title,
     dashboard: Boolean(document.querySelector('.dashboard')),
+    alternate: document.querySelector('head link[rel="alternate"][type="text/markdown"]')?.href,
+    hero: document.querySelector('.dashboard-hero h1')?.innerText.replace(/\\s+/g, ' '),
+    heroIntro: document.querySelector('.dashboard-intro')?.textContent,
     agentInvitation: document.querySelector(".agent-callout")?.textContent.trim() === "Connect your agent" && document.querySelectorAll(".agent-color-clouds i").length === 3,
     protocolVersion: window.carouselBotAgent.protocolVersion,
     sameAgentAlias: window.carouselBotAgent === window.slideStudioAgent,
@@ -261,6 +264,10 @@ try {
   })`);
   if (initial.title !== "CarouselBot" || !initial.dashboard || !initial.agentInvitation || initial.protocolVersion !== 3 || !initial.sameAgentAlias || !initial.sameReadyAlias) {
     throw new Error(`Unexpected initial editor state: ${JSON.stringify(initial)}`);
+  }
+  if (initial.alternate !== "https://carousel.bot/index.md" || initial.hero !== "Turn photos into scroll-stoppers."
+      || initial.heroIntro !== "Upload your photos, place TikTok-style text, and export crisp slideshow images. Nothing else in the way.") {
+    throw new Error(`Unexpected public homepage copy or Markdown alternate: ${JSON.stringify(initial)}`);
   }
   if (!initial.sourceModules.includes("/src/main.mjs") || !initial.sourceModules.includes("/src/editor.mjs")) {
     throw new Error(`The browser did not load the expected module graph: ${JSON.stringify(initial.sourceModules)}`);

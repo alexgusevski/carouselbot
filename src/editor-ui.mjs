@@ -1,3 +1,4 @@
+import { homeCopy } from "./home-copy.mjs";
 import { allSlideTexts } from "./editor-model.mjs";
 import { releaseVideo } from "./video-media.mjs";
 let disposeVideoPlayback = () => {};
@@ -636,10 +637,10 @@ export function createEditorUI({ projects, actions, output }) {
         ` : `
           <section class="dashboard-hero">
             <div>
-              <p class="eyebrow">Made for your camera roll</p>
-              <h1>Turn photos into<br><em>scroll-stoppers.</em></h1>
+              <p class="eyebrow">${escapeHtml(homeCopy.eyebrow)}</p>
+              <h1>${escapeHtml(homeCopy.heading)}<br><em>${escapeHtml(homeCopy.emphasis)}</em></h1>
             </div>
-            <p class="dashboard-intro">Upload your photos, place TikTok-style text, and export crisp slideshow images. Nothing else in the way.</p>
+            <p class="dashboard-intro">${escapeHtml(homeCopy.intro)}</p>
           </section>
         `}
         <section>

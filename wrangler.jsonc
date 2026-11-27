@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   // Keep this Pages project name until the legacy-origin IndexedDB migration is retired.
-  // The editor is a static, local-first site: no Functions, bindings or variables.
+  // The local-first editor is static. A Pages Function handles public Markdown requests.
   "name": "slides-editor",
   "compatibility_date": "2026-08-18",
   "pages_build_output_dir": "./dist"

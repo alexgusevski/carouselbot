@@ -58,7 +58,7 @@ The browser editor is organized as a small ES-module graph under `src/`. Pure mo
 
 ## Deploy to Cloudflare
 
-This project uses Cloudflare Pages Direct Upload of a static build in `dist/`. There are no Pages Functions, bindings, or environment variables, and CI fails if a `functions/` directory or a client-side `/api/` call appears. `deploy/_redirects` serves the client routes (`/projects/*`, `/folders/*`) from `index.html` and sends retired `/share/*` links to the project list; every other unknown path, including the retired `/api/shares` endpoints, returns `404.html` with a 404 status. `deploy/robots.txt` and `deploy/sitemap.xml` list the single canonical page.
+This project uses Cloudflare Pages Direct Upload of a static build in `dist/`. There are no bindings or environment variables, and CI fails if a client-side `/api/` call appears. The only Pages Function, `functions/_middleware.js`, serves the public Markdown for agents (`/index.md`, or `/` with `Accept: text/markdown`). `deploy/_redirects` serves the client routes (`/projects/*`, `/folders/*`) from `index.html` and sends retired `/share/*` links to the project list; every other unknown path, including the retired `/api/shares` endpoints, returns `404.html` with a 404 status. `deploy/sitemap.xml` lists the single canonical page; the build generates `robots.txt`, `llms.txt`, `llms-full.txt`, `index.md` and `_routes.json` from it (`scripts/build-agent-markdown.mjs`).
 
 To preview the exact Pages routing locally, run `npm run build` followed by `npx wrangler pages dev dist`.
 

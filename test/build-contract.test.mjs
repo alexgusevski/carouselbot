@@ -21,6 +21,7 @@ test("every local module import resolves to a committed source file", async () =
     "editor-ui.mjs",
     "editor-view.mjs",
     "editor.mjs",
+    "home-copy.mjs",
     "layer-interactions.mjs",
     "main.mjs",
     "project-fonts.mjs",
@@ -114,7 +115,7 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
 });
 
-test("the Pages project is static: no Functions, bindings or cloud calls", async () => {
+test("the Pages project has only agent Markdown middleware and no cloud storage bindings", async () => {
   const source = await readFile(join(root, "wrangler.jsonc"), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   assert.equal(config.name, "slides-editor", "the legacy-origin IndexedDB migration depends on this project name");
@@ -122,7 +123,8 @@ test("the Pages project is static: no Functions, bindings or cloud calls", async
   for (const key of ["kv_namespaces", "d1_databases", "r2_buckets", "vars", "services", "durable_objects", "env"]) {
     assert.equal(config[key], undefined, `wrangler.jsonc must not declare ${key}`);
   }
-  await assert.rejects(access(join(root, "functions")), "functions/ must not exist");
+  assert.deepEqual((await readdir(join(root, "functions"))).sort(),
+    ["_middleware.js", "prefers-markdown.mjs"]);
 
   const clientFiles = ["app.js", "app-config.js", "domain-migration.js", "local-mcp-bridge.js",
     ...(await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs")).map((name) => `src/${name}`)];
@@ -144,6 +146,22 @@ test("the static build ships SEO files and a real 404 instead of SPA soft 404s",
   assert.match(robots, /^Sitemap: https:\/\/carousel\.bot\/sitemap\.xml$/m);
   const sitemap = await readFile(join(root, "dist", "sitemap.xml"), "utf8");
   assert.deepEqual([...sitemap.matchAll(/<loc>(.+?)<\/loc>/g)].map((match) => match[1]), ["https://carousel.bot/"]);
+  assert.equal(sitemap, await readFile(join(root, "deploy", "sitemap.xml"), "utf8"));
+  const markdown = await readFile(join(root, "dist", "index.md"), "utf8");
+  assert.match(markdown, /^---\nagent:\n/);
+  assert.match(markdown, /^title: "CarouselBot"$/m);
+  assert.match(markdown, /^url: "https:\/\/carousel\.bot\/"$/m);
+  assert.match(markdown, /^# Turn photos into \*scroll-stoppers\.\*$/m);
+  assert.doesNotMatch(markdown, /<(?:script|nav|style|html)\b/i);
+  assert.equal(markdown.endsWith("\n"), true);
+  assert.doesNotMatch(markdown, /\r/);
+  const llms = await readFile(join(root, "dist", "llms.txt"), "utf8");
+  assert.match(llms, /- \[CarouselBot\]\(https:\/\/carousel\.bot\/\): /);
+  assert.equal(await readFile(join(root, "dist", "llms-full.txt"), "utf8"), markdown);
+  const routes = JSON.parse(await readFile(join(root, "dist", "_routes.json"), "utf8"));
+  assert.deepEqual(routes.include, ["/", "/*.md"]);
+  // Private app routes stay out of exclude so their .md URLs reach the Function's Markdown 404.
+  assert.deepEqual(routes.exclude, ["/assets/*", "/src/*", "/.well-known/*"]);
   assert.match(await readFile(join(root, "dist", "404.html"), "utf8"), /Page not found/);
   const redirects = (await readFile(join(root, "dist", "_redirects"), "utf8"))
     .split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
