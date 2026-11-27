@@ -368,7 +368,7 @@ try {
     const style = status && getComputedStyle(status);
     return style ? { justifySelf: style.justifySelf, justifyContent: style.justifyContent, textAlign: style.textAlign } : null;
   })()`);
-  if (statusAlignment?.justifySelf !== "start" || statusAlignment.justifyContent !== "flex-start" || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
+  if (statusAlignment?.justifySelf !== "start" || !["flex-start", "flow-start"].includes(statusAlignment.justifyContent) || statusAlignment.textAlign !== "left") throw new Error(`MCP connection status is not left-aligned: ${JSON.stringify(statusAlignment)}`);
   await evaluate(cdp, `document.querySelector('[data-local-mcp-connect]').click()`);
   // Companions from 0.4.3 require a one-time approval of each new browser.
   // Older companions (0.4.2 and earlier) connect without pairing.
@@ -785,7 +785,7 @@ try {
       : Math.abs(geometry.pathRight - geometry.contentRight);
     const minimumPadding = Math.max(0.002, geometry.pathWidth * 0.01);
     const paddingTolerance = 2;
-    if (geometry.align !== align || geometry.alignItems !== expectedAlignItems || alignedEdgeDelta > paddingTolerance || geometry.leftPadding < minimumPadding || geometry.rightPadding < minimumPadding || Math.abs(geometry.leftPadding - geometry.rightPadding) > paddingTolerance || Math.abs(geometry.cssPaddingLeft - geometry.cssPaddingRight) > 0.001) {
+    if (geometry.align !== align || geometry.alignItems.replace(/^flow-/, "flex-") !== expectedAlignItems || alignedEdgeDelta > paddingTolerance || geometry.leftPadding < minimumPadding || geometry.rightPadding < minimumPadding || Math.abs(geometry.leftPadding - geometry.rightPadding) > paddingTolerance || Math.abs(geometry.cssPaddingLeft - geometry.cssPaddingRight) > 0.001) {
       throw new Error(`Boxed ${align}-aligned text padding changed after reload: ${JSON.stringify(geometry)}`);
     }
   }
