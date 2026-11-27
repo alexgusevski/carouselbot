@@ -113,9 +113,17 @@ test("deployment headers prevent mixed-version module graphs", async () => {
   assert.match(contentSecurityPolicy, /connect-src 'self' http:\/\/127\.0\.0\.1:43117/);
   assert.ok(blocks.get("/src/*")?.includes("Cache-Control: no-cache"));
   assert.ok(blocks.get("/app.js")?.includes("Cache-Control: no-cache"));
+  assert.deepEqual(blocks.get("/index.md"), [
+    "Content-Type: text/markdown; charset=utf-8",
+    'Link: <https://carousel.bot/>; rel="canonical"',
+    "X-Robots-Tag: noindex",
+    "Content-Signal: search=yes, ai-input=yes, ai-train=yes",
+  ]);
+  assert.ok(blocks.get("/")?.includes('Link: <https://carousel.bot/index.md>; rel="alternate"; type="text/markdown"'));
+  assert.ok(blocks.get("/")?.includes('Link: </llms.txt>; rel="describedby"; type="text/plain"'));
 });
 
-test("the Pages project has only agent Markdown middleware and no cloud storage bindings", async () => {
+test("the Pages project is static: no Functions, bindings or cloud calls", async () => {
   const source = await readFile(join(root, "wrangler.jsonc"), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   assert.equal(config.name, "slides-editor", "the legacy-origin IndexedDB migration depends on this project name");
@@ -123,8 +131,7 @@ test("the Pages project has only agent Markdown middleware and no cloud storage 
   for (const key of ["kv_namespaces", "d1_databases", "r2_buckets", "vars", "services", "durable_objects", "env"]) {
     assert.equal(config[key], undefined, `wrangler.jsonc must not declare ${key}`);
   }
-  assert.deepEqual((await readdir(join(root, "functions"))).sort(),
-    ["_middleware.js", "prefers-markdown.mjs"]);
+  await assert.rejects(access(join(root, "functions")), "functions/ must not exist");
 
   const clientFiles = ["app.js", "app-config.js", "domain-migration.js", "local-mcp-bridge.js",
     ...(await readdir(sourceDirectory)).filter((name) => name.endsWith(".mjs")).map((name) => `src/${name}`)];
@@ -158,10 +165,12 @@ test("the static build ships SEO files and a real 404 instead of SPA soft 404s",
   const llms = await readFile(join(root, "dist", "llms.txt"), "utf8");
   assert.match(llms, /- \[CarouselBot\]\(https:\/\/carousel\.bot\/\): /);
   assert.equal(await readFile(join(root, "dist", "llms-full.txt"), "utf8"), markdown);
-  const routes = JSON.parse(await readFile(join(root, "dist", "_routes.json"), "utf8"));
-  assert.deepEqual(routes.include, ["/", "/*.md"]);
-  // Private app routes stay out of exclude so their .md URLs reach the Function's Markdown 404.
-  assert.deepEqual(routes.exclude, ["/assets/*", "/src/*", "/.well-known/*"]);
+  await assert.rejects(access(join(root, "dist", "_routes.json")));
+  assert.match(robots, /^Content-Signal: search=yes, ai-input=yes, ai-train=yes$/m);
+  assert.match(robots, /^User-agent: ClaudeBot$/m);
+  assert.match(robots, /^Disallow: \/projects\/$/m);
+  assert.match(robots, /^# Agents: start at https:\/\/carousel\.bot\/llms\.txt$/m);
+  assert.doesNotMatch(llms, /\.md\)/, "llms.txt links canonical HTML URLs");
   assert.match(await readFile(join(root, "dist", "404.html"), "utf8"), /Page not found/);
   const redirects = (await readFile(join(root, "dist", "_redirects"), "utf8"))
     .split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));

@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { pages, privatePaths, siteOrigin, staticPaths } from "../deploy/agent-pages.mjs";
 import { homeCopy } from "../src/home-copy.mjs";
+
+const siteOrigin = "https://carousel.bot";
+// Markdown file per sitemap page. deploy/_headers gives each one its Markdown headers.
+const pages = new Map([
+  ["/", { markdownPath: "/index.md" }],
+]);
+// Real non-public routes (see deploy/_redirects): robots.txt disallows them.
+const privatePaths = ["/api", "/projects", "/folders", "/share"];
 
 const pageBodies = new Map([
   ["/", `# ${homeCopy.heading} *${homeCopy.emphasis}*\n\n${homeCopy.eyebrow}\n\n${homeCopy.intro}`],
 ]);
 const instructions = "Use this search API to find relevant content across this site with keywords or natural-language queries, instead of crawling individual pages. Results are returned in Markdown.";
-const discovery = 'Every page is also available as Markdown: request it with `Accept: text/markdown` or add `.md` to the URL.';
+const discovery = "Every page is also available as Markdown: add `.md` to the URL (the home page is `/index.md`).";
 const bots = [
   "Googlebot", "Bingbot", "OAI-SearchBot", "ChatGPT-User", "GPTBot", "ClaudeBot",
   "Claude-SearchBot", "Claude-User", "PerplexityBot", "Perplexity-User", "Google-Extended",
@@ -92,7 +99,4 @@ ${group}
 # Agents: start at ${siteOrigin}/llms.txt
 Sitemap: ${siteOrigin}/sitemap.xml
 `);
-  const include = [...pages.keys()].flatMap((path) => path === "/" ? [path] : [path, path + "/"]);
-  const exclude = staticPaths.map((path) => path + "/*");
-  await writeFile(join(output, "_routes.json"), JSON.stringify({ version: 1, include: [...include, "/*.md"], exclude }, null, 2) + "\n");
 }
